@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if customer else 'Add' }} customer · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">{{ 'Edit customer' if customer else 'Add customer' }}</h1>
+  <a class="btn-link" href="/customers">← Back to customers</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<form class="card form" method="post" action="{{ '/customers/' ~ customer.id if customer else '/customers' }}">
+  <label class="full">Name
+    <input name="name" value="{{ customer.name if customer else '' }}" required autofocus>
+  </label>
+  <label>TIN
+    <input name="tin" value="{{ customer.tin if customer and customer.tin else '' }}" placeholder="000-000-000-000">
+  </label>
+  <label>Address
+    <input name="address" value="{{ customer.address if customer and customer.address else '' }}" placeholder="City / full address">
+  </label>
+  <div class="form-actions full">
+    <button class="btn" type="submit">{{ 'Save changes' if customer else 'Save customer' }}</button>
+    <a class="btn-secondary" href="/customers">Cancel</a>
+  </div>
+</form>
+{% endblock %}

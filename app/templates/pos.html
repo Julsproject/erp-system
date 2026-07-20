@@ -1,0 +1,580 @@
+{% extends "base.html" %}
+{% block title %}POS · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Point of Sale</h1>
+  <span class="muted" id="clock"></span>
+</div>
+
+<div class="pos-modes">
+  <button type="button" class="mode-btn active" data-m="payment" onclick="setMode('payment')">Payment</button>
+  <button type="button" class="mode-btn" data-m="refund" onclick="setMode('refund')">Refund</button>
+  <button type="button" class="mode-btn" data-m="exchange" onclick="setMode('exchange')">Exchange</button>
+</div>
+
+<div class="pos-grid" id="saleView">
+  <!-- LEFT: product search -->
+  <section class="card pos-search-panel">
+    <input id="posSearch" class="search pos-search" type="search" placeholder="Search product to add…" autofocus autocomplete="off">
+    <div id="posResults" class="pos-results">
+      <p class="pos-hint">Type a product name to begin.</p>
+    </div>
+  </section>
+
+  <!-- RIGHT: cart -->
+  <section class="card pos-cart-panel">
+    <div class="pos-head-fields">
+      <label class="pos-customer">Invoice # <span class="muted">(from your booklet)</span>
+        <input id="invoiceNo" type="text" placeholder="e.g. 000145" autocomplete="off">
+      </label>
+      <label class="pos-customer">Customer <span class="muted">(optional)</span>
+        <input id="customerName" type="text" placeholder="Walk-in" autocomplete="off">
+      </label>
+    </div>
+
+    <div class="table-wrap">
+      <table class="grid cart-table">
+        <thead>
+          <tr><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Disc</th><th class="num">Total</th><th></th></tr>
+        </thead>
+        <tbody id="cartBody">
+          <tr><td colspan="7" class="empty">Cart is empty — add products from the left.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="totals">
+      <div class="totals-row"><span>Subtotal</span><span id="tSubtotal">₱0.00</span></div>
+      <div class="totals-row">
+        <span>Discount</span>
+        <span class="disc-cell">
+          <button type="button" class="disc-toggle" id="overallDiscTypeBtn" onclick="toggleOverallDiscType()">₱</button>
+          <input id="overallDiscount" class="disc-input" type="number" step="0.01" min="0" value="0" oninput="computeTotals()">
+        </span>
+      </div>
+      <div class="totals-row">
+        <span><label class="vat-label"><input type="checkbox" id="vatOn" onchange="computeTotals()"> VAT (12% incl.)</label></span>
+        <span id="tVat">₱0.00</span>
+      </div>
+      <div class="totals-row grand"><span>Total</span><span id="tTotal">₱0.00</span></div>
+    </div>
+
+    <div class="pay">
+      <div class="pay-head">
+        <span class="pay-title">Payment</span>
+        <div class="seg">
+          <button type="button" class="seg-btn active" id="segFull" onclick="setPaymentMode('full')">Full</button>
+          <button type="button" class="seg-btn" id="segSplit" onclick="setPaymentMode('split')">Split</button>
+        </div>
+      </div>
+
+      <div id="fullPay">
+        <label class="pay-full-method">Method
+          <select id="fullMethod" onchange="computeTotals()">
+            <option value="cash">Cash</option>
+            <option value="gcash">GCash</option>
+            <option value="card">Card (Debit/Credit)</option>
+            <option value="bank_transfer">Bank Transfer</option>
+            <option value="receivable">Receivable (Utang)</option>
+          </select>
+        </label>
+      </div>
+
+      <div id="splitPay" style="display:none;">
+        <div class="pay-subhead"><span class="muted">Enter each method and amount</span><button type="button" class="btn-link" onclick="addPayment()">+ Add method</button></div>
+        <div id="paymentsList"></div>
+      </div>
+
+      <div class="totals-row"><span>Paid now</span><span id="tPaid">₱0.00</span></div>
+      <div class="totals-row receivable" id="rowReceivable" style="display:none;"><span>Receivable (Utang)</span><span id="tReceivable">₱0.00</span></div>
+      <div class="totals-row change" id="rowChange" style="display:none;"><span>Change</span><span id="tChange">₱0.00</span></div>
+      <div class="pay-warn" id="payWarn" style="display:none;"></div>
+    </div>
+
+    <div class="pos-actions">
+      <button class="btn-secondary" onclick="clearCart()">Clear</button>
+      <button class="btn pos-complete" id="completeBtn" onclick="checkout()" disabled>Complete Sale</button>
+    </div>
+    <div id="posError" class="alert" style="display:none;margin-top:14px;"></div>
+  </section>
+</div>
+
+<!-- REFUND -->
+<div id="refundView" style="display:none;">
+  <div class="card">
+    <div class="lookup-bar">
+      <input id="refundInvoice" type="text" placeholder="Enter invoice # to refund…" autocomplete="off">
+      <button type="button" class="btn" onclick="lookupRefund()">Find sale</button>
+    </div>
+    <div id="refundInfo" class="lookup-info"></div>
+    <div class="table-wrap" id="refundItemsWrap" style="display:none; margin-top:14px;">
+      <table class="grid">
+        <thead><tr><th></th><th>Item</th><th>Unit</th><th class="num">Sold Qty</th><th class="num">Refund Qty</th><th class="num">Price</th><th class="num">Amount</th></tr></thead>
+        <tbody id="refundItems"></tbody>
+      </table>
+    </div>
+    <div class="refund-foot" id="refundFoot" style="display:none;">
+      <div class="totals-row grand"><span>Refund total (cash out)</span><span id="refundTotal">₱0.00</span></div>
+      <button class="btn pos-complete" id="refundBtn" onclick="doRefund()" disabled>Complete Refund</button>
+    </div>
+    <div id="refundError" class="alert" style="display:none;margin-top:12px;"></div>
+  </div>
+</div>
+
+<!-- EXCHANGE -->
+<div id="exchangeView" style="display:none;">
+  <div class="pos-grid">
+    <section class="card">
+      <h3 class="ex-h">Returned items</h3>
+      <div class="lookup-bar">
+        <input id="exInvoice" type="text" placeholder="Invoice # to exchange from…" autocomplete="off">
+        <button type="button" class="btn-secondary" onclick="lookupExchange()">Find</button>
+      </div>
+      <div id="exInfo" class="lookup-info"></div>
+      <div class="table-wrap" id="exReturnWrap" style="display:none; margin:12px 0;">
+        <table class="grid">
+          <thead><tr><th></th><th>Item</th><th class="num">Sold</th><th class="num">Return Qty</th><th class="num">Amount</th></tr></thead>
+          <tbody id="exReturnItems"></tbody>
+        </table>
+      </div>
+      <div class="totals-row"><span>Returned value</span><span id="exReturnedTotal">₱0.00</span></div>
+    </section>
+    <section class="card">
+      <h3 class="ex-h">New items</h3>
+      <input id="exSearch" class="search pos-search" type="search" placeholder="Search product to add…" autocomplete="off">
+      <div id="exResults" class="pos-results" style="max-height:24vh; margin-bottom:12px;"></div>
+      <div class="table-wrap">
+        <table class="grid cart-table">
+          <thead><tr><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Total</th><th></th></tr></thead>
+          <tbody id="exCartBody"><tr><td colspan="6" class="empty">No new items.</td></tr></tbody>
+        </table>
+      </div>
+      <div class="totals">
+        <div class="totals-row"><span>New items total</span><span id="exNewTotal">₱0.00</span></div>
+        <div class="totals-row grand"><span id="exDiffLabel">Customer pays</span><span id="exDiff">₱0.00</span></div>
+        <label class="pay-full-method" id="exPayWrap" style="display:none;">Payment method
+          <select id="exMethod">
+            <option value="cash">Cash</option><option value="gcash">GCash</option>
+            <option value="card">Card</option><option value="bank_transfer">Bank Transfer</option>
+          </select>
+        </label>
+        <button class="btn pos-complete" id="exBtn" onclick="doExchange()" disabled>Complete Exchange</button>
+        <div id="exError" class="alert" style="display:none;margin-top:12px;"></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+const peso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const VAT_DIV = 1.12, VAT_RATE = 0.12;
+const METHODS = [['cash','Cash'],['gcash','GCash'],['card','Card'],['bank_transfer','Bank Transfer'],['receivable','Receivable (Utang)']];
+let cart = [];
+let payments = [{ method: 'cash', amount: '' }];
+let paymentMode = 'full';   // 'full' | 'split'
+let overallDiscType = 'amt'; // 'amt' | 'pct'
+let searchTimer = null;
+
+// discount helpers (each line: {discount, discType})
+function lineDiscAmt(line) {
+  const gross = line.qty * line.product.units[line.unitIndex].price;
+  return line.discType === 'pct' ? gross * (line.discount || 0) / 100 : (line.discount || 0);
+}
+function lineTotalOf(line) {
+  return Math.max(line.qty * line.product.units[line.unitIndex].price - lineDiscAmt(line), 0);
+}
+function overallDiscAmt(subtotal) {
+  const v = parseFloat(document.getElementById('overallDiscount').value) || 0;
+  return overallDiscType === 'pct' ? subtotal * v / 100 : v;
+}
+function toggleLineDiscType(i) { cart[i].discType = cart[i].discType === 'pct' ? 'amt' : 'pct'; renderCart(); }
+function toggleOverallDiscType() {
+  overallDiscType = overallDiscType === 'pct' ? 'amt' : 'pct';
+  document.getElementById('overallDiscTypeBtn').textContent = overallDiscType === 'pct' ? '%' : '₱';
+  computeTotals();
+}
+
+const searchBox = document.getElementById('posSearch');
+const customerBox = document.getElementById('customerName');
+const invoiceBox = document.getElementById('invoiceNo');
+searchBox.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 180); });
+customerBox.addEventListener('input', computeTotals);
+invoiceBox.addEventListener('input', computeTotals);
+
+function setMode(m) {
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.m === m));
+  document.getElementById('saleView').style.display = m === 'payment' ? '' : 'none';
+  document.getElementById('refundView').style.display = m === 'refund' ? 'block' : 'none';
+  document.getElementById('exchangeView').style.display = m === 'exchange' ? 'block' : 'none';
+}
+
+function setPaymentMode(m) {
+  paymentMode = m;
+  document.getElementById('segFull').classList.toggle('active', m === 'full');
+  document.getElementById('segSplit').classList.toggle('active', m === 'split');
+  document.getElementById('fullPay').style.display = m === 'full' ? 'block' : 'none';
+  document.getElementById('splitPay').style.display = m === 'split' ? 'block' : 'none';
+  computeTotals();
+}
+
+async function runSearch() {
+  const q = searchBox.value.trim();
+  const res = await fetch('/pos/search?q=' + encodeURIComponent(q));
+  const data = await res.json();
+  renderResults(data.products || []);
+}
+
+function renderResults(products) {
+  const box = document.getElementById('posResults');
+  if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
+  box.innerHTML = '';
+  products.forEach(p => {
+    const el = document.createElement('button');
+    el.type = 'button'; el.className = 'pos-item'; el.onclick = () => addToCart(p);
+    el.innerHTML =
+      '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span>' +
+      (p.is_vat ? '<span class="pill">VAT</span>' : '') + '</div>' +
+      '<div class="pos-item-sub">' + peso(p.units[0].price) + ' / ' + escapeHtml(p.base_unit) +
+      ' · <span class="' + (p.on_hand <= 0 ? 'oos' : '') + '">' + fmtQty(p.on_hand) + ' on hand</span></div>';
+    box.appendChild(el);
+  });
+}
+
+function addToCart(p) { cart.push({ product: p, unitIndex: 0, qty: 1, discount: 0, discType: 'amt' }); renderCart(); }
+
+function baseNeededByProduct() {
+  const m = {};
+  cart.forEach(l => { const need = l.qty * l.product.units[l.unitIndex].factor; m[l.product.id] = (m[l.product.id] || 0) + need; });
+  return m;
+}
+
+function renderCart() {
+  const body = document.getElementById('cartBody');
+  if (!cart.length) {
+    body.innerHTML = '<tr><td colspan="7" class="empty">Cart is empty — add products from the left.</td></tr>';
+    computeTotals(); return;
+  }
+  const needed = baseNeededByProduct();
+  body.innerHTML = '';
+  cart.forEach((line, i) => {
+    const unit = line.product.units[line.unitIndex];
+    const total = lineTotalOf(line);
+    const over = needed[line.product.id] > line.product.on_hand + 1e-9;
+    const opts = line.product.units.map((u, ui) =>
+      '<option value="' + ui + '"' + (ui === line.unitIndex ? ' selected' : '') + '>' +
+      escapeHtml(u.name) + ' (' + peso(u.price) + ')</option>').join('');
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td class="strong">' + escapeHtml(line.product.name) +
+        (over ? ' <span class="warn-tag" title="Selling beyond stock (allowed)">⚠ over stock</span>' : '') + '</td>' +
+      '<td><select class="cart-unit" onchange="setUnit(' + i + ', this.value)">' + opts + '</select></td>' +
+      '<td class="num"><input class="cart-qty' + (over ? ' over' : '') + '" type="number" step="0.001" min="0" value="' + fmtQty(line.qty) + '" oninput="setQty(' + i + ', this.value)"></td>' +
+      '<td class="num">' + peso(unit.price) + '</td>' +
+      '<td class="num"><div class="disc-cell"><button type="button" class="disc-toggle" onclick="toggleLineDiscType(' + i + ')">' + (line.discType === 'pct' ? '%' : '₱') + '</button><input class="cart-disc" type="number" step="0.01" min="0" value="' + line.discount + '" oninput="setDisc(' + i + ', this.value)"></div></td>' +
+      '<td class="num strong">' + peso(total) + '</td>' +
+      '<td><button class="btn-link danger" onclick="removeLine(' + i + ')">✕</button></td>';
+    body.appendChild(tr);
+  });
+  computeTotals();
+}
+
+function setUnit(i, v) { cart[i].unitIndex = parseInt(v); renderCart(); }
+function setQty(i, v) { cart[i].qty = parseFloat(v) || 0; renderCart(); }
+function setDisc(i, v) { cart[i].discount = parseFloat(v) || 0; renderCart(); }
+function removeLine(i) { cart.splice(i, 1); renderCart(); }
+function clearCart() {
+  cart = []; payments = [{ method: 'cash', amount: '' }];
+  document.getElementById('overallDiscount').value = 0; customerBox.value = ''; invoiceBox.value = '';
+  document.getElementById('fullMethod').value = 'cash';
+  document.getElementById('vatOn').checked = false;
+  overallDiscType = 'amt'; document.getElementById('overallDiscTypeBtn').textContent = '₱';
+  setPaymentMode('full');
+  renderPayments(); renderCart(); searchBox.focus();
+}
+
+/* ---- payments ---- */
+function renderPayments() {
+  const box = document.getElementById('paymentsList');
+  box.innerHTML = '';
+  payments.forEach((p, i) => {
+    const opts = METHODS.map(m => '<option value="' + m[0] + '"' + (p.method === m[0] ? ' selected' : '') + '>' + m[1] + '</option>').join('');
+    const row = document.createElement('div');
+    row.className = 'pay-line';
+    row.innerHTML =
+      '<select class="pay-method" onchange="setPayMethod(' + i + ', this.value)">' + opts + '</select>' +
+      '<input class="pay-amount" type="number" step="0.01" min="0" value="' + p.amount + '" placeholder="0.00" oninput="setPayAmount(' + i + ', this.value)">' +
+      '<button type="button" class="pay-exact" onclick="fillExact(' + i + ')" title="Fill remaining">Exact</button>' +
+      (payments.length > 1 ? '<button type="button" class="btn-link danger pay-remove" onclick="removePayment(' + i + ')">✕</button>' : '<span class="pay-remove"></span>');
+    box.appendChild(row);
+  });
+}
+function setPayMethod(i, v) { payments[i].method = v; computeTotals(); }
+function setPayAmount(i, v) { payments[i].amount = v; computeTotals(); }
+function addPayment() { payments.push({ method: 'cash', amount: '' }); renderPayments(); computeTotals(); }
+function removePayment(i) { payments.splice(i, 1); renderPayments(); computeTotals(); }
+function fillExact(i) {
+  const grand = computeGrand();
+  const others = payments.reduce((s, p, idx) => idx === i ? s : s + (parseFloat(p.amount) || 0), 0);
+  payments[i].amount = Math.max(Math.round((grand - others) * 100) / 100, 0);
+  renderPayments(); computeTotals();
+}
+
+function computeGrand() {
+  let subtotal = 0;
+  cart.forEach(line => { subtotal += lineTotalOf(line); });
+  return Math.max(subtotal - overallDiscAmt(subtotal), 0);
+}
+
+function computeTotals() {
+  let subtotal = 0;
+  cart.forEach(line => { subtotal += lineTotalOf(line); });
+  const grand = Math.max(subtotal - overallDiscAmt(subtotal), 0);
+  const vat = document.getElementById('vatOn').checked ? grand / VAT_DIV * VAT_RATE : 0;
+
+  let paid = 0, receivable = 0;
+  if (paymentMode === 'full') {
+    const method = document.getElementById('fullMethod').value;
+    if (method === 'receivable') receivable = grand; else paid = grand;
+  } else {
+    payments.forEach(p => { const a = parseFloat(p.amount) || 0; if (p.method === 'receivable') receivable += a; else paid += a; });
+  }
+  if (receivable > grand) receivable = grand;
+  const dueNow = Math.max(grand - receivable, 0);
+  const change = Math.max(paid - dueNow, 0);
+  const remaining = Math.max(dueNow - paid, 0);
+
+  document.getElementById('tSubtotal').textContent = peso(subtotal);
+  document.getElementById('tVat').textContent = peso(vat);
+  document.getElementById('tTotal').textContent = peso(grand);
+  document.getElementById('tPaid').textContent = peso(paid);
+  toggleRow('rowReceivable', receivable > 0, 'tReceivable', receivable);
+  toggleRow('rowChange', change > 0.001, 'tChange', change);
+
+  const custName = customerBox.value.trim();
+  const invoice = invoiceBox.value.trim();
+  let ok = cart.length > 0, warn = '';
+  if (cart.length === 0) { ok = false; }
+  else if (!invoice) { ok = false; warn = 'Enter the invoice number (from your booklet).'; }
+  else if (receivable > 0 && !custName) { ok = false; warn = 'Receivable (utang) needs a customer name above.'; }
+  else if (remaining > 0.009) { ok = false; warn = 'Short by ' + peso(remaining) + ' — add a payment or receivable.'; }
+
+  const w = document.getElementById('payWarn');
+  if (warn) { w.textContent = warn; w.style.display = 'block'; } else { w.style.display = 'none'; }
+  document.getElementById('completeBtn').disabled = !ok;
+}
+
+function toggleRow(rowId, show, valId, val) {
+  document.getElementById(rowId).style.display = show ? 'flex' : 'none';
+  if (show) document.getElementById(valId).textContent = peso(val);
+}
+
+async function checkout() {
+  if (cart.length === 0) return;
+  const btn = document.getElementById('completeBtn');
+  btn.disabled = true; btn.textContent = 'Processing…';
+  let payList;
+  if (paymentMode === 'full') {
+    payList = [{ method: document.getElementById('fullMethod').value, amount: computeGrand() }];
+  } else {
+    payList = payments.map(p => ({ method: p.method, amount: parseFloat(p.amount) || 0 })).filter(p => p.amount > 0);
+  }
+  let subtotal = 0; cart.forEach(l => subtotal += lineTotalOf(l));
+  const payload = {
+    invoice_no: invoiceBox.value,
+    customer_name: customerBox.value,
+    vat_applied: document.getElementById('vatOn').checked,
+    discount_total: overallDiscAmt(subtotal),
+    payments: payList,
+    lines: cart.map(line => {
+      const unit = line.product.units[line.unitIndex];
+      return { product_id: line.product.id, unit_name: unit.name, factor: unit.factor,
+               qty: line.qty, unit_price: unit.price, discount: lineDiscAmt(line) };
+    })
+  };
+  try {
+    const res = await fetch('/pos/checkout', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+    const data = await res.json();
+    if (data.ok) { window.location = '/pos/receipt/' + data.sale_id; }
+    else { showError(data.error || 'Checkout failed.'); btn.disabled = false; btn.textContent = 'Complete Sale'; }
+  } catch (e) {
+    showError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Complete Sale';
+  }
+}
+
+function showError(msg) { const e = document.getElementById('posError'); e.textContent = msg; e.style.display = 'block'; }
+function fmtQty(n) { return (Math.round((Number(n) || 0) * 1000) / 1000).toString(); }
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function tick() { document.getElementById('clock').textContent = new Date().toLocaleString('en-PH', {dateStyle:'medium', timeStyle:'short'}); }
+
+/* ===== REFUND ===== */
+let refundSale = null;
+async function lookupRefund() {
+  const inv = document.getElementById('refundInvoice').value.trim();
+  if (!inv) return;
+  const res = await fetch('/pos/lookup?invoice=' + encodeURIComponent(inv));
+  const data = await res.json();
+  const info = document.getElementById('refundInfo');
+  if (!data.found) {
+    refundSale = null; info.innerHTML = '<div class="alert">No sale found for invoice ' + escapeHtml(inv) + '.</div>';
+    document.getElementById('refundItemsWrap').style.display = 'none'; document.getElementById('refundFoot').style.display = 'none'; return;
+  }
+  refundSale = data;
+  info.innerHTML = '<div class="lookup-meta"><span><b>' + escapeHtml(data.invoice_no) + '</b></span><span>' + escapeHtml(data.customer_name || 'Walk-in') + '</span><span>' + escapeHtml(data.date) + '</span></div>';
+  const body = document.getElementById('refundItems'); body.innerHTML = '';
+  data.lines.forEach((l, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td><input type="checkbox" data-i="' + i + '" onchange="calcRefund()"></td>' +
+      '<td class="strong">' + escapeHtml(l.name) + '</td>' +
+      '<td>' + escapeHtml(l.unit_name || '') + '</td>' +
+      '<td class="num">' + fmtQty(l.qty) + '</td>' +
+      '<td class="num"><input class="cart-qty rf-qty" type="number" step="0.001" min="0" max="' + l.qty + '" value="' + fmtQty(l.qty) + '" data-i="' + i + '" oninput="calcRefund()"></td>' +
+      '<td class="num">' + peso(l.unit_price) + '</td>' +
+      '<td class="num rf-amt">' + peso(l.qty * l.unit_price) + '</td>';
+    body.appendChild(tr);
+  });
+  document.getElementById('refundItemsWrap').style.display = 'block';
+  document.getElementById('refundFoot').style.display = 'block';
+  calcRefund();
+}
+function calcRefund() {
+  if (!refundSale) return;
+  let total = 0, any = false;
+  document.querySelectorAll('#refundItems tr').forEach(tr => {
+    const cb = tr.querySelector('input[type=checkbox]');
+    const qtyInput = tr.querySelector('.rf-qty');
+    const l = refundSale.lines[parseInt(cb.dataset.i)];
+    let qty = parseFloat(qtyInput.value) || 0;
+    if (qty > l.qty) { qty = l.qty; qtyInput.value = fmtQty(l.qty); }
+    tr.querySelector('.rf-amt').textContent = peso(qty * l.unit_price);
+    if (cb.checked) { total += qty * l.unit_price; any = true; }
+  });
+  document.getElementById('refundTotal').textContent = peso(total);
+  document.getElementById('refundBtn').disabled = !any || total <= 0;
+}
+async function doRefund() {
+  if (!refundSale) return;
+  const items = [];
+  document.querySelectorAll('#refundItems tr').forEach(tr => {
+    const cb = tr.querySelector('input[type=checkbox]');
+    if (!cb.checked) return;
+    const l = refundSale.lines[parseInt(cb.dataset.i)];
+    const qty = parseFloat(tr.querySelector('.rf-qty').value) || 0;
+    if (qty > 0) items.push({ product_id: l.product_id, name: l.name, unit_name: l.unit_name, factor: l.factor, qty: qty, unit_price: l.unit_price, is_vat: l.is_vat });
+  });
+  if (!items.length) return;
+  const btn = document.getElementById('refundBtn'); btn.disabled = true; btn.textContent = 'Processing…';
+  const res = await fetch('/pos/refund', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sale_id: refundSale.sale_id, items }) });
+  const data = await res.json();
+  if (data.ok) { window.location = '/pos/receipt/' + data.sale_id; }
+  else { const e = document.getElementById('refundError'); e.textContent = data.error || 'Refund failed.'; e.style.display = 'block'; btn.disabled = false; btn.textContent = 'Complete Refund'; }
+}
+
+/* ===== EXCHANGE ===== */
+let exSale = null, exCart = [], exTimer = null;
+document.getElementById('exSearch').addEventListener('input', () => { clearTimeout(exTimer); exTimer = setTimeout(exRunSearch, 180); });
+async function lookupExchange() {
+  const inv = document.getElementById('exInvoice').value.trim();
+  if (!inv) return;
+  const res = await fetch('/pos/lookup?invoice=' + encodeURIComponent(inv));
+  const data = await res.json();
+  const info = document.getElementById('exInfo');
+  if (!data.found) { exSale = null; info.innerHTML = '<div class="alert">No sale found.</div>'; document.getElementById('exReturnWrap').style.display = 'none'; exCompute(); return; }
+  exSale = data;
+  info.innerHTML = '<div class="lookup-meta"><span><b>' + escapeHtml(data.invoice_no) + '</b></span><span>' + escapeHtml(data.customer_name || 'Walk-in') + '</span></div>';
+  const body = document.getElementById('exReturnItems'); body.innerHTML = '';
+  data.lines.forEach((l, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td><input type="checkbox" data-i="' + i + '" onchange="exCompute()"></td>' +
+      '<td class="strong">' + escapeHtml(l.name) + '</td>' +
+      '<td class="num">' + fmtQty(l.qty) + '</td>' +
+      '<td class="num"><input class="cart-qty ex-rqty" type="number" step="0.001" min="0" max="' + l.qty + '" value="' + fmtQty(l.qty) + '" data-i="' + i + '" oninput="exCompute()"></td>' +
+      '<td class="num ex-ramt">' + peso(l.qty * l.unit_price) + '</td>';
+    body.appendChild(tr);
+  });
+  document.getElementById('exReturnWrap').style.display = 'block';
+  exCompute();
+}
+async function exRunSearch() {
+  const q = document.getElementById('exSearch').value.trim();
+  const res = await fetch('/pos/search?q=' + encodeURIComponent(q));
+  const data = await res.json();
+  const box = document.getElementById('exResults'); const products = data.products || [];
+  if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
+  box.innerHTML = '';
+  products.forEach(p => {
+    const el = document.createElement('button'); el.type = 'button'; el.className = 'pos-item'; el.onclick = () => exAdd(p);
+    el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span></div><div class="pos-item-sub">' + peso(p.units[0].price) + ' / ' + escapeHtml(p.base_unit) + '</div>';
+    box.appendChild(el);
+  });
+}
+function exAdd(p) { exCart.push({ product: p, unitIndex: 0, qty: 1 }); exRenderCart(); }
+function exRenderCart() {
+  const body = document.getElementById('exCartBody');
+  if (!exCart.length) { body.innerHTML = '<tr><td colspan="6" class="empty">No new items.</td></tr>'; exCompute(); return; }
+  body.innerHTML = '';
+  exCart.forEach((line, i) => {
+    const unit = line.product.units[line.unitIndex];
+    const opts = line.product.units.map((u, ui) => '<option value="' + ui + '"' + (ui === line.unitIndex ? ' selected' : '') + '>' + escapeHtml(u.name) + ' (' + peso(u.price) + ')</option>').join('');
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td class="strong">' + escapeHtml(line.product.name) + '</td>' +
+      '<td><select class="cart-unit" onchange="exSetUnit(' + i + ', this.value)">' + opts + '</select></td>' +
+      '<td class="num"><input class="cart-qty" type="number" step="0.001" min="0" value="' + fmtQty(line.qty) + '" oninput="exSetQty(' + i + ', this.value)"></td>' +
+      '<td class="num">' + peso(unit.price) + '</td>' +
+      '<td class="num strong">' + peso(line.qty * unit.price) + '</td>' +
+      '<td><button class="btn-link danger" onclick="exRemove(' + i + ')">✕</button></td>';
+    body.appendChild(tr);
+  });
+  exCompute();
+}
+function exSetUnit(i, v) { exCart[i].unitIndex = parseInt(v); exRenderCart(); }
+function exSetQty(i, v) { exCart[i].qty = parseFloat(v) || 0; exRenderCart(); }
+function exRemove(i) { exCart.splice(i, 1); exRenderCart(); }
+function exReturnedTotal() {
+  let t = 0;
+  if (exSale) document.querySelectorAll('#exReturnItems tr').forEach(tr => {
+    const cb = tr.querySelector('input[type=checkbox]');
+    const l = exSale.lines[parseInt(cb.dataset.i)];
+    let qty = parseFloat(tr.querySelector('.ex-rqty').value) || 0;
+    if (qty > l.qty) qty = l.qty;
+    tr.querySelector('.ex-ramt').textContent = peso(qty * l.unit_price);
+    if (cb.checked) t += qty * l.unit_price;
+  });
+  return t;
+}
+function exNewTotal() { let t = 0; exCart.forEach(l => t += l.qty * l.product.units[l.unitIndex].price); return t; }
+function exCompute() {
+  const rt = exReturnedTotal(), nt = exNewTotal(), diff = nt - rt;
+  document.getElementById('exReturnedTotal').textContent = peso(rt);
+  document.getElementById('exNewTotal').textContent = peso(nt);
+  const label = document.getElementById('exDiffLabel'), diffEl = document.getElementById('exDiff');
+  if (diff >= 0) { label.textContent = 'Customer pays'; diffEl.textContent = peso(diff); document.getElementById('exPayWrap').style.display = diff > 0 ? 'flex' : 'none'; }
+  else { label.textContent = 'Refund to customer (cash)'; diffEl.textContent = peso(-diff); document.getElementById('exPayWrap').style.display = 'none'; }
+  document.getElementById('exBtn').disabled = !(rt > 0 || nt > 0);
+}
+async function doExchange() {
+  const returned = [];
+  if (exSale) document.querySelectorAll('#exReturnItems tr').forEach(tr => {
+    const cb = tr.querySelector('input[type=checkbox]');
+    if (!cb.checked) return;
+    const l = exSale.lines[parseInt(cb.dataset.i)];
+    const qty = parseFloat(tr.querySelector('.ex-rqty').value) || 0;
+    if (qty > 0) returned.push({ product_id: l.product_id, name: l.name, unit_name: l.unit_name, factor: l.factor, qty: qty, unit_price: l.unit_price, is_vat: l.is_vat });
+  });
+  const new_lines = exCart.map(l => { const u = l.product.units[l.unitIndex]; return { product_id: l.product.id, name: l.product.name, unit_name: u.name, factor: u.factor, qty: l.qty, unit_price: u.price, discount: 0, is_vat: l.product.is_vat }; });
+  if (!returned.length && !new_lines.length) return;
+  const btn = document.getElementById('exBtn'); btn.disabled = true; btn.textContent = 'Processing…';
+  const payload = { sale_id: exSale ? exSale.sale_id : null, returned_items: returned, new_lines: new_lines, payment_method: document.getElementById('exMethod').value };
+  const res = await fetch('/pos/exchange', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+  const data = await res.json();
+  if (data.ok) { window.location = '/pos/receipt/' + data.sale_id; }
+  else { const e = document.getElementById('exError'); e.textContent = data.error || 'Exchange failed.'; e.style.display = 'block'; btn.disabled = false; btn.textContent = 'Complete Exchange'; }
+}
+
+tick(); setInterval(tick, 30000);
+renderPayments();
+renderCart();
+</script>
+{% endblock %}

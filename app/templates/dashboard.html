@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · {{ app_name }}{% endblock %}
+{% block content %}
+<h1 class="page-title">Dashboard</h1>
+<p class="muted">Welcome, {{ user.full_name or user.username }}. The system is running.</p>
+
+<section class="module-grid">
+  <a class="module-card done" href="/products" style="text-decoration:none;color:inherit;">
+    <h2>Inventory &amp; Products</h2>
+    <p>Encode products, categories, units, beginning stock.</p>
+    <span class="tag">Live · Open →</span>
+  </a>
+  <div class="module-card done">
+    <h2>Login &amp; Users</h2>
+    <p>Authentication is live.</p>
+    <span class="tag">Done</span>
+  </div>
+  <a class="module-card done" href="/pos">
+    <h2>Point of Sale</h2>
+    <p>Sell by any unit, discounts, VAT, payment &amp; printable receipt.</p>
+    <span class="tag">Live · Open →</span>
+  </a>
+  <div class="module-card done">
+    <h2>Multi-unit &amp; Conversions</h2>
+    <p>Units ladder on each product (Bag↔kg, load→sack).</p>
+    <span class="tag">Live</span>
+  </div>
+  <div class="module-card">
+    <h2>Customers</h2>
+    <p>Full list, credit, receivables.</p>
+    <span class="tag">Phase 1</span>
+  </div>
+  <div class="module-card">
+    <h2>Suppliers &amp; Purchasing</h2>
+    <p>PO, receiving, cost comparison.</p>
+    <span class="tag">Phase 2</span>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · {{ app_name }}</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body class="login-page">
+  <form class="login-card" method="post" action="/login">
+    <div class="login-brand">
+      <span class="brand-mark">H</span>
+      <span class="brand-text">{{ app_name }}</span>
+    </div>
+    <p class="login-sub">Sign in to continue</p>
+    {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+    <label>Username
+      <input name="username" autocomplete="username" autofocus required>
+    </label>
+    <label>Password
+      <input name="password" type="password" autocomplete="current-password" required>
+    </label>
+    <button type="submit" class="btn">Sign in</button>
+  </form>
+</body>
+</html>

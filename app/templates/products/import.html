@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Import products · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Import products</h1>
+  <a class="btn-link" href="/products">← Back to inventory</a>
+</div>
+
+{% if result and result.error %}
+  <div class="alert">{{ result.error }}</div>
+{% elif result %}
+  <div class="card result-card">
+    <h2 class="result-title">Import finished</h2>
+    <p class="muted">{{ result.filename }} — {{ result.total }} data row{{ '' if result.total == 1 else 's' }} read.</p>
+    <div class="result-stats">
+      <div class="stat ok"><span class="num">{{ result.created }}</span><span>Created</span></div>
+      <div class="stat info"><span class="num">{{ result.updated }}</span><span>Updated</span></div>
+      <div class="stat muted-stat"><span class="num">{{ result.skipped }}</span><span>Skipped</span></div>
+      <div class="stat {{ 'err' if result.errors else 'muted-stat' }}"><span class="num">{{ result.errors|length }}</span><span>Errors</span></div>
+    </div>
+    {% if result.errors %}
+    <table class="grid" style="margin-top:16px;">
+      <thead><tr><th>Row</th><th>Product</th><th>Problem</th></tr></thead>
+      <tbody>
+        {% for e in result.errors %}
+        <tr><td>{{ e.row }}</td><td>{{ e.name }}</td><td>{{ e.message }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    <div class="form-actions" style="margin-top:18px;">
+      <a class="btn" href="/products">View inventory</a>
+      <a class="btn-secondary" href="/products/import">Import another file</a>
+    </div>
+  </div>
+{% else %}
+  <div class="import-steps">
+    <div class="card step">
+      <div class="step-no">1</div>
+      <div>
+        <h2>Download the template</h2>
+        <p class="muted">An Excel file with the correct columns and two example rows. Delete the examples and fill in your products.</p>
+        <a class="btn" href="/products/import/template">⬇ Download Excel template</a>
+      </div>
+    </div>
+
+    <div class="card step">
+      <div class="step-no">2</div>
+      <div>
+        <h2>Upload your filled-in file</h2>
+        <p class="muted">Accepts <strong>.xlsx</strong> or <strong>.csv</strong>. New categories and unit types are created automatically. A product whose name already exists is updated instead of duplicated.</p>
+        <form method="post" action="/products/import" enctype="multipart/form-data" class="upload-form">
+          <input type="file" name="file" accept=".xlsx,.xlsm,.csv" required>
+          <button class="btn" type="submit">⬆ Import</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="hint-box">
+      <strong>Columns:</strong> Product Name (required), Category, Unit Type, Cost of Sales, Selling Price,
+      Actual Beginning Stocks, Stocks Qty, VAT (yes/no). Total Qty is calculated automatically.
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

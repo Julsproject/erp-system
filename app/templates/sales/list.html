@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Sales history · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Sales</h1>
+</div>
+
+<div class="tabs">
+  <a class="tab {{ 'active' if tab == 'all' }}" href="/sales">All Sales</a>
+  <a class="tab {{ 'active' if tab == 'receivables' }}" href="/sales/receivables">Receivables (Utang)</a>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ totals.count }}</span><span>Paid Transactions</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ totals.sales|peso }}</span><span>Total Sales (Paid)</span></div>
+</div>
+
+<p class="muted" style="margin:-6px 0 16px;">Fully-paid transactions only. Sales with outstanding utang appear under <a href="/sales/receivables">Receivables</a>.</p>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Invoice #</th><th>Type</th><th>Date</th><th>Customer</th><th>Payment</th><th class="num">Total</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for s in sales %}
+      <tr>
+        <td class="strong">{{ s.invoice_no }}</td>
+        <td><span class="txn txn-{{ s.txn_type }}">{{ s.txn_type|capitalize }}</span></td>
+        <td>{{ s.created_at.strftime('%b %d, %Y %I:%M %p') if s.created_at else '' }}</td>
+        <td>{{ s.customer_name or 'Walk-in' }}</td>
+        <td>{{ s.payment_method or '—' }}</td>
+        <td class="num strong {{ 'neg' if s.total and s.total < 0 }}">{{ s.total|peso }}</td>
+        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}">Receipt</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No fully-paid sales yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

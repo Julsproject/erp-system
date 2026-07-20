@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Statement · {{ customer.name }} · {{ app_name }}</title>
+  <style>
+    :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --warn:#b7791f; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:#eef1f5; font-family:"Segoe UI",system-ui,sans-serif; color:var(--ink); }
+    .sheet { max-width:720px; margin:28px auto; background:#fff; border:1px solid var(--line); border-radius:12px; padding:32px 36px; box-shadow:0 6px 24px rgba(15,23,42,.08); }
+    .s-head { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid var(--ink); padding-bottom:14px; margin-bottom:18px; }
+    .s-store { font-size:20px; font-weight:800; }
+    .s-title { font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; margin-top:2px; }
+    .s-cust { text-align:right; font-size:13px; }
+    .s-cust .nm { font-size:16px; font-weight:700; }
+    .s-cust .mut { color:var(--muted); }
+    table { width:100%; border-collapse:collapse; font-size:13px; margin-bottom:16px; }
+    th { text-align:left; color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.04em; padding:8px 10px; border-bottom:1px solid var(--line); }
+    td { padding:9px 10px; border-bottom:1px solid var(--line); }
+    .num { text-align:right; font-variant-numeric:tabular-nums; }
+    tfoot td { font-weight:700; border-top:2px solid var(--ink); border-bottom:none; }
+    .owed { color:var(--warn); font-weight:700; }
+    .s-balance { text-align:right; font-size:16px; margin-top:8px; }
+    .s-balance b { font-size:22px; }
+    .s-foot { color:var(--muted); font-size:12px; margin-top:22px; border-top:1px dashed var(--line); padding-top:12px; }
+    .actions { max-width:720px; margin:0 auto 40px; display:flex; gap:10px; justify-content:flex-end; }
+    .btn { padding:10px 18px; border-radius:10px; border:none; cursor:pointer; font-size:14px; font-weight:600; text-decoration:none; }
+    .btn.print { background:#4f46e5; color:#fff; }
+    .btn.back { background:#fff; color:#334155; border:1px solid var(--line); }
+    @media print { body { background:#fff; } .sheet { box-shadow:none; border:none; margin:0; max-width:none; } .actions { display:none; } @page { margin:12mm; } }
+  </style>
+</head>
+<body>
+  <div class="sheet">
+    <div class="s-head">
+      <div>
+        <div class="s-store">{{ app_name }}</div>
+        <div class="s-title">Statement of Account</div>
+      </div>
+      <div class="s-cust">
+        <div class="nm">{{ customer.name }}</div>
+        {% if customer.tin %}<div class="mut">TIN: {{ customer.tin }}</div>{% endif %}
+        {% if customer.address %}<div class="mut">{{ customer.address }}</div>{% endif %}
+        <div class="mut">As of {{ (rows and rows[0].sale.created_at).strftime('%b %d, %Y') if rows else '' }}</div>
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr><th>Invoice #</th><th>Date</th><th class="num">Sale Total</th><th class="num">Credit (Utang)</th><th class="num">Paid</th><th class="num">Outstanding</th></tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.sale.invoice_no }}</td>
+          <td>{{ r.sale.created_at.strftime('%b %d, %Y') if r.sale.created_at else '' }}</td>
+          <td class="num">{{ r.sale.total|peso }}</td>
+          <td class="num">{{ r.orig|peso }}</td>
+          <td class="num">{{ r.paid|peso }}</td>
+          <td class="num {{ 'owed' if r.outstanding > 0 }}">{{ r.outstanding|peso }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" style="text-align:center;color:var(--muted);padding:24px;">No credit transactions.</td></tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="3">Totals</td>
+          <td class="num">{{ orig_total|peso }}</td>
+          <td class="num">{{ paid_total|peso }}</td>
+          <td class="num owed">{{ out_total|peso }}</td>
+        </tr>
+      </tfoot>
+    </table>
+
+    <div class="s-balance">Outstanding balance: <b class="owed">{{ out_total|peso }}</b></div>
+
+    <div class="s-foot">This statement reflects credit (utang) purchases and payments recorded in {{ app_name }}.</div>
+  </div>
+
+  <div class="actions">
+    <a class="btn back" href="/credits">← Back</a>
+    <button class="btn print" onclick="window.print()">🖨 Print</button>
+  </div>
+</body>
+</html>

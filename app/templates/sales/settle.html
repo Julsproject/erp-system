@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Settle utang · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Collect payment</h1>
+  <a class="btn-link" href="/sales/receivables">← Back to receivables</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<div class="settle-summary card">
+  <div><span class="muted">Invoice</span><strong>{{ sale.invoice_no }}</strong></div>
+  <div><span class="muted">Customer</span><strong>{{ sale.customer_name or 'Walk-in' }}</strong></div>
+  <div><span class="muted">Sale total</span><strong>{{ sale.total|peso }}</strong></div>
+  <div><span class="muted">Outstanding utang</span><strong class="owed">{{ outstanding|peso }}</strong></div>
+</div>
+
+<form class="card form" method="post" action="/sales/receivables/{{ sale.id }}/pay" style="margin-top:16px;" id="settleForm">
+  <label>Method
+    <select name="method" id="method" onchange="toggleCheque()">
+      {% for value, label in methods %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Amount (₱)
+    <input name="amount" type="number" step="0.01" min="0" value="{{ '%.2f'|format(outstanding) }}" autofocus>
+    <small class="hint">Max is the outstanding utang ({{ outstanding|peso }}).</small>
+  </label>
+
+  <div id="chequeFields" class="full" style="display:none;">
+    <div class="cheque-grid">
+      <label>Bank<input name="bank" type="text" placeholder="e.g. BDO"></label>
+      <label>Cheque #<input name="cheque_no" type="text" placeholder="000123"></label>
+      <label>Cheque date<input name="cheque_date" type="text" placeholder="2026-07-25"></label>
+    </div>
+  </div>
+
+  <div class="form-actions full">
+    <button class="btn" type="submit">Record payment</button>
+    <a class="btn-secondary" href="/sales/receivables">Cancel</a>
+  </div>
+</form>
+
+<script>
+  function toggleCheque() {
+    document.getElementById('chequeFields').style.display =
+      document.getElementById('method').value === 'cheque' ? 'block' : 'none';
+  }
+  toggleCheque();
+</script>
+{% endblock %}

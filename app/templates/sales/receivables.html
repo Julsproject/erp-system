@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Receivables · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Sales</h1>
+</div>
+
+<div class="tabs">
+  <a class="tab {{ 'active' if tab == 'all' }}" href="/sales">All Sales</a>
+  <a class="tab {{ 'active' if tab == 'receivables' }}" href="/sales/receivables">Receivables (Utang)</a>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat owed"><span class="mini-num">{{ total_utang|peso }}</span><span>Total Outstanding Utang</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ rows|length }}</span><span>Unpaid Invoices</span></div>
+</div>
+
+<p class="muted" style="margin:-6px 0 16px;">Invoices with outstanding utang. Once fully paid, they move to <a href="/sales">All Sales</a>.</p>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Invoice #</th><th>Date</th><th>Customer</th><th>Payment</th><th class="num">Total</th><th class="num">Utang</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for s, outstanding in rows %}
+      <tr>
+        <td class="strong">{{ s.invoice_no }}</td>
+        <td>{{ s.created_at.strftime('%b %d, %Y %I:%M %p') if s.created_at else '' }}</td>
+        <td>{{ s.customer_name or 'Walk-in' }}</td>
+        <td>{{ s.payment_method or '—' }}</td>
+        <td class="num">{{ s.total|peso }}</td>
+        <td class="num owed">{{ outstanding|peso }}</td>
+        <td class="row-actions">
+          <a class="btn-link" href="/pos/receipt/{{ s.id }}">Receipt</a>
+          <a class="btn-pay" href="/sales/receivables/{{ s.id }}/pay">Pay</a>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No outstanding receivables. 🎉</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

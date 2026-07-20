@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">H</span>
+      <span class="brand-text">{{ app_name }}</span>
+    </div>
+    {% if user %}
+    {% set path = request.url.path %}
+    <nav class="nav">
+      <span class="nav-label">Menu</span>
+      <a class="nav-item {{ 'active' if path == '/' }}" href="/">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>
+        <span>Dashboard</span>
+      </a>
+      <a class="nav-item {{ 'active' if path.startswith('/products') }}" href="/products">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>
+        <span>Inventory</span>
+      </a>
+      <a class="nav-item {{ 'active' if path.startswith('/pos') }}" href="/pos">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 3h3l2.4 12.3a1.5 1.5 0 0 0 1.5 1.2h8.2a1.5 1.5 0 0 0 1.5-1.2L22 7H6"/></svg>
+        <span>POS</span>
+      </a>
+      <a class="nav-item {{ 'active' if path.startswith('/sales') }}" href="/sales">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 4h16v4H4z"/><path d="M4 8v12h16V8"/><path d="M9 12h6"/><path d="M9 16h6"/></svg>
+        <span>Sales</span>
+      </a>
+      <a class="nav-item {{ 'active' if path.startswith('/customers') }}" href="/customers">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="3.2"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>
+        <span>Customers</span>
+      </a>
+      <a class="nav-item {{ 'active' if path.startswith('/credits') }}" href="/credits">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 9.5h19"/></svg>
+        <span>Credits</span>
+      </a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="who">
+        <div class="avatar">{{ (user.full_name or user.username)[0]|upper }}</div>
+        <div>
+          <div class="who-name">{{ user.full_name or user.username }}</div>
+          <div class="who-role">{{ user.role }}</div>
+        </div>
+      </div>
+      <a class="logout" href="/logout">Sign out</a>
+    </div>
+    {% endif %}
+  </aside>
+
+  <main class="main">
+    <div class="content">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+</div>
+</body>
+</html>

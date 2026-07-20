@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Customers · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Customers</h1>
+    <p class="muted">{{ customers|length }} account{{ '' if customers|length == 1 else 's' }}</p>
+  </div>
+  <a class="btn" href="/customers/new">+ Add customer</a>
+</div>
+
+<form class="toolbar" method="get" action="/customers">
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search name…">
+  <button class="btn-secondary" type="submit">Search</button>
+  {% if q %}<a class="btn-link" href="/customers">Clear</a>{% endif %}
+</form>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Name</th><th>TIN</th><th>Address</th><th class="num">Outstanding (Utang)</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for c in customers %}
+      <tr>
+        <td class="strong">{{ c.name }}</td>
+        <td>{{ c.tin or '—' }}</td>
+        <td>{{ c.address or '—' }}</td>
+        <td class="num {{ 'owed' if outstanding.get(c.id, 0) > 0 }}">
+          {{ outstanding.get(c.id, 0)|peso }}
+        </td>
+        <td class="row-actions"><a class="btn-link" href="/customers/{{ c.id }}/edit">Edit</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="empty">No customers yet. They're also created automatically when you add an <strong>utang</strong> in POS.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

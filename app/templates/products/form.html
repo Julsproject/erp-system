@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if product else 'Add' }} product · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">{{ 'Edit product' if product else 'Add product' }}</h1>
+  <a class="btn-link" href="/products">← Back to inventory</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<form class="card form" method="post"
+      action="{{ '/products/' ~ product.id if product else '/products' }}">
+  <label class="full">Product Name
+    <input name="name" value="{{ product.name if product else '' }}" required autofocus>
+  </label>
+
+  <label>Category
+    <input name="category" list="category-list" placeholder="Type or pick…"
+           value="{{ product.category.name if product and product.category else '' }}">
+    <datalist id="category-list">
+      {% for c in categories %}<option value="{{ c.name }}">{% endfor %}
+    </datalist>
+    <small class="hint">Type a new one to create it.</small>
+  </label>
+
+  <label>Unit Type
+    <input id="unitType" name="unit_type" list="unit-list" placeholder="e.g. Piece, Bag, Meter, Kg…"
+           value="{{ product.unit_type.name if product and product.unit_type else '' }}"
+           oninput="updateBaseLabels()">
+    <datalist id="unit-list">
+      {% for u in unit_types %}<option value="{{ u.name }}">{% endfor %}
+    </datalist>
+    <small class="hint">This is the base unit for the ladder below.</small>
+  </label>
+
+  <label>Cost of Sales (₱)
+    <input name="cost_price" type="number" step="0.01" min="0" inputmode="decimal"
+           value="{{ '%.2f'|format(product.cost_price) if product else '0.00' }}">
+    <small class="hint">Manual for now — from Supplier tab later.</small>
+  </label>
+
+  <label>Selling Price (₱)
+    <input name="selling_price" type="number" step="0.01" min="0" inputmode="decimal"
+           value="{{ '%.2f'|format(product.selling_price) if product else '0.00' }}">
+  </label>
+
+  <label>Actual Beginning Stocks
+    <input id="beginning" name="beginning_stock" type="number" step="0.001" min="0" inputmode="decimal"
+           value="{{ product.beginning_stock|qty if product else '0' }}" oninput="calcTotal()">
+  </label>
+
+  <label>Stocks Qty
+    <input id="stocks" name="stock_qty" type="number" step="0.001" min="0" inputmode="decimal"
+           value="{{ product.stock_qty|qty if product else '0' }}" oninput="calcTotal()">
+    <small class="hint">Manual for now — from Supplier tab later.</small>
+  </label>
+
+  <label>Total Qty
+    <input id="total" type="text" value="0" readonly class="readonly">
+    <small class="hint">Beginning + Stocks (auto).</small>
+  </label>
+
+  <div class="full ladder">
+    <div class="ladder-head">
+      <div>
+        <h3>Units &amp; Conversions <span class="muted">· optional</span></h3>
+        <p class="hint">Sell this product in bigger units too. Each row: <strong>1 unit = how many <span class="base-word">base units</span></strong>, and that unit's price. The base unit (<span class="base-word">base</span>) uses the Selling Price above.</p>
+      </div>
+      <button type="button" class="btn-secondary" onclick="addUnitRow()">+ Add unit</button>
+    </div>
+    <div class="table-wrap ladder-wrap">
+      <table class="grid ladder-table">
+        <thead>
+          <tr>
+            <th>Sell as</th>
+            <th class="num">1 unit =</th>
+            <th>of base</th>
+            <th class="num">Selling price (₱)</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="ladderBody">
+          {% if product and product.units %}
+            {% for u in product.units %}
+            <tr class="ladder-row">
+              <td><input name="unit_name" value="{{ u.name }}" placeholder="e.g. Sack, Box, Roll"></td>
+              <td class="num"><input name="unit_factor" type="number" step="0.0001" min="0" value="{{ u.factor_to_base|qty }}" class="w-sm"></td>
+              <td class="base-word muted">base</td>
+              <td class="num"><input name="unit_price" type="number" step="0.01" min="0" value="{{ '%.2f'|format(u.price) }}" class="w-sm"></td>
+              <td><button type="button" class="btn-link danger" onclick="this.closest('tr').remove()">Remove</button></td>
+            </tr>
+            {% endfor %}
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+    <p class="hint ladder-example">Example — base <em>kg</em>: <strong>Sack</strong> = 50 kg, <strong>Elf load</strong> = 1000 kg (that's 20 sacks). Enter the total base units for each.</p>
+  </div>
+
+  <div class="form-actions full">
+    <button class="btn" type="submit">{{ 'Save changes' if product else 'Save product' }}</button>
+    <a class="btn-secondary" href="/products">Cancel</a>
+  </div>
+</form>
+
+<script>
+  function calcTotal() {
+    var b = parseFloat(document.getElementById('beginning').value) || 0;
+    var s = parseFloat(document.getElementById('stocks').value) || 0;
+    var t = b + s;
+    document.getElementById('total').value = (Math.round(t * 1000) / 1000).toString();
+  }
+
+  function updateBaseLabels() {
+    var u = (document.getElementById('unitType').value || '').trim() || 'base unit';
+    document.querySelectorAll('.base-word').forEach(function (el) { el.textContent = u; });
+  }
+
+  function addUnitRow() {
+    var u = (document.getElementById('unitType').value || '').trim() || 'base';
+    var tr = document.createElement('tr');
+    tr.className = 'ladder-row';
+    tr.innerHTML =
+      '<td><input name="unit_name" placeholder="e.g. Sack, Box, Roll"></td>' +
+      '<td class="num"><input name="unit_factor" type="number" step="0.0001" min="0" class="w-sm"></td>' +
+      '<td class="base-word muted">' + u + '</td>' +
+      '<td class="num"><input name="unit_price" type="number" step="0.01" min="0" class="w-sm"></td>' +
+      '<td><button type="button" class="btn-link danger" onclick="this.closest(\'tr\').remove()">Remove</button></td>';
+    document.getElementById('ladderBody').appendChild(tr);
+    tr.querySelector('input').focus();
+  }
+
+  calcTotal();
+  updateBaseLabels();
+</script>
+{% endblock %}

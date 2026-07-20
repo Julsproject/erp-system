@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Receipt {{ sale.invoice_no }} · {{ app_name }}</title>
+  <style>
+    :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:#eef1f5; font-family:"Segoe UI",system-ui,sans-serif; color:var(--ink); }
+    .sheet { max-width:420px; margin:28px auto; background:#fff; border:1px solid var(--line); border-radius:12px; padding:26px 28px; box-shadow:0 6px 24px rgba(15,23,42,.08); }
+    .r-head { text-align:center; border-bottom:1px dashed var(--line); padding-bottom:14px; margin-bottom:14px; }
+    .r-store { font-size:18px; font-weight:800; letter-spacing:-.01em; }
+    .r-sub { color:var(--muted); font-size:12px; margin-top:2px; }
+    .r-meta { font-size:12.5px; color:var(--muted); display:flex; justify-content:space-between; flex-wrap:wrap; gap:4px; margin-bottom:12px; }
+    .r-meta b { color:var(--ink); font-weight:600; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th { text-align:left; color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.04em; padding:6px 0; border-bottom:1px solid var(--line); }
+    td { padding:7px 0; vertical-align:top; }
+    .num { text-align:right; font-variant-numeric:tabular-nums; }
+    .r-item small { color:var(--muted); display:block; font-size:11.5px; }
+    .r-tot { border-top:1px dashed var(--line); margin-top:10px; padding-top:10px; }
+    .r-tot .row { display:flex; justify-content:space-between; font-size:13px; padding:3px 0; color:var(--muted); }
+    .r-tot .row b { color:var(--ink); }
+    .r-tot .grand { font-size:18px; font-weight:800; color:var(--ink); padding-top:6px; }
+    .r-pay { margin-top:12px; border-top:1px dashed var(--line); padding-top:10px; font-size:13px; }
+    .r-pay .row { display:flex; justify-content:space-between; padding:3px 0; color:var(--muted); }
+    .r-pay .row b { color:var(--ink); text-transform:capitalize; }
+    .r-foot { text-align:center; color:var(--muted); font-size:12px; margin-top:16px; border-top:1px dashed var(--line); padding-top:12px; }
+    .actions { max-width:420px; margin:0 auto 40px; display:flex; gap:10px; justify-content:center; }
+    .btn { padding:10px 18px; border-radius:10px; border:none; cursor:pointer; font-size:14px; font-weight:600; text-decoration:none; }
+    .btn.print { background:#4f46e5; color:#fff; }
+    .btn.back { background:#fff; color:#334155; border:1px solid var(--line); }
+    @media print {
+      body { background:#fff; }
+      .sheet { box-shadow:none; border:none; margin:0; max-width:none; }
+      .actions { display:none; }
+      @page { margin:8mm; }
+    }
+  </style>
+</head>
+<body>
+  <div class="sheet">
+    <div class="r-head">
+      <div class="r-store">{{ app_name }}</div>
+      <div class="r-sub">{{ 'Refund Slip' if sale.txn_type == 'refund' else ('Exchange Slip' if sale.txn_type == 'exchange' else 'Sales Invoice') }}</div>
+    </div>
+
+    <div class="r-meta">
+      <span>Invoice: <b>{{ sale.invoice_no }}</b></span>
+      <span>{{ sale.created_at.strftime('%b %d, %Y %I:%M %p') if sale.created_at else '' }}</span>
+    </div>
+    <div class="r-meta">
+      <span>Customer: <b>{{ sale.customer_name or 'Walk-in' }}</b></span>
+      <span>Cashier: <b>{{ sale.cashier.full_name or sale.cashier.username if sale.cashier else '—' }}</b></span>
+    </div>
+
+    <table>
+      <thead>
+        <tr><th>Item</th><th class="num">Qty</th><th class="num">Amount</th></tr>
+      </thead>
+      <tbody>
+        {% for l in sale.lines %}
+        <tr>
+          <td class="r-item">{{ l.product_name }}
+            <small>{{ l.qty|qty }} {{ l.unit_name }} × {{ l.unit_price|peso }}{% if l.discount and l.discount > 0 %} − {{ l.discount|peso }}{% endif %}</small>
+          </td>
+          <td class="num">{{ l.qty|qty }}</td>
+          <td class="num">{{ l.line_total|peso }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="r-tot">
+      <div class="row"><span>Subtotal</span><b>{{ sale.subtotal|peso }}</b></div>
+      {% if sale.discount_total and sale.discount_total > 0 %}
+      <div class="row"><span>Discount</span><b>− {{ sale.discount_total|peso }}</b></div>
+      {% endif %}
+      {% if sale.vat_amount and sale.vat_amount != 0 %}<div class="row"><span>VAT (12% incl.)</span><b>{{ sale.vat_amount|peso }}</b></div>{% endif %}
+      <div class="row grand"><span>TOTAL</span><span>{{ sale.total|peso }}</span></div>
+    </div>
+
+    <div class="r-pay">
+      {% for p in sale.payments %}
+      <div class="row"><span>{{ p.method.replace('_',' ')|title }}</span><b>{{ p.amount|peso }}</b></div>
+      {% endfor %}
+      {% if sale.change_amount and sale.change_amount > 0 %}
+      <div class="row"><span>Change</span><b>{{ sale.change_amount|peso }}</b></div>
+      {% endif %}
+      {% if sale.receivable_amount and sale.receivable_amount > 0 %}
+      <div class="row" style="color:#b7791f;"><span>Utang balance</span><b>{{ sale.receivable_amount|peso }}</b></div>
+      {% endif %}
+    </div>
+
+    <div class="r-foot">
+      Thank you for your purchase!
+    </div>
+  </div>
+
+  <div class="actions">
+    <a class="btn back" href="/pos">← New sale</a>
+    <button class="btn print" onclick="window.print()">🖨 Print</button>
+  </div>
+</body>
+</html>
