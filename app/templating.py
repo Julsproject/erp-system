@@ -51,6 +51,21 @@ def price_alert_count() -> int:
         db.close()
 
 
+def asset_version() -> str:
+    """Cache-busting token for static assets.
+
+    Uses the stylesheet's last-modified time, so browsers refetch the CSS the
+    moment it actually changes — and keep caching it the rest of the time.
+    """
+    import os
+
+    try:
+        return str(int(os.path.getmtime("app/static/css/styles.css")))
+    except OSError:
+        return "1"
+
+
 templates.env.filters["peso"] = peso
 templates.env.filters["qty"] = qty
 templates.env.globals["price_alert_count"] = price_alert_count
+templates.env.globals["asset_version"] = asset_version

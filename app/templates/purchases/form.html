@@ -16,6 +16,33 @@
   <section class="card pos-search-panel">
     <input id="pSearch" class="search pos-search" type="search" placeholder="Search product to add…" autofocus autocomplete="off">
     <div id="pResults" class="pos-results"><p class="pos-hint">Type a product name to begin.</p></div>
+
+    <button type="button" class="btn-secondary np-open" onclick="showNewProduct()">＋ Not in inventory? Create product</button>
+
+    <div id="npPanel" class="np-panel" style="display:none;">
+      <h3 class="np-title">New product</h3>
+      <label>Product name
+        <input id="npName" type="text" autocomplete="off">
+      </label>
+      <label>Category
+        <input id="npCategory" type="text" list="np-cats" placeholder="optional" autocomplete="off">
+      </label>
+      <label>Unit type
+        <input id="npUnit" type="text" list="np-units" placeholder="Piece" autocomplete="off">
+      </label>
+      <label>Selling price (₱)
+        <input id="npPrice" type="number" step="0.01" min="0" placeholder="0.00">
+      </label>
+      <div class="np-actions">
+        <button type="button" class="btn" onclick="createProduct()">Create &amp; add</button>
+        <button type="button" class="btn-secondary" onclick="hideNewProduct()">Cancel</button>
+      </div>
+      <div id="npError" class="alert" style="display:none;margin:10px 0 0;"></div>
+      <p class="hint np-hint">The cost is filled in from this purchase. You can refine the details later in Inventory.</p>
+    </div>
+
+    <datalist id="np-cats">{% for c in categories %}<option value="{{ c.name }}">{% endfor %}</datalist>
+    <datalist id="np-units">{% for u in unit_types %}<option value="{{ u.name }}">{% endfor %}</datalist>
   </section>
 
   <!-- RIGHT: document -->
@@ -89,7 +116,7 @@ async function runSearch() {
   const data = await res.json();
   const box = document.getElementById('pResults');
   const products = data.products || [];
-  if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
+  if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found — use <strong>Create product</strong> below.</p>'; return; }
   box.innerHTML = '';
   products.forEach(p => {
     const el = document.createElement('button');
@@ -150,31 +177,46 @@ function renderLines() {
       '<td class="strong">' + escapeHtml(l.product.name) + '<span class="line-note"></span></td>' +
       '<td><select class="cart-unit" onchange="setUnit(' + i + ', this.value)">' + opts + '</select></td>' +
       '<td class="num"><input class="cart-qty" type="number" step="any" min="0" value="' + fmtQty(l.qty) + '" oninput="setQty(' + i + ', this.value)"></td>' +
-      '<td class="num"><input class="cart-disc" type="number" step="any" min="0" value="' + l.unitCost + '" oninput="setCost(' + i + ', this.value)"></td>' +
-      '<td class="num strong line-total"></td>' +
+      '<td class="num"><input class="cart-disc line-cost" type="number" step="any" min="0" value="' + round4(l.unitCost) + '" oninput="setCost(' + i + ', this.value)"></td>' +
+      '<td class="num"><input class="cart-disc line-total" type="number" step="any" min="0" value="' + round2(lineTotal(l)) + '" oninput="setTotal(' + i + ', this.value)"></td>' +
       '<td><button class="btn-link danger" onclick="removeLine(' + i + ')">✕</button></td>';
     body.appendChild(tr);
   });
   refreshComputed();
 }
 
-/* Update totals/notes WITHOUT rebuilding inputs, so typing keeps focus. */
-function refreshComputed() {
+/* Update totals/notes WITHOUT rebuilding inputs, so typing keeps focus.
+   `editing` = {i, field} of the box being typed in, so we never overwrite it. */
+function refreshComputed(editing) {
   const rows = document.querySelectorAll('#linesBody tr');
   lines.forEach((l, i) => {
     const tr = rows[i];
     if (!tr) return;
     const note = tr.querySelector('.line-note');
     if (note) note.innerHTML = lineNote(l);
+    const here = editing && editing.i === i;
     const tot = tr.querySelector('.line-total');
-    if (tot) tot.textContent = peso(lineTotal(l));
+    if (tot && !(here && editing.field === 'total')) tot.value = round2(lineTotal(l));
+    const cost = tr.querySelector('.line-cost');
+    if (cost && !(here && editing.field === 'cost')) cost.value = round4(l.unitCost);
   });
   recompute();
 }
 
 function setUnit(i, v) { lines[i].unitIndex = parseInt(v); refreshComputed(); }
-function setQty(i, v) { lines[i].qty = parseFloat(v) || 0; refreshComputed(); }
-function setCost(i, v) { lines[i].unitCost = parseFloat(v) || 0; refreshComputed(); }
+function setQty(i, v) { lines[i].qty = parseFloat(v) || 0; refreshComputed({ i: i, field: 'qty' }); }
+function setCost(i, v) { lines[i].unitCost = parseFloat(v) || 0; refreshComputed({ i: i, field: 'cost' }); }
+
+/* Typing the Total works backwards: unit cost = total ÷ qty. */
+function setTotal(i, v) {
+  const t = parseFloat(v) || 0;
+  const q = Number(lines[i].qty) || 0;
+  if (q > 0) lines[i].unitCost = t / q;
+  refreshComputed({ i: i, field: 'total' });
+}
+
+function round2(n) { return (Math.round((Number(n) || 0) * 100) / 100).toString(); }
+function round4(n) { return (Math.round((Number(n) || 0) * 10000) / 10000).toString(); }
 function removeLine(i) { lines.splice(i, 1); renderLines(); }
 function clearAll() {
   lines = [];
@@ -219,7 +261,8 @@ async function savePurchase() {
     notes: document.getElementById('notes').value,
     lines: lines.map(l => {
       const u = l.product.units[l.unitIndex];
-      return { product_id: l.product.id, unit_name: u.name, factor: u.factor, qty: l.qty, unit_cost: l.unitCost };
+      return { product_id: l.product.id, unit_name: u.name, factor: u.factor, qty: l.qty,
+               unit_cost: l.unitCost, line_total: lineTotal(l) };
     })
   };
   try {
@@ -229,6 +272,46 @@ async function savePurchase() {
     else { showError(data.error || 'Save failed.'); btn.disabled = false; btn.textContent = 'Save Purchase'; }
   } catch (e) {
     showError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Save Purchase';
+  }
+}
+
+/* ---- create a product that isn't in inventory yet ---- */
+function showNewProduct() {
+  document.getElementById('npPanel').style.display = 'block';
+  const n = document.getElementById('npName');
+  if (!n.value) n.value = searchBox.value.trim();
+  n.focus();
+}
+function hideNewProduct() {
+  document.getElementById('npPanel').style.display = 'none';
+  ['npName', 'npCategory', 'npUnit', 'npPrice'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('npError').style.display = 'none';
+}
+async function createProduct() {
+  const err = document.getElementById('npError');
+  err.style.display = 'none';
+  const name = document.getElementById('npName').value.trim();
+  if (!name) { err.textContent = 'Enter a product name.'; err.style.display = 'block'; return; }
+  const payload = {
+    name: name,
+    category: document.getElementById('npCategory').value,
+    unit_type: document.getElementById('npUnit').value,
+    selling_price: document.getElementById('npPrice').value
+  };
+  try {
+    const res = await fetch('/purchases/quick-product', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!data.ok) { err.textContent = data.error || 'Could not create the product.'; err.style.display = 'block'; return; }
+    addLine(data.product);
+    hideNewProduct();
+    searchBox.value = '';
+    document.getElementById('pResults').innerHTML =
+      '<p class="pos-hint">' + escapeHtml(data.product.name) +
+      (data.existed ? ' already existed — added to this purchase.' : ' created and added.') + '</p>';
+  } catch (e) {
+    err.textContent = 'Network error. Please try again.'; err.style.display = 'block';
   }
 }
 

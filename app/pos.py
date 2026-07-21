@@ -29,9 +29,16 @@ METHOD_LABELS = {
     "receivable": "Receivable",
 }
 
+# VAT is INCLUSIVE: the selling price already contains it.
+#   net of VAT = total / 1.12        VAT = total - net of VAT
 VAT_RATE = Decimal("0.12")
 VAT_DIVISOR = Decimal("1.12")
 CENTS = Decimal("0.01")
+
+
+def _vat_of(gross: Decimal) -> Decimal:
+    """The VAT portion contained in a VAT-inclusive amount."""
+    return _money(gross * VAT_RATE / VAT_DIVISOR)
 
 
 def _dec(value, default="0") -> Decimal:
@@ -180,12 +187,13 @@ async def pos_checkout(request: Request, db: Session = Depends(get_db), user=Dep
         ))
 
     discount_total = _dec(data.get("discount_total"))
-    net = subtotal - discount_total
-    if net < 0:
-        net = Decimal("0")
-    # VAT is 12% added on top of the net amount when the cashier toggles it on.
-    vat_amount = _money(net * VAT_RATE) if vat_applied else Decimal("0")
-    total = net + vat_amount
+    total = subtotal - discount_total
+    if total < 0:
+        total = Decimal("0")
+    # VAT is already inside the price — extract it, don't add it. The customer
+    # pays the same whether VAT is ticked or not; it only splits the receipt.
+    vat_amount = _vat_of(total) if vat_applied else Decimal("0")
+    net = _money(total) - vat_amount
 
     # --- Payments (split) ---------------------------------------------------
     payments_in = data.get("payments") or []
@@ -304,8 +312,8 @@ async def pos_refund(request: Request, db: Session = Depends(get_db), user=Depen
     )
     db.add(refund)
 
-    total = Decimal("0")
-    vat = Decimal("0")
+    total = Decimal("0")       # net (VAT-exclusive) value of the refunded items
+    vat_base = Decimal("0")    # the part of that which was sold with VAT on top
     for it in items:
         qty = _dec(it.get("qty"))
         if qty <= 0:
@@ -316,7 +324,7 @@ async def pos_refund(request: Request, db: Session = Depends(get_db), user=Depen
         value = qty * unit_price
         total += value
         if is_vat:
-            vat += value / VAT_DIVISOR * VAT_RATE
+            vat_base += value
         product = db.get(models.Product, int(it["product_id"])) if it.get("product_id") else None
         if product:
             _add_stock(product, qty * factor)
@@ -336,13 +344,18 @@ async def pos_refund(request: Request, db: Session = Depends(get_db), user=Depen
     if total <= 0:
         return JSONResponse({"ok": False, "error": "Nothing to refund."}, status_code=400)
 
-    refund.subtotal = _money(-total)
-    refund.total = _money(-total)
-    refund.vat_amount = _money(-vat)
-    refund.net_amount = _money(-(total - vat))
+    # Prices already include VAT, so the customer gets back exactly what they
+    # paid; the VAT portion is extracted out of that amount for reporting.
+    gross = _money(total)
+    vat = _vat_of(vat_base)
+
+    refund.subtotal = -gross
+    refund.net_amount = -(gross - vat)
+    refund.vat_amount = -vat
+    refund.total = -gross
     refund.payment_method = "Cash refund"
     refund.amount_tendered = Decimal("0")
-    refund.change_amount = _money(total)  # cash paid out to customer
+    refund.change_amount = gross  # cash paid out to customer
     db.flush()
     # Point the refund at the invoice it came from (REF-45); fall back to a
     # sequential number for refunds with no original invoice.
@@ -371,9 +384,11 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
     )
     db.add(ex)
 
+    vat_applied = bool(data.get("vat_applied"))   # VAT on the NEW items
     returned_total = Decimal("0")
+    returned_vat_base = Decimal("0")              # returned items that carried VAT
     new_total = Decimal("0")
-    vat = Decimal("0")
+    new_vat_base = Decimal("0")
 
     for it in returned:
         qty = _dec(it.get("qty"))
@@ -383,6 +398,8 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
         factor = _dec(it.get("factor"), "1")
         value = qty * unit_price
         returned_total += value
+        if bool(it.get("is_vat")):
+            returned_vat_base += value
         product = db.get(models.Product, int(it["product_id"])) if it.get("product_id") else None
         if product:
             _add_stock(product, qty * factor)
@@ -400,13 +417,13 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
         unit_price = _dec(ln.get("unit_price"))
         factor = _dec(ln.get("factor"), "1")
         discount = _dec(ln.get("discount"))
-        is_vat = bool(ln.get("is_vat"))
+        is_vat = vat_applied   # VAT is a whole-transaction toggle, same as a sale
         lt = qty * unit_price - discount
         if lt < 0:
             lt = Decimal("0")
         new_total += lt
         if is_vat:
-            vat += lt / VAT_DIVISOR * VAT_RATE
+            new_vat_base += lt
         product = db.get(models.Product, int(ln["product_id"])) if ln.get("product_id") else None
         if product:
             _deduct_stock(product, qty * factor)
@@ -417,11 +434,16 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
             discount=discount, line_total=_money(lt), is_vat=is_vat,
         ))
 
-    diff = new_total - returned_total  # >0 customer pays, <0 cash refund to customer
+    # Both sides are already VAT-inclusive, so the difference is a straight
+    # comparison; VAT is extracted from each side for reporting only.
+    returned_vat = _vat_of(returned_vat_base)
+    new_vat = _vat_of(new_vat_base)
+    diff = _money(new_total - returned_total)  # >0 customer pays, <0 cash refund
+
     ex.subtotal = _money(new_total)
-    ex.vat_amount = _money(vat)
-    ex.total = _money(diff)
-    ex.net_amount = _money(diff - vat)
+    ex.vat_amount = new_vat - returned_vat
+    ex.net_amount = diff - (new_vat - returned_vat)
+    ex.total = diff
     if diff > 0:
         method = (data.get("payment_method") or "cash").strip().lower()
         if method not in METHOD_LABELS or method == "receivable":

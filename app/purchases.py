@@ -9,11 +9,13 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from . import models
 from .database import get_db
 from .deps import get_current_user
+from .products import _get_or_create_category, _get_or_create_unit_type
 from .templating import templates
 
 router = APIRouter()
@@ -103,11 +105,68 @@ def new_purchase(request: Request, supplier: int = 0, db: Session = Depends(get_
         .order_by(models.Supplier.name)
         .all()
     )
+    categories = db.query(models.Category).order_by(models.Category.name).all()
+    unit_types = db.query(models.UnitType).order_by(models.UnitType.name).all()
     return templates.TemplateResponse(
         "purchases/form.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "suppliers": suppliers, "preselect": supplier},
+         "suppliers": suppliers, "preselect": supplier,
+         "categories": categories, "unit_types": unit_types},
     )
+
+
+def _product_payload(p: models.Product) -> dict:
+    """Shape a product the way the purchase form expects it."""
+    base_unit = p.unit_type.name if p.unit_type else "Unit"
+    units = [{"name": base_unit, "factor": 1.0}]
+    for u in p.units:
+        units.append({"name": u.name, "factor": float(u.factor_to_base or 1)})
+    return {
+        "id": p.id,
+        "name": p.name,
+        "base_unit": base_unit,
+        "units": units,
+        "cost_price": float(p.cost_price or 0),
+        "selling_price": float(p.selling_price or 0),
+        "on_hand": float(p.total_qty or 0),
+    }
+
+
+@router.post("/purchases/quick-product")
+async def quick_product(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Create a product that isn't in inventory yet, straight from the purchase form."""
+    if not user:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+    data = await request.json()
+    name = (data.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "Product name is required."}, status_code=400)
+
+    existing = (
+        db.query(models.Product)
+        .filter(func.lower(models.Product.name) == name.lower())
+        .filter(models.Product.is_active.is_(True))
+        .first()
+    )
+    if existing:
+        # Already there — just hand it back so the cashier can carry on.
+        return {"ok": True, "existed": True, "product": _product_payload(existing)}
+
+    product = models.Product(
+        name=name,
+        cost_price=Decimal("0"),
+        selling_price=_money(data.get("selling_price") or 0),
+        beginning_stock=Decimal("0"),
+        stock_qty=Decimal("0"),
+        is_active=True,
+    )
+    product.category = _get_or_create_category(db, data.get("category"))
+    product.unit_type = _get_or_create_unit_type(db, data.get("unit_type") or "Piece")
+    db.add(product)
+    db.commit()
+    db.refresh(product)
+    return {"ok": True, "existed": False, "product": _product_payload(product)}
 
 
 @router.post("/purchases")
@@ -148,7 +207,10 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
         if factor <= 0:
             factor = Decimal("1")
         unit_cost = _dec(ln.get("unit_cost"))
-        line_total = _money(qty * unit_cost)
+        # The cashier may type the line Total directly (it back-computes the unit
+        # cost on screen). Trust that figure so the printed total matches exactly.
+        raw_total = ln.get("line_total")
+        line_total = _money(raw_total) if raw_total not in (None, "") else _money(qty * unit_cost)
         total += line_total
 
         base_qty = qty * factor

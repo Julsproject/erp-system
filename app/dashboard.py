@@ -212,7 +212,25 @@ def dashboard(request: Request, days: int = 7, db: Session = Depends(get_db), us
         .all()
     )
     top_revenue = sorted(perf, key=lambda r: float(r.revenue or 0), reverse=True)[:5]
-    top_qty = sorted(perf, key=lambda r: float(r.qty or 0), reverse=True)[:5]
+
+    # Which customers bought the most in this period (walk-ins have no name).
+    top_customers = (
+        db.query(
+            models.Sale.customer_name,
+            func.count(models.Sale.id).label("orders"),
+            func.coalesce(func.sum(models.Sale.total), 0).label("spent"),
+        )
+        .filter(
+            models.Sale.txn_type == "sale",
+            _local_date(models.Sale.created_at).between(period_start, today),
+            models.Sale.customer_name.isnot(None),
+            models.Sale.customer_name != "",
+        )
+        .group_by(models.Sale.customer_name)
+        .order_by(func.coalesce(func.sum(models.Sale.total), 0).desc())
+        .limit(5)
+        .all()
+    )
 
     # Dead stock: on hand but nothing sold in the last 30 days.
     sold_ids = {
@@ -248,7 +266,7 @@ def dashboard(request: Request, days: int = 7, db: Session = Depends(get_db), us
             "payments": payments, "pay_total": pay_total,
             "out_of_stock": out_of_stock, "low_stock": low_stock, "no_cost": no_cost,
             "utang_total": utang_total, "due_soon": due_soon, "overdue": overdue,
-            "top_revenue": top_revenue, "top_qty": top_qty, "dead_stock": dead_stock,
+            "top_revenue": top_revenue, "top_customers": top_customers, "dead_stock": dead_stock,
             "recent": recent, "backup": backup_info, "backup_stale_days": BACKUP_STALE_DAYS,
         },
     )

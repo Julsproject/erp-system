@@ -565,3 +565,117 @@ table.grid tr:last-child td { border-bottom: none; }
   .who { padding: 0; }
   .content { padding: 22px 18px 50px; }
 }
+
+/* ============================================================
+   DARK MODE
+   Toggled by data-theme="dark" on <html>. Redefines the design
+   tokens, then patches the places that hard-code light colors.
+   ============================================================ */
+[data-theme="dark"] {
+  --bg: #0e1116;
+  --surface: #161b22;
+  --surface-2: #1c2128;
+  --ink: #e6edf3;
+  --ink-soft: #c9d1d9;
+  --muted: #9198a1;
+  --faint: #7d8590;
+  --line: #262c36;
+  --line-2: #333b47;
+
+  --brand: #6366f1;
+  --brand-600: #a5b4fc;
+  --brand-tint: #1e2140;
+  --brand-grad: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+
+  --ok: #3fb950;   --ok-tint: #12261a;
+  --warn: #e3b341; --warn-tint: #2b2312;
+  --danger: #f85149; --danger-tint: #2d1618;
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.32), 0 1px 3px rgba(0,0,0,.26);
+  --shadow-md: 0 4px 12px rgba(0,0,0,.38), 0 2px 6px rgba(0,0,0,.28);
+  --shadow-lg: 0 10px 30px rgba(0,0,0,.5);
+
+  color-scheme: dark;
+}
+
+/* Form controls that hard-code a white background */
+[data-theme="dark"] input:not([type="checkbox"]):not([type="radio"]),
+[data-theme="dark"] select,
+[data-theme="dark"] textarea {
+  background: var(--surface);
+  color: var(--ink);
+  border-color: var(--line-2);
+}
+[data-theme="dark"] input::placeholder { color: var(--faint); }
+[data-theme="dark"] .form input.readonly { background: var(--surface-2); }
+[data-theme="dark"] input[type="file"] { color: var(--ink-soft); }
+
+/* Tinted info boxes / borders */
+[data-theme="dark"] .alert { border-color: #5e2b2b; }
+[data-theme="dark"] .notice,
+[data-theme="dark"] .hint-box,
+[data-theme="dark"] .lookup-meta { border-color: #343a6b; color: #c7d2fe; }
+[data-theme="dark"] .module-card.next,
+[data-theme="dark"] .pos-item:hover,
+[data-theme="dark"] .disc-toggle:hover,
+[data-theme="dark"] .pay-exact:hover { border-color: #343a6b; }
+[data-theme="dark"] .pay-warn { color: #e3b341; border-color: #4d3c19; }
+[data-theme="dark"] .mini-stat.owed { border-color: #4d3c19; }
+[data-theme="dark"] .login-page { background: radial-gradient(1200px 600px at 50% -10%, #1a1e33 0%, var(--bg) 55%); }
+[data-theme="dark"] .code-block { background: #0a0d12; color: #c9d1d9; }
+
+/* Dashboard KPIs / attention tiles */
+[data-theme="dark"] .kpi-value.pos,
+[data-theme="dark"] .attn.ok .attn-num,
+[data-theme="dark"] .cost-note .down { color: #3fb950; }
+[data-theme="dark"] .danger-text,
+[data-theme="dark"] .attn.bad .attn-num { color: #f87171; }
+[data-theme="dark"] .attn.warn .attn-num,
+[data-theme="dark"] .cost-note .up { color: #e3b341; }
+[data-theme="dark"] .kpi-warn,
+[data-theme="dark"] .attn.warn { background: #2b2312; border-color: #6b5217; }
+[data-theme="dark"] .attn.bad { background: #2d1618; border-color: #6e2b2b; }
+
+/* Loud price-review warnings */
+[data-theme="dark"] .alert-bar { background: #2d1618; border-color: #6e2b2b; color: #fca5a5; }
+[data-theme="dark"] .alert-bar:hover { background: #3a1c1f; border-color: #8b3a3a; }
+[data-theme="dark"] .alert-bar-text strong,
+[data-theme="dark"] .alert-bar-cta,
+[data-theme="dark"] .alert-hero-body h2,
+[data-theme="dark"] .alert-hero-cta { color: #fca5a5; }
+[data-theme="dark"] .alert-hero {
+  background: linear-gradient(180deg, #2d1618 0%, #241214 100%);
+  border-color: #6e2b2b; box-shadow: 0 6px 20px rgba(0,0,0,.4);
+}
+[data-theme="dark"] .alert-hero:hover { border-color: #8b3a3a; }
+[data-theme="dark"] .alert-hero-body p { color: #f0b4b4; }
+[data-theme="dark"] .alert-hero.amber {
+  background: linear-gradient(180deg, #2b2312 0%, #241d0f 100%);
+  border-color: #6b5217;
+}
+[data-theme="dark"] .alert-hero.amber:hover { border-color: #8a6a1c; }
+[data-theme="dark"] .alert-hero.amber .alert-hero-body h2,
+[data-theme="dark"] .alert-hero.amber .alert-hero-cta { color: #e3b341; }
+[data-theme="dark"] .alert-hero.amber .alert-hero-body p { color: #d6c08a; }
+[data-theme="dark"] .cost-warn { color: #fca5a5; background: #2d1618; }
+[data-theme="dark"] .cost-note b { color: var(--ink); }
+
+/* ---------- Quick "create product" panel (purchase form) ---------- */
+.np-open { width: 100%; justify-content: center; margin-top: 12px; }
+.np-panel { margin-top: 12px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
+.np-title { margin: 0 0 12px; font-size: 14.5px; }
+.np-panel label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); font-weight: 500; margin-bottom: 10px; }
+.np-panel input { padding: 9px 11px; border: 1px solid var(--line-2); border-radius: 8px; font-size: 14px; background: var(--surface); color: var(--ink); }
+.np-panel input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
+.np-actions { display: flex; gap: 10px; margin-top: 4px; }
+.np-hint { margin: 10px 0 0; }
+
+/* Theme toggle button (sidebar) */
+.theme-toggle {
+  display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%;
+  padding: 8px; margin-bottom: 6px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--muted); font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: background .18s var(--ease), color .18s;
+}
+.theme-toggle:hover { background: var(--brand-tint); color: var(--brand-600); }
+.theme-toggle svg { width: 15px; height: 15px; stroke-width: 2; }

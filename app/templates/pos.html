@@ -54,9 +54,10 @@
         </span>
       </div>
       <div class="totals-row">
-        <span><label class="vat-label"><input type="checkbox" id="vatOn" onchange="computeTotals()"> VAT (12%)</label></span>
+        <span><label class="vat-label"><input type="checkbox" id="vatOn" onchange="computeTotals()"> VAT (12%) · included</label></span>
         <span id="tVat">₱0.00</span>
       </div>
+      <div class="totals-row" id="rowNetVat" style="display:none;"><span class="muted">Net of VAT</span><span id="tNetVat">₱0.00</span></div>
       <div class="totals-row grand"><span>Total</span><span id="tTotal">₱0.00</span></div>
     </div>
 
@@ -115,7 +116,7 @@
       </table>
     </div>
     <div class="refund-foot" id="refundFoot" style="display:none;">
-      <div class="totals-row grand"><span>Refund total (cash out)</span><span id="refundTotal">₱0.00</span></div>
+      <div class="totals-row grand"><span>Refund total (cash out) <small class="muted" id="refundVatNote"></small></span><span id="refundTotal">₱0.00</span></div>
       <button class="btn pos-complete" id="refundBtn" onclick="doRefund()" disabled>Complete Refund</button>
     </div>
     <div id="refundError" class="alert" style="display:none;margin-top:12px;"></div>
@@ -152,6 +153,10 @@
       </div>
       <div class="totals">
         <div class="totals-row"><span>New items total</span><span id="exNewTotal">₱0.00</span></div>
+        <div class="totals-row">
+          <span><label class="vat-label"><input type="checkbox" id="exVatOn" onchange="exCompute()"> VAT (12%) · included in new items</label></span>
+          <span id="exVat">₱0.00</span>
+        </div>
         <div class="totals-row grand"><span id="exDiffLabel">Customer pays</span><span id="exDiff">₱0.00</span></div>
         <label class="pay-full-method" id="exPayWrap" style="display:none;">Payment method
           <select id="exMethod">
@@ -376,17 +381,16 @@ function fillExact(i) {
 function computeGrand() {
   let subtotal = 0;
   cart.forEach(line => { subtotal += lineTotalOf(line); });
-  const net = Math.max(subtotal - overallDiscAmt(subtotal), 0);
-  const vat = document.getElementById('vatOn').checked ? net * VAT_RATE : 0;
-  return net + vat;
+  return Math.max(subtotal - overallDiscAmt(subtotal), 0);  // VAT already inside
 }
 
 function computeTotals() {
   let subtotal = 0;
   cart.forEach(line => { subtotal += lineTotalOf(line); });
-  const net = Math.max(subtotal - overallDiscAmt(subtotal), 0);
-  const vat = document.getElementById('vatOn').checked ? net * VAT_RATE : 0;
-  const grand = net + vat;   // VAT is added on top of the net amount
+  // VAT is INCLUSIVE: total ÷ 1.12 = net of VAT, total − net = VAT.
+  // Ticking VAT does not change what the customer pays.
+  const grand = Math.max(subtotal - overallDiscAmt(subtotal), 0);
+  const vat = document.getElementById('vatOn').checked ? grand * VAT_RATE / VAT_DIV : 0;
 
   let paid = 0, receivable = 0;
   if (paymentMode === 'full') {
@@ -404,6 +408,7 @@ function computeTotals() {
   document.getElementById('tVat').textContent = peso(vat);
   document.getElementById('tTotal').textContent = peso(grand);
   document.getElementById('tPaid').textContent = peso(paid);
+  toggleRow('rowNetVat', vat > 0, 'tNetVat', grand - vat);
   toggleRow('rowReceivable', receivable > 0, 'tReceivable', receivable);
   toggleRow('rowChange', change > 0.001, 'tChange', change);
 
@@ -496,17 +501,23 @@ async function lookupRefund() {
 }
 function calcRefund() {
   if (!refundSale) return;
-  let total = 0, any = false;
+  let net = 0, vatBase = 0, any = false;
   document.querySelectorAll('#refundItems tr').forEach(tr => {
     const cb = tr.querySelector('input[type=checkbox]');
     const qtyInput = tr.querySelector('.rf-qty');
     const l = refundSale.lines[parseInt(cb.dataset.i)];
     let qty = parseFloat(qtyInput.value) || 0;
     if (qty > l.qty) { qty = l.qty; qtyInput.value = fmtQty(l.qty); }
-    tr.querySelector('.rf-amt').textContent = peso(qty * l.unit_price);
-    if (cb.checked) { total += qty * l.unit_price; any = true; }
+    const val = qty * l.unit_price;
+    tr.querySelector('.rf-amt').textContent = peso(val);
+    if (cb.checked) { net += val; if (l.is_vat) vatBase += val; any = true; }
   });
+  // Prices already include VAT, so refund exactly what was paid and show the
+  // VAT portion contained in it.
+  const vat = vatBase * VAT_RATE / VAT_DIV;
+  const total = net;
   document.getElementById('refundTotal').textContent = peso(total);
+  document.getElementById('refundVatNote').textContent = vat > 0 ? '· incl. VAT ' + peso(vat) : '';
   document.getElementById('refundBtn').disabled = !any || total <= 0;
 }
 async function doRefund() {
@@ -601,27 +612,36 @@ function exRefreshComputed() {
   });
   exCompute();
 }
-function exReturnedTotal() {
-  let t = 0;
+// Returned side: net value plus the part of it that carried VAT when sold.
+function exReturnedTotals() {
+  let net = 0, vatBase = 0;
   if (exSale) document.querySelectorAll('#exReturnItems tr').forEach(tr => {
     const cb = tr.querySelector('input[type=checkbox]');
     const l = exSale.lines[parseInt(cb.dataset.i)];
     let qty = parseFloat(tr.querySelector('.ex-rqty').value) || 0;
     if (qty > l.qty) qty = l.qty;
-    tr.querySelector('.ex-ramt').textContent = peso(qty * l.unit_price);
-    if (cb.checked) t += qty * l.unit_price;
+    const val = qty * l.unit_price;
+    tr.querySelector('.ex-ramt').textContent = peso(val);
+    if (cb.checked) { net += val; if (l.is_vat) vatBase += val; }
   });
-  return t;
+  return { net: net, vatBase: vatBase };
 }
 function exNewTotal() { let t = 0; exCart.forEach(l => t += l.qty * l.product.units[l.unitIndex].price); return t; }
 function exCompute() {
-  const rt = exReturnedTotal(), nt = exNewTotal(), diff = nt - rt;
-  document.getElementById('exReturnedTotal').textContent = peso(rt);
+  const r = exReturnedTotals();
+  const nt = exNewTotal();
+  // Both sides already include VAT, so compare them directly and just show the
+  // VAT contained in the new items.
+  const newVat = document.getElementById('exVatOn').checked ? nt * VAT_RATE / VAT_DIV : 0;
+  const diff = nt - r.net;
+
+  document.getElementById('exReturnedTotal').textContent = peso(r.net);
   document.getElementById('exNewTotal').textContent = peso(nt);
+  document.getElementById('exVat').textContent = peso(newVat);
   const label = document.getElementById('exDiffLabel'), diffEl = document.getElementById('exDiff');
   if (diff >= 0) { label.textContent = 'Customer pays'; diffEl.textContent = peso(diff); document.getElementById('exPayWrap').style.display = diff > 0 ? 'flex' : 'none'; }
   else { label.textContent = 'Refund to customer (cash)'; diffEl.textContent = peso(-diff); document.getElementById('exPayWrap').style.display = 'none'; }
-  document.getElementById('exBtn').disabled = !(rt > 0 || nt > 0);
+  document.getElementById('exBtn').disabled = !(r.net > 0 || nt > 0);
 }
 async function doExchange() {
   const returned = [];
@@ -635,7 +655,9 @@ async function doExchange() {
   const new_lines = exCart.map(l => { const u = l.product.units[l.unitIndex]; return { product_id: l.product.id, name: l.product.name, unit_name: u.name, factor: u.factor, qty: l.qty, unit_price: u.price, discount: 0, is_vat: l.product.is_vat }; });
   if (!returned.length && !new_lines.length) return;
   const btn = document.getElementById('exBtn'); btn.disabled = true; btn.textContent = 'Processing…';
-  const payload = { sale_id: exSale ? exSale.sale_id : null, returned_items: returned, new_lines: new_lines, payment_method: document.getElementById('exMethod').value };
+  const payload = { sale_id: exSale ? exSale.sale_id : null, returned_items: returned, new_lines: new_lines,
+                    vat_applied: document.getElementById('exVatOn').checked,
+                    payment_method: document.getElementById('exMethod').value };
   const res = await fetch('/pos/exchange', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
   const data = await res.json();
   if (data.ok) { window.location = '/pos/receipt/' + data.sale_id; }

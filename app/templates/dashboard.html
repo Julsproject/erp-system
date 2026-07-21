@@ -224,7 +224,7 @@
 <!-- ============ PRODUCT PERFORMANCE ============ -->
 <div class="chart-row">
   <section class="card chart-card">
-    <h3 class="card-title">Top sellers · by revenue</h3>
+    <h3 class="card-title">Top selling products <span class="muted">· most bought by customers</span></h3>
     {% if top_revenue %}
     <table class="grid mini">
       <thead><tr><th>#</th><th>Item</th><th class="num">Qty</th><th class="num">Revenue</th></tr></thead>
@@ -243,22 +243,22 @@
   </section>
 
   <section class="card chart-card">
-    <h3 class="card-title">Top sellers · by quantity</h3>
-    {% if top_qty %}
+    <h3 class="card-title">Top customers <span class="muted">· by amount spent</span></h3>
+    {% if top_customers %}
     <table class="grid mini">
-      <thead><tr><th>#</th><th>Item</th><th class="num">Qty</th><th class="num">Revenue</th></tr></thead>
+      <thead><tr><th>#</th><th>Customer</th><th class="num">Orders</th><th class="num">Spent</th></tr></thead>
       <tbody>
-        {% for r in top_qty %}
+        {% for c in top_customers %}
         <tr>
           <td class="rank">{{ loop.index }}</td>
-          <td class="strong">{{ r.product_name }}</td>
-          <td class="num strong">{{ r.qty|qty }}</td>
-          <td class="num">{{ r.revenue|peso }}</td>
+          <td class="strong">{{ c.customer_name }}</td>
+          <td class="num">{{ c.orders }}</td>
+          <td class="num strong">{{ c.spent|peso }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
-    {% else %}<p class="pos-hint">No sales in this period.</p>{% endif %}
+    {% else %}<p class="pos-hint">No named customers in this period. Walk-in sales aren't counted here.</p>{% endif %}
   </section>
 </div>
 
