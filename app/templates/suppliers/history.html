@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}{{ supplier.name }} · Purchase History{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{{ supplier.name }}</h1>
+    <p class="muted">
+      {{ supplier.code or '—' }}
+      {% if supplier.contact_person %} · {{ supplier.contact_person }}{% endif %}
+      {% if supplier.mobile %} · {{ supplier.mobile }}{% endif %}
+      {% if supplier.payment_terms %} · Terms: {{ supplier.payment_terms }}{% endif %}
+    </p>
+  </div>
+  <div class="head-actions">
+    <a class="btn-secondary" href="/suppliers">← Back</a>
+    <a class="btn" href="/purchases/new?supplier={{ supplier.id }}">+ New purchase</a>
+  </div>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ purchases|length }}</span><span>Transactions</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ received_total|peso }}</span><span>Total Purchases</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ returned_total|peso }}</span><span>Returns</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ net_total|peso }}</span><span>Net</span></div>
+</div>
+
+<h3 class="ex-h">Delivery history</h3>
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Ref #</th><th>Type</th><th>Date</th><th>Supplier Invoice</th><th>Delivered</th><th class="num">Amount</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for p in purchases %}
+      <tr>
+        <td class="strong">{{ p.ref_no }}</td>
+        <td>
+          {% if p.txn_type == 'return' %}
+          <span class="txn" style="background:#fee2e2;color:#b91c1c;">Return</span>
+          {% else %}
+          <span class="txn" style="background:#dcfce7;color:#15803d;">Received</span>
+          {% endif %}
+        </td>
+        <td>{{ p.created_at.strftime('%b %d, %Y %I:%M %p') if p.created_at else '' }}</td>
+        <td>{{ p.invoice_no or '—' }}</td>
+        <td>{{ p.delivery_date or '—' }}</td>
+        <td class="num strong">{{ p.total|peso }}</td>
+        <td class="row-actions"><a class="btn-link" href="/purchases/{{ p.id }}">View</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No purchases from this supplier yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if items %}
+<h3 class="ex-h" style="margin-top:22px;">Item costs from this supplier</h3>
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Item</th><th>Unit</th><th class="num">Last Cost</th><th class="num">Qty Purchased</th><th>Current Price</th></tr>
+    </thead>
+    <tbody>
+      {% for it in items %}
+      <tr>
+        <td class="strong">{{ it.name }}</td>
+        <td>{{ it.unit or '—' }}</td>
+        <td class="num strong">{{ it.last_cost|peso }}</td>
+        <td class="num">{{ it.qty_total|qty }}</td>
+        <td>
+          {% if it.product %}
+            {{ it.product.selling_price|peso }}
+            {% if it.product.cost_price and it.product.selling_price and it.product.selling_price < it.product.cost_price %}
+            <span class="warn-tag" title="Selling below cost">⚠ below cost</span>
+            {% endif %}
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Purchase History · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Purchase History</h1>
+    <p class="muted">Receiving and purchase returns from all suppliers</p>
+  </div>
+  <a class="btn" href="/purchases/new">+ New purchase</a>
+</div>
+
+<div class="tabs">
+  <a class="tab" href="/suppliers">Suppliers</a>
+  <a class="tab active" href="/purchases">Purchase History</a>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ purchases|length }}</span><span>Transactions</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ received|peso }}</span><span>Total Received</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ returned|peso }}</span><span>Total Returned</span></div>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Ref #</th><th>Type</th><th>Date</th><th>Supplier</th><th>Supplier Invoice</th><th class="num">Amount</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for p in purchases %}
+      <tr>
+        <td class="strong">{{ p.ref_no }}</td>
+        <td>
+          {% if p.txn_type == 'return' %}
+          <span class="txn" style="background:#fee2e2;color:#b91c1c;">Return</span>
+          {% else %}
+          <span class="txn" style="background:#dcfce7;color:#15803d;">Received</span>
+          {% endif %}
+        </td>
+        <td>{{ p.created_at.strftime('%b %d, %Y %I:%M %p') if p.created_at else '' }}</td>
+        <td>{{ p.supplier.name if p.supplier else '—' }}</td>
+        <td>{{ p.invoice_no or '—' }}</td>
+        <td class="num strong">{{ p.total|peso }}</td>
+        <td class="row-actions"><a class="btn-link" href="/purchases/{{ p.id }}">View</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No purchases yet. Click <strong>New purchase</strong> to receive stock from a supplier.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

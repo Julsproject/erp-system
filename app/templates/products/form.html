@@ -8,7 +8,7 @@
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
 
-<form class="card form" method="post"
+<form class="card form" method="post" novalidate
       action="{{ '/products/' ~ product.id if product else '/products' }}">
   <label class="full">Product Name
     <input name="name" value="{{ product.name if product else '' }}" required autofocus>
@@ -34,23 +34,24 @@
   </label>
 
   <label>Cost of Sales (₱)
-    <input name="cost_price" type="number" step="0.01" min="0" inputmode="decimal"
-           value="{{ '%.2f'|format(product.cost_price) if product else '0.00' }}">
-    <small class="hint">Manual for now — from Supplier tab later.</small>
+    <input name="cost_price" type="number" step="1" min="0" inputmode="decimal"
+           placeholder="leave blank if not yet known"
+           value="{{ '%.2f'|format(product.cost_price) if product and product.cost_price and product.cost_price > 0 else '' }}">
+    <small class="hint">Optional. Purchasing fills this in automatically when you receive stock from a supplier.</small>
   </label>
 
   <label>Selling Price (₱)
-    <input name="selling_price" type="number" step="0.01" min="0" inputmode="decimal"
+    <input name="selling_price" type="number" step="1" min="0" inputmode="decimal"
            value="{{ '%.2f'|format(product.selling_price) if product else '0.00' }}">
   </label>
 
   <label>Actual Beginning Stocks
-    <input id="beginning" name="beginning_stock" type="number" step="0.001" min="0" inputmode="decimal"
+    <input id="beginning" name="beginning_stock" type="number" step="1" min="0" inputmode="decimal"
            value="{{ product.beginning_stock|qty if product else '0' }}" oninput="calcTotal()">
   </label>
 
   <label>Stocks Qty
-    <input id="stocks" name="stock_qty" type="number" step="0.001" min="0" inputmode="decimal"
+    <input id="stocks" name="stock_qty" type="number" step="1" min="0" inputmode="decimal"
            value="{{ product.stock_qty|qty if product else '0' }}" oninput="calcTotal()">
     <small class="hint">Manual for now — from Supplier tab later.</small>
   </label>
@@ -58,6 +59,13 @@
   <label>Total Qty
     <input id="total" type="text" value="0" readonly class="readonly">
     <small class="hint">Beginning + Stocks (auto).</small>
+  </label>
+
+  <label>Low Stock Alert At
+    <input name="reorder_level" type="number" step="1" min="0" inputmode="decimal"
+           placeholder="0 = no alert"
+           value="{{ product.reorder_level|qty if product and product.reorder_level and product.reorder_level > 0 else '' }}">
+    <small class="hint">Warn on the dashboard when Total Qty drops to this level. Leave blank for no alert.</small>
   </label>
 
   <div class="full ladder">
@@ -83,10 +91,10 @@
           {% if product and product.units %}
             {% for u in product.units %}
             <tr class="ladder-row">
-              <td><input name="unit_name" value="{{ u.name }}" placeholder="e.g. Sack, Box, Roll"></td>
-              <td class="num"><input name="unit_factor" type="number" step="0.0001" min="0" value="{{ u.factor_to_base|qty }}" class="w-sm"></td>
+              <td><div class="rz"><input name="unit_name" value="{{ u.name }}" placeholder="e.g. Sack, Box, Roll"></div></td>
+              <td class="num"><input name="unit_factor" type="number" step="1" min="0" value="{{ u.factor_to_base|qty }}" class="w-md"></td>
               <td class="base-word muted">base</td>
-              <td class="num"><input name="unit_price" type="number" step="0.01" min="0" value="{{ '%.2f'|format(u.price) }}" class="w-sm"></td>
+              <td class="num"><input name="unit_price" type="number" step="1" min="0" value="{{ '%.2f'|format(u.price) }}" class="w-sm"></td>
               <td><button type="button" class="btn-link danger" onclick="this.closest('tr').remove()">Remove</button></td>
             </tr>
             {% endfor %}
@@ -121,10 +129,10 @@
     var tr = document.createElement('tr');
     tr.className = 'ladder-row';
     tr.innerHTML =
-      '<td><input name="unit_name" placeholder="e.g. Sack, Box, Roll"></td>' +
-      '<td class="num"><input name="unit_factor" type="number" step="0.0001" min="0" class="w-sm"></td>' +
+      '<td><div class="rz"><input name="unit_name" placeholder="e.g. Sack, Box, Roll"></div></td>' +
+      '<td class="num"><input name="unit_factor" type="number" step="1" min="0" class="w-md"></td>' +
       '<td class="base-word muted">' + u + '</td>' +
-      '<td class="num"><input name="unit_price" type="number" step="0.01" min="0" class="w-sm"></td>' +
+      '<td class="num"><input name="unit_price" type="number" step="1" min="0" class="w-sm"></td>' +
       '<td><button type="button" class="btn-link danger" onclick="this.closest(\'tr\').remove()">Remove</button></td>';
     document.getElementById('ladderBody').appendChild(tr);
     tr.querySelector('input').focus();

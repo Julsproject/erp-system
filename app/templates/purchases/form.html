@@ -1,0 +1,241 @@
+{% extends "base.html" %}
+{% block title %}New purchase · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">New Purchase</h1>
+  <a class="btn-link" href="/purchases">← Back to purchase history</a>
+</div>
+
+<div class="pos-modes">
+  <button type="button" class="mode-btn active" id="mReceive" onclick="setType('receive')">Receive (stock in)</button>
+  <button type="button" class="mode-btn" id="mReturn" onclick="setType('return')">Return to supplier</button>
+</div>
+
+<div class="pos-grid">
+  <!-- LEFT: product search -->
+  <section class="card pos-search-panel">
+    <input id="pSearch" class="search pos-search" type="search" placeholder="Search product to add…" autofocus autocomplete="off">
+    <div id="pResults" class="pos-results"><p class="pos-hint">Type a product name to begin.</p></div>
+  </section>
+
+  <!-- RIGHT: document -->
+  <section class="card pos-cart-panel">
+    <div class="pos-head-fields">
+      <label class="pos-customer">Supplier
+        <select id="supplierId">
+          <option value="">— choose supplier —</option>
+          {% for s in suppliers %}
+          <option value="{{ s.id }}" {{ 'selected' if preselect and s.id == preselect }}>{{ s.name }}{{ ' (' ~ s.code ~ ')' if s.code }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="pos-customer">Supplier Invoice / DR #
+        <input id="invoiceNo" type="text" placeholder="optional" autocomplete="off">
+      </label>
+    </div>
+    <div class="pos-head-fields">
+      <label class="pos-customer">Delivery date
+        <input id="deliveryDate" type="date">
+      </label>
+      <label class="pos-customer">Notes
+        <input id="notes" type="text" placeholder="optional" autocomplete="off">
+      </label>
+    </div>
+
+    <div class="table-wrap">
+      <table class="grid cart-table">
+        <thead>
+          <tr><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Unit Cost</th><th class="num">Total</th><th></th></tr>
+        </thead>
+        <tbody id="linesBody">
+          <tr><td colspan="6" class="empty">No items yet — add products from the left.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="totals">
+      <div class="totals-row grand"><span>Total</span><span id="tTotal">₱0.00</span></div>
+    </div>
+
+    <div id="warnBox" class="pay-warn" style="display:none;"></div>
+
+    <div class="pos-actions">
+      <button class="btn-secondary" onclick="clearAll()">Clear</button>
+      <button class="btn pos-complete" id="saveBtn" onclick="savePurchase()" disabled>Save Purchase</button>
+    </div>
+    <div id="pError" class="alert" style="display:none;margin-top:14px;"></div>
+  </section>
+</div>
+
+<script>
+const peso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+let lines = [];
+let txnType = 'receive';
+let searchTimer = null;
+const searchBox = document.getElementById('pSearch');
+
+searchBox.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 180); });
+document.getElementById('supplierId').addEventListener('change', recompute);
+
+function setType(t) {
+  txnType = t;
+  document.getElementById('mReceive').classList.toggle('active', t === 'receive');
+  document.getElementById('mReturn').classList.toggle('active', t === 'return');
+  renderLines();
+}
+
+async function runSearch() {
+  const res = await fetch('/purchases/search?q=' + encodeURIComponent(searchBox.value.trim()));
+  const data = await res.json();
+  const box = document.getElementById('pResults');
+  const products = data.products || [];
+  if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
+  box.innerHTML = '';
+  products.forEach(p => {
+    const el = document.createElement('button');
+    el.type = 'button'; el.className = 'pos-item'; el.onclick = () => addLine(p);
+    el.innerHTML =
+      '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span></div>' +
+      '<div class="pos-item-sub">cost ' + peso(p.cost_price) + ' · sells ' + peso(p.selling_price) +
+      ' · ' + fmtQty(p.on_hand) + ' on hand</div>';
+    box.appendChild(el);
+  });
+}
+
+function addLine(p) {
+  // default the cost to the biggest unit's equivalent so typing is minimal
+  lines.push({ product: p, unitIndex: 0, qty: 1, unitCost: p.cost_price || 0 });
+  renderLines();
+}
+
+/* cost per BASE unit implied by what we're paying for the chosen unit */
+function costPerBase(l) {
+  const f = l.product.units[l.unitIndex].factor || 1;
+  return (Number(l.unitCost) || 0) / f;
+}
+function lineTotal(l) { return (Number(l.qty) || 0) * (Number(l.unitCost) || 0); }
+
+function lineNote(l) {
+  if (txnType === 'return') return '';
+  const newCost = costPerBase(l);
+  const oldCost = Number(l.product.cost_price) || 0;
+  const sell = Number(l.product.selling_price) || 0;
+  if (!(Number(l.unitCost) > 0)) return '';
+  let out = '<span class="cost-note">cost/base ' + peso(oldCost) + ' → <b>' + peso(newCost) + '</b>';
+  if (newCost > oldCost) out += ' <span class="up">▲ up</span>';
+  else if (newCost < oldCost) out += ' <span class="down">▼ down</span>';
+  out += '</span>';
+  if (sell > 0 && sell < newCost) {
+    out += '<span class="cost-warn">⚠ selling ' + peso(sell) + ' is BELOW new cost — raise the price</span>';
+  } else if (sell > 0 && sell === newCost) {
+    out += '<span class="cost-warn">⚠ selling price equals cost — no margin</span>';
+  } else if (sell <= 0) {
+    out += '<span class="cost-warn">⚠ no selling price set</span>';
+  }
+  return out;
+}
+
+function renderLines() {
+  const body = document.getElementById('linesBody');
+  if (!lines.length) {
+    body.innerHTML = '<tr><td colspan="6" class="empty">No items yet — add products from the left.</td></tr>';
+    recompute(); return;
+  }
+  body.innerHTML = '';
+  lines.forEach((l, i) => {
+    const opts = l.product.units.map((u, ui) =>
+      '<option value="' + ui + '"' + (ui === l.unitIndex ? ' selected' : '') + '>' + escapeHtml(u.name) + '</option>').join('');
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td class="strong">' + escapeHtml(l.product.name) + '<span class="line-note"></span></td>' +
+      '<td><select class="cart-unit" onchange="setUnit(' + i + ', this.value)">' + opts + '</select></td>' +
+      '<td class="num"><input class="cart-qty" type="number" step="any" min="0" value="' + fmtQty(l.qty) + '" oninput="setQty(' + i + ', this.value)"></td>' +
+      '<td class="num"><input class="cart-disc" type="number" step="any" min="0" value="' + l.unitCost + '" oninput="setCost(' + i + ', this.value)"></td>' +
+      '<td class="num strong line-total"></td>' +
+      '<td><button class="btn-link danger" onclick="removeLine(' + i + ')">✕</button></td>';
+    body.appendChild(tr);
+  });
+  refreshComputed();
+}
+
+/* Update totals/notes WITHOUT rebuilding inputs, so typing keeps focus. */
+function refreshComputed() {
+  const rows = document.querySelectorAll('#linesBody tr');
+  lines.forEach((l, i) => {
+    const tr = rows[i];
+    if (!tr) return;
+    const note = tr.querySelector('.line-note');
+    if (note) note.innerHTML = lineNote(l);
+    const tot = tr.querySelector('.line-total');
+    if (tot) tot.textContent = peso(lineTotal(l));
+  });
+  recompute();
+}
+
+function setUnit(i, v) { lines[i].unitIndex = parseInt(v); refreshComputed(); }
+function setQty(i, v) { lines[i].qty = parseFloat(v) || 0; refreshComputed(); }
+function setCost(i, v) { lines[i].unitCost = parseFloat(v) || 0; refreshComputed(); }
+function removeLine(i) { lines.splice(i, 1); renderLines(); }
+function clearAll() {
+  lines = [];
+  document.getElementById('invoiceNo').value = '';
+  document.getElementById('deliveryDate').value = '';
+  document.getElementById('notes').value = '';
+  renderLines(); searchBox.focus();
+}
+
+function recompute() {
+  let total = 0;
+  lines.forEach(l => total += lineTotal(l));
+  document.getElementById('tTotal').textContent = peso(total);
+
+  const supplier = document.getElementById('supplierId').value;
+  let ok = lines.length > 0 && !!supplier, warn = '';
+  if (!lines.length) ok = false;
+  else if (!supplier) { ok = false; warn = 'Choose a supplier above.'; }
+
+  // count price-review warnings so the user sees them before saving
+  if (ok && txnType === 'receive') {
+    const bad = lines.filter(l => {
+      const c = costPerBase(l), s = Number(l.product.selling_price) || 0;
+      return Number(l.unitCost) > 0 && (s <= 0 || s <= c);
+    });
+    if (bad.length) warn = bad.length + ' item(s) will sell at or below cost — review the selling price after saving.';
+  }
+  const w = document.getElementById('warnBox');
+  if (warn) { w.innerHTML = warn; w.style.display = 'block'; } else { w.style.display = 'none'; }
+  document.getElementById('saveBtn').disabled = !ok;
+}
+
+async function savePurchase() {
+  if (!lines.length) return;
+  const btn = document.getElementById('saveBtn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const payload = {
+    txn_type: txnType,
+    supplier_id: document.getElementById('supplierId').value,
+    invoice_no: document.getElementById('invoiceNo').value,
+    delivery_date: document.getElementById('deliveryDate').value,
+    notes: document.getElementById('notes').value,
+    lines: lines.map(l => {
+      const u = l.product.units[l.unitIndex];
+      return { product_id: l.product.id, unit_name: u.name, factor: u.factor, qty: l.qty, unit_cost: l.unitCost };
+    })
+  };
+  try {
+    const res = await fetch('/purchases', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+    const data = await res.json();
+    if (data.ok) { window.location = '/purchases/' + data.purchase_id; }
+    else { showError(data.error || 'Save failed.'); btn.disabled = false; btn.textContent = 'Save Purchase'; }
+  } catch (e) {
+    showError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Save Purchase';
+  }
+}
+
+function showError(m) { const e = document.getElementById('pError'); e.textContent = m; e.style.display = 'block'; }
+function fmtQty(n) { return (Math.round((Number(n) || 0) * 1000) / 1000).toString(); }
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+renderLines();
+</script>
+{% endblock %}

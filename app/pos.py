@@ -6,9 +6,10 @@ deduction in base units, printable receipt.
 
 Deferred: customers/receivable, split payments, open-container display, returns.
 """
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -58,6 +59,23 @@ def _add_stock(product: models.Product, base_qty: Decimal):
     product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
 
 
+def _linked_ref(db: Session, prefix: str, orig) -> str | None:
+    """Build a reference that points at the original sale, e.g. REF-45.
+
+    Partial refunds of the same invoice would collide, so a counter is added
+    (REF-45-2, REF-45-3...). The result is kept within the 20-char column.
+    """
+    if not orig or not orig.invoice_no:
+        return None
+    base = f"{prefix}-{orig.invoice_no}"[:20]
+    candidate, n = base, 1
+    while db.query(models.Sale).filter(models.Sale.invoice_no == candidate).first():
+        n += 1
+        suffix = f"-{n}"
+        candidate = f"{base[:20 - len(suffix)]}{suffix}"
+    return candidate
+
+
 @router.get("/pos", response_class=HTMLResponse)
 def pos_page(request: Request, user=Depends(get_current_user)):
     if not user:
@@ -84,6 +102,13 @@ def pos_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_curr
         units = [{"name": base_unit, "factor": 1.0, "price": float(p.selling_price or 0)}]
         for u in p.units:
             units.append({"name": u.name, "factor": float(u.factor_to_base or 1), "price": float(u.price or 0)})
+        c = p.container
+        container = None if not c else {
+            "pack_name": c["pack_name"],
+            "loose_name": c["loose_name"],
+            "sealed": c["sealed"],
+            "open": float(c["open"]),
+        }
         out.append({
             "id": p.id,
             "name": p.name,
@@ -91,6 +116,7 @@ def pos_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_curr
             "base_unit": base_unit,
             "on_hand": float((p.beginning_stock or 0) + (p.stock_qty or 0)),
             "units": units,
+            "container": container,
         })
     return {"products": out}
 
@@ -149,14 +175,17 @@ async def pos_checkout(request: Request, db: Session = Depends(get_db), user=Dep
             discount=discount,
             line_total=_money(line_total),
             is_vat=is_vat,
+            # Freeze today's cost so profit reporting stays accurate later.
+            unit_cost=_money(product.cost_price or 0),
         ))
 
     discount_total = _dec(data.get("discount_total"))
-    total = subtotal - discount_total
-    if total < 0:
-        total = Decimal("0")
-    # VAT is 12% inclusive on the whole transaction when the cashier toggles it on.
-    vat_amount = _money(total / VAT_DIVISOR * VAT_RATE) if vat_applied else Decimal("0")
+    net = subtotal - discount_total
+    if net < 0:
+        net = Decimal("0")
+    # VAT is 12% added on top of the net amount when the cashier toggles it on.
+    vat_amount = _money(net * VAT_RATE) if vat_applied else Decimal("0")
+    total = net + vat_amount
 
     # --- Payments (split) ---------------------------------------------------
     payments_in = data.get("payments") or []
@@ -199,6 +228,10 @@ async def pos_checkout(request: Request, db: Session = Depends(get_db), user=Dep
     customer = get_or_create_customer(db, customer_name) if customer_name else None
     if customer:
         sale.customer_id = customer.id
+        # Utang falls due after the customer's agreed credit terms.
+        if receivable_amount > 0:
+            days = customer.credit_days if customer.credit_days is not None else 15
+            sale.due_date = date.today() + timedelta(days=int(days))
 
     for method, amount in method_rows:
         sale.payments.append(models.Payment(method=method, amount=_money(amount)))
@@ -206,7 +239,7 @@ async def pos_checkout(request: Request, db: Session = Depends(get_db), user=Dep
     sale.subtotal = _money(subtotal)
     sale.discount_total = _money(discount_total)
     sale.vat_amount = vat_amount
-    sale.net_amount = _money(total - vat_amount)
+    sale.net_amount = _money(net)
     sale.total = _money(total)
     sale.amount_tendered = _money(paid_amount)
     sale.change_amount = _money(change)
@@ -311,7 +344,9 @@ async def pos_refund(request: Request, db: Session = Depends(get_db), user=Depen
     refund.amount_tendered = Decimal("0")
     refund.change_amount = _money(total)  # cash paid out to customer
     db.flush()
-    refund.invoice_no = f"REF-{refund.id:06d}"
+    # Point the refund at the invoice it came from (REF-45); fall back to a
+    # sequential number for refunds with no original invoice.
+    refund.invoice_no = _linked_ref(db, "REF", orig) or f"REF-{refund.id:06d}"
     db.commit()
     return {"ok": True, "sale_id": refund.id, "invoice_no": refund.invoice_no}
 
@@ -403,13 +438,21 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
         ex.payment_method = "Even exchange"
 
     db.flush()
-    ex.invoice_no = f"EXC-{ex.id:06d}"
+    # Same idea as refunds: point the exchange at the invoice it came from.
+    ex.invoice_no = _linked_ref(db, "EXC", orig) or f"EXC-{ex.id:06d}"
     db.commit()
     return {"ok": True, "sale_id": ex.id, "invoice_no": ex.invoice_no}
 
 
 @router.get("/pos/receipt/{sale_id:int}", response_class=HTMLResponse)
-def pos_receipt(sale_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def pos_receipt(
+    sale_id: int,
+    request: Request,
+    from_: str = Query("", alias="from"),
+    cust: int = 0,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     sale = db.get(models.Sale, sale_id)
@@ -417,5 +460,6 @@ def pos_receipt(sale_id: int, request: Request, db: Session = Depends(get_db), u
         return RedirectResponse("/pos", status_code=302)
     return templates.TemplateResponse(
         "receipt.html",
-        {"request": request, "app_name": request.app.title, "user": user, "sale": sale},
+        {"request": request, "app_name": request.app.title, "user": user,
+         "sale": sale, "from": from_, "cust": cust},
     )

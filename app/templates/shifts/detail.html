@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Drawer #{{ shift.id }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Drawer #{{ shift.id }}</h1>
+    <p class="muted">
+      {{ shift.user.full_name or shift.user.username if shift.user else '—' }}
+      · opened {{ shift.opened_at.strftime('%b %d, %Y %I:%M %p') if shift.opened_at else '' }}
+      {% if shift.closed_at %} · closed {{ shift.closed_at.strftime('%b %d, %Y %I:%M %p') }}{% endif %}
+    </p>
+  </div>
+  <a class="btn-secondary" href="/shifts">← Back</a>
+</div>
+
+{% if shift.difference is not none %}
+  {% if shift.difference == 0 %}
+  <div class="alert" style="background:#dcfce7;border-color:#86efac;color:#15803d;">
+    <strong>Drawer balanced exactly.</strong> Counted cash matched the expected amount.
+  </div>
+  {% elif shift.difference > 0 %}
+  <div class="alert" style="background:#dbeafe;border-color:#93c5fd;color:#1d4ed8;">
+    <strong>Drawer is OVER by {{ shift.difference|peso }}.</strong>
+    There is more cash than expected — a sale may not have been recorded.
+  </div>
+  {% else %}
+  <div class="alert">
+    <strong>Drawer is SHORT by {{ (-shift.difference)|peso }}.</strong>
+    There is less cash than expected — check for unrecorded payouts or wrong change given.
+  </div>
+  {% endif %}
+{% endif %}
+
+<div class="kpi-row">
+  <div class="kpi"><span class="kpi-label">Starting cash</span><span class="kpi-value">{{ shift.opening_amount|peso }}</span></div>
+  <div class="kpi"><span class="kpi-label">Cash sales in</span><span class="kpi-value pos">+ {{ s.cash_in|peso }}</span></div>
+  <div class="kpi"><span class="kpi-label">Utang collected</span><span class="kpi-value pos">+ {{ s.collections|peso }}</span></div>
+  <div class="kpi"><span class="kpi-label">Cash paid out</span><span class="kpi-value">− {{ s.cash_out|peso }}</span></div>
+  <div class="kpi kpi-warn">
+    <span class="kpi-label">Expected in drawer</span>
+    <span class="kpi-value">{{ (shift.expected_amount if shift.expected_amount is not none else s.expected)|peso }}</span>
+  </div>
+  {% if shift.closing_amount is not none %}
+  <div class="kpi"><span class="kpi-label">Actually counted</span><span class="kpi-value">{{ shift.closing_amount|peso }}</span></div>
+  {% endif %}
+</div>
+
+{% if s.non_cash %}
+<div class="card" style="padding:16px 20px;">
+  <h3 class="card-title">Non-cash payments <span class="muted">· not in the drawer</span></h3>
+  <div class="attn-grid">
+    {% for n in s.non_cash %}
+    <div class="attn ok" style="cursor:default;">
+      <span class="attn-num" style="font-size:16px;">{{ n.amount|peso }}</span>
+      <span class="attn-label">{{ n.label }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if shift.notes %}
+<div class="card" style="padding:16px 20px; margin-top:14px;">
+  <h3 class="card-title">Cashier notes</h3>
+  <p class="muted" style="margin:0;">{{ shift.notes }}</p>
+</div>
+{% endif %}
+{% endblock %}

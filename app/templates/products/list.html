@@ -3,8 +3,10 @@
 {% block content %}
 <div class="page-head">
   <div>
-    <h1 class="page-title">Inventory</h1>
-    <p class="muted">{{ total }} product{{ '' if total == 1 else 's' }}</p>
+    <h1 class="page-title">{{ 'Price Review Needed' if alert else 'Inventory' }}</h1>
+    <p class="muted">
+      {{ total }} product{{ '' if total == 1 else 's' }}{{ ' selling at or below cost' if alert }}
+    </p>
   </div>
   <div class="head-actions">
     <a class="btn-secondary" href="/products/import">⬆ Import Excel</a>
@@ -12,10 +14,24 @@
   </div>
 </div>
 
+{% if alert %}
+<div class="alert" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">
+  <strong>These items lose money on every sale.</strong>
+  Their cost went above (or matched) the selling price — usually after a supplier price increase.
+  Click <strong>Edit</strong> on each and raise the Selling Price.
+</div>
+{% endif %}
+
+<div class="tabs">
+  <a class="tab {{ '' if alert else 'active' }}" href="/products">All Products</a>
+  <a class="tab {{ 'active' if alert }}" href="/products?alert=1">⚠ Price Review Needed</a>
+</div>
+
 <form class="toolbar" method="get" action="/products">
+  {% if alert %}<input type="hidden" name="alert" value="1">{% endif %}
   <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search product name…" autofocus>
   <button class="btn-secondary" type="submit">Search</button>
-  {% if q %}<a class="btn-link" href="/products">Clear</a>{% endif %}
+  {% if q %}<a class="btn-link" href="/products{{ '?alert=1' if alert }}">Clear</a>{% endif %}
 </form>
 
 <div class="table-wrap">
@@ -36,11 +52,27 @@
     <tbody>
       {% for p in products %}
       <tr>
-        <td class="strong">{{ p.name }}</td>
+        <td class="strong">{{ p.name }}
+          {% if p.cost_price and p.cost_price > 0 %}
+            {% if not p.selling_price or p.selling_price <= 0 %}
+            <span class="warn-tag" title="No selling price set">⚠ no price</span>
+            {% elif p.selling_price < p.cost_price %}
+            <span class="warn-tag" title="Selling price is below cost — raise it">⚠ below cost</span>
+            {% elif p.selling_price == p.cost_price %}
+            <span class="warn-tag" title="Selling price equals cost — zero margin">⚠ no margin</span>
+            {% endif %}
+          {% endif %}
+        </td>
         <td>{{ p.category.name if p.category else '—' }}</td>
         <td>{{ p.unit_type.name if p.unit_type else '—' }}</td>
-        <td class="num">{{ p.cost_price|peso }}</td>
-        <td class="num">{{ p.selling_price|peso }}</td>
+        <td class="num">
+          {% if p.cost_price and p.cost_price > 0 %}{{ p.cost_price|peso }}
+          {% else %}<span class="muted">not set</span>{% endif %}
+        </td>
+        <td class="num">
+          {% if p.selling_price and p.selling_price > 0 %}{{ p.selling_price|peso }}
+          {% else %}<span class="muted">not set</span>{% endif %}
+        </td>
         <td class="num">{{ p.beginning_stock|qty }}</td>
         <td class="num">{{ p.stock_qty|qty }}</td>
         <td class="num strong">{{ p.total_qty|qty }}</td>
@@ -51,6 +83,14 @@
           </form>
         </td>
       </tr>
+      {% if p.container %}
+      <tr class="container-row">
+        <td colspan="9" class="container-line">
+          ↳ Sealed: <strong>{{ p.container.sealed }}</strong> {{ p.container.pack_name }}{{ '' if p.container.sealed == 1 else 's' }}
+          &nbsp;·&nbsp; Open container: <strong class="open-hl">{{ p.container.open|qty }} {{ p.container.loose_name }}</strong>
+        </td>
+      </tr>
+      {% endif %}
       {% else %}
       <tr><td colspan="9" class="empty">No products yet. Click <strong>Add product</strong> to start encoding inventory.</td></tr>
       {% endfor %}
@@ -60,9 +100,9 @@
 
 {% if pages > 1 %}
 <div class="pager">
-  {% if page > 1 %}<a class="btn-secondary" href="/products?page={{ page - 1 }}&q={{ q }}">← Prev</a>{% endif %}
+  {% if page > 1 %}<a class="btn-secondary" href="/products?page={{ page - 1 }}&q={{ q }}{{ '&alert=1' if alert }}">← Prev</a>{% endif %}
   <span class="muted">Page {{ page }} of {{ pages }}</span>
-  {% if page < pages %}<a class="btn-secondary" href="/products?page={{ page + 1 }}&q={{ q }}">Next →</a>{% endif %}
+  {% if page < pages %}<a class="btn-secondary" href="/products?page={{ page + 1 }}&q={{ q }}{{ '&alert=1' if alert }}">Next →</a>{% endif %}
 </div>
 {% endif %}
 {% endblock %}

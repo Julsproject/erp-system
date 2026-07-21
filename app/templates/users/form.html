@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if target else 'Add' }} user · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">{{ 'Edit user' if target else 'Add user' }}</h1>
+  <a class="btn-link" href="/users">← Back to users</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<form class="card form" method="post" novalidate
+      action="{{ '/users/' ~ target.id if target else '/users' }}">
+
+  <label>Username
+    {% if target %}
+      <input value="{{ target.username }}" readonly class="readonly">
+      <small class="hint">The username cannot be changed.</small>
+    {% else %}
+      <input name="username" required autofocus placeholder="e.g. maria">
+      <small class="hint">Used to sign in. Lowercase, no spaces.</small>
+    {% endif %}
+  </label>
+
+  <label>Full name
+    <input name="full_name" value="{{ target.full_name or '' if target else '' }}" placeholder="e.g. Maria Santos">
+  </label>
+
+  <label>Role
+    <select name="role">
+      {% for value, text in roles %}
+      <option value="{{ value }}" {{ 'selected' if target and target.role == value or (not target and value == 'cashier') }}>{{ text }}</option>
+      {% endfor %}
+    </select>
+    <small class="hint">Cashiers are asked for the cash drawer amount at login.</small>
+  </label>
+
+  <label>Status
+    <select name="status">
+      <option value="active" {{ 'selected' if not target or target.is_active }}>Active</option>
+      <option value="disabled" {{ 'selected' if target and not target.is_active }}>Disabled</option>
+    </select>
+    <small class="hint">Disabled users cannot sign in.</small>
+  </label>
+
+  <label class="full">{{ 'New password' if target else 'Password' }}
+    <input name="password" type="password" {{ '' if target else 'required' }}
+           placeholder="{{ 'leave blank to keep the current password' if target else 'at least 4 characters' }}">
+  </label>
+
+  <div class="form-actions full">
+    <button class="btn" type="submit">{{ 'Save changes' if target else 'Create user' }}</button>
+    <a class="btn-secondary" href="/users">Cancel</a>
+  </div>
+</form>
+{% endblock %}

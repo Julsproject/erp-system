@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}{{ customer.name }} · Purchase History{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{{ customer.name }}</h1>
+    <p class="muted">
+      Purchase history
+      {% if customer.tin %} · TIN {{ customer.tin }}{% endif %}
+      {% if customer.address %} · {{ customer.address }}{% endif %}
+    </p>
+  </div>
+  <a class="btn-secondary" href="/customers">← Back to Customers</a>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ count }}</span><span>Transactions</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total_spent|peso }}</span><span>Total Purchases</span></div>
+  <div class="mini-stat"><span class="mini-num {{ 'owed' if total_out > 0 }}">{{ total_out|peso }}</span><span>Outstanding (Utang)</span></div>
+</div>
+
+{% if rows %}
+<form class="toolbar" onsubmit="return false;">
+  <input class="search" type="search" id="invFilter" placeholder="Filter by invoice #…" autocomplete="off" oninput="filterInvoices()">
+</form>
+{% endif %}
+
+<div class="table-wrap">
+  <table class="grid" id="histTable">
+    <thead>
+      <tr><th>Invoice #</th><th>Type</th><th>Date</th><th>Payment</th><th class="num">Total</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      {% set s = r.sale %}
+      <tr data-inv="{{ s.invoice_no|lower }}">
+        <td class="strong">{{ s.invoice_no }}</td>
+        <td><span class="txn txn-{{ s.txn_type }}">{{ s.txn_type|capitalize }}</span></td>
+        <td>{{ s.created_at.strftime('%b %d, %Y %I:%M %p') if s.created_at else '' }}</td>
+        <td>{{ s.payment_method or '—' }}</td>
+        <td class="num strong {{ 'neg' if s.total and s.total < 0 }}">{{ s.total|peso }}</td>
+        <td>
+          {% if r.outstanding > 0 %}
+          <span class="txn" style="background:#fef3c7;color:#b7791f;">Utang {{ r.outstanding|peso }}</span>
+          {% else %}
+          <span class="txn" style="background:#dcfce7;color:#15803d;">Paid</span>
+          {% endif %}
+        </td>
+        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=customer&cust={{ customer.id }}">Receipt</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No purchases recorded for this customer yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted" id="noMatch" style="display:none; padding:16px; text-align:center;">No invoice matches that number.</p>
+</div>
+
+<script>
+function filterInvoices() {
+  const q = document.getElementById('invFilter').value.trim().toLowerCase();
+  const rows = document.querySelectorAll('#histTable tbody tr');
+  let shown = 0;
+  rows.forEach(tr => {
+    if (!tr.dataset.inv) return;               // skip the "empty" row
+    const match = !q || tr.dataset.inv.includes(q);
+    tr.style.display = match ? '' : 'none';
+    if (match) shown++;
+  });
+  document.getElementById('noMatch').style.display = (q && shown === 0) ? 'block' : 'none';
+}
+</script>
+{% endblock %}

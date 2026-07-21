@@ -27,8 +27,9 @@
       <label class="pos-customer">Invoice # <span class="muted">(from your booklet)</span>
         <input id="invoiceNo" type="text" placeholder="e.g. 000145" autocomplete="off">
       </label>
-      <label class="pos-customer">Customer <span class="muted">(optional)</span>
-        <input id="customerName" type="text" placeholder="Walk-in" autocomplete="off">
+      <label class="pos-customer cust-field">Customer <span class="muted">(optional)</span>
+        <input id="customerName" type="text" placeholder="Walk-in — type to find existing" autocomplete="off">
+        <div id="custResults" class="cust-dropdown" style="display:none;"></div>
       </label>
     </div>
 
@@ -53,7 +54,7 @@
         </span>
       </div>
       <div class="totals-row">
-        <span><label class="vat-label"><input type="checkbox" id="vatOn" onchange="computeTotals()"> VAT (12% incl.)</label></span>
+        <span><label class="vat-label"><input type="checkbox" id="vatOn" onchange="computeTotals()"> VAT (12%)</label></span>
         <span id="tVat">₱0.00</span>
       </div>
       <div class="totals-row grand"><span>Total</span><span id="tTotal">₱0.00</span></div>
@@ -198,8 +199,39 @@ const searchBox = document.getElementById('posSearch');
 const customerBox = document.getElementById('customerName');
 const invoiceBox = document.getElementById('invoiceNo');
 searchBox.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 180); });
-customerBox.addEventListener('input', computeTotals);
 invoiceBox.addEventListener('input', computeTotals);
+
+/* ---- customer lookup ---- */
+const custResults = document.getElementById('custResults');
+let custTimer = null;
+customerBox.addEventListener('input', () => {
+  computeTotals();
+  clearTimeout(custTimer);
+  custTimer = setTimeout(runCustomerSearch, 180);
+});
+customerBox.addEventListener('focus', runCustomerSearch);
+document.addEventListener('click', (e) => { if (!e.target.closest('.cust-field')) hideCustResults(); });
+
+async function runCustomerSearch() {
+  const q = customerBox.value.trim();
+  const res = await fetch('/customers/search?q=' + encodeURIComponent(q));
+  const data = await res.json();
+  renderCustResults(data.customers || []);
+}
+function renderCustResults(list) {
+  if (!list.length) { hideCustResults(); return; }
+  custResults.innerHTML = '';
+  list.forEach(c => {
+    const el = document.createElement('button');
+    el.type = 'button'; el.className = 'cust-item';
+    el.innerHTML = '<span class="cust-item-name">' + escapeHtml(c.name) + '</span>' +
+      (c.tin ? '<span class="cust-item-sub">TIN ' + escapeHtml(c.tin) + '</span>' : '');
+    el.onclick = () => { customerBox.value = c.name; hideCustResults(); computeTotals(); };
+    custResults.appendChild(el);
+  });
+  custResults.style.display = 'block';
+}
+function hideCustResults() { custResults.style.display = 'none'; }
 
 function setMode(m) {
   document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.m === m));
@@ -235,7 +267,11 @@ function renderResults(products) {
       '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span>' +
       (p.is_vat ? '<span class="pill">VAT</span>' : '') + '</div>' +
       '<div class="pos-item-sub">' + peso(p.units[0].price) + ' / ' + escapeHtml(p.base_unit) +
-      ' · <span class="' + (p.on_hand <= 0 ? 'oos' : '') + '">' + fmtQty(p.on_hand) + ' on hand</span></div>';
+      ' · <span class="' + (p.on_hand <= 0 ? 'oos' : '') + '">' + fmtQty(p.on_hand) + ' on hand</span>' +
+      (p.container ? '<span class="open-bag">📦 ' + p.container.sealed + ' ' + escapeHtml(p.container.pack_name) +
+        (p.container.sealed === 1 ? '' : 's') + ' + <b>' + fmtQty(p.container.open) + ' ' + escapeHtml(p.container.loose_name) +
+        '</b> in open bag</span>' : '') +
+      '</div>';
     box.appendChild(el);
   });
 }
@@ -279,9 +315,27 @@ function renderCart() {
 }
 
 function setUnit(i, v) { cart[i].unitIndex = parseInt(v); renderCart(); }
-function setQty(i, v) { cart[i].qty = parseFloat(v) || 0; renderCart(); }
-function setDisc(i, v) { cart[i].discount = parseFloat(v) || 0; renderCart(); }
+function setQty(i, v) { cart[i].qty = parseFloat(v) || 0; refreshCartComputed(); }
+function setDisc(i, v) { cart[i].discount = parseFloat(v) || 0; refreshCartComputed(); }
 function removeLine(i) { cart.splice(i, 1); renderCart(); }
+
+// Update line totals / over-stock flags WITHOUT rebuilding the row inputs,
+// so the qty/disc field the cashier is typing in keeps focus.
+function refreshCartComputed() {
+  const needed = baseNeededByProduct();
+  const rows = document.querySelectorAll('#cartBody tr');
+  cart.forEach((line, i) => {
+    const tr = rows[i];
+    if (!tr) return;
+    const over = needed[line.product.id] > line.product.on_hand + 1e-9;
+    tr.children[0].innerHTML = escapeHtml(line.product.name) +
+      (over ? ' <span class="warn-tag" title="Selling beyond stock (allowed)">⚠ over stock</span>' : '');
+    tr.children[5].textContent = peso(lineTotalOf(line));
+    const qi = tr.querySelector('.cart-qty');
+    if (qi) qi.classList.toggle('over', over);
+  });
+  computeTotals();
+}
 function clearCart() {
   cart = []; payments = [{ method: 'cash', amount: '' }];
   document.getElementById('overallDiscount').value = 0; customerBox.value = ''; invoiceBox.value = '';
@@ -322,14 +376,17 @@ function fillExact(i) {
 function computeGrand() {
   let subtotal = 0;
   cart.forEach(line => { subtotal += lineTotalOf(line); });
-  return Math.max(subtotal - overallDiscAmt(subtotal), 0);
+  const net = Math.max(subtotal - overallDiscAmt(subtotal), 0);
+  const vat = document.getElementById('vatOn').checked ? net * VAT_RATE : 0;
+  return net + vat;
 }
 
 function computeTotals() {
   let subtotal = 0;
   cart.forEach(line => { subtotal += lineTotalOf(line); });
-  const grand = Math.max(subtotal - overallDiscAmt(subtotal), 0);
-  const vat = document.getElementById('vatOn').checked ? grand / VAT_DIV * VAT_RATE : 0;
+  const net = Math.max(subtotal - overallDiscAmt(subtotal), 0);
+  const vat = document.getElementById('vatOn').checked ? net * VAT_RATE : 0;
+  const grand = net + vat;   // VAT is added on top of the net amount
 
   let paid = 0, receivable = 0;
   if (paymentMode === 'full') {
@@ -530,8 +587,20 @@ function exRenderCart() {
   exCompute();
 }
 function exSetUnit(i, v) { exCart[i].unitIndex = parseInt(v); exRenderCart(); }
-function exSetQty(i, v) { exCart[i].qty = parseFloat(v) || 0; exRenderCart(); }
+function exSetQty(i, v) { exCart[i].qty = parseFloat(v) || 0; exRefreshComputed(); }
 function exRemove(i) { exCart.splice(i, 1); exRenderCart(); }
+
+// Update new-item totals without rebuilding the qty inputs (keeps focus).
+function exRefreshComputed() {
+  const rows = document.querySelectorAll('#exCartBody tr');
+  exCart.forEach((line, i) => {
+    const tr = rows[i];
+    if (!tr) return;
+    const unit = line.product.units[line.unitIndex];
+    tr.children[4].textContent = peso(line.qty * unit.price);
+  });
+  exCompute();
+}
 function exReturnedTotal() {
   let t = 0;
   if (exSale) document.querySelectorAll('#exReturnItems tr').forEach(tr => {

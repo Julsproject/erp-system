@@ -77,7 +77,7 @@
       {% if sale.discount_total and sale.discount_total > 0 %}
       <div class="row"><span>Discount</span><b>− {{ sale.discount_total|peso }}</b></div>
       {% endif %}
-      {% if sale.vat_amount and sale.vat_amount != 0 %}<div class="row"><span>VAT (12% incl.)</span><b>{{ sale.vat_amount|peso }}</b></div>{% endif %}
+      {% if sale.vat_amount and sale.vat_amount != 0 %}<div class="row"><span>VAT (12%)</span><b>{{ sale.vat_amount|peso }}</b></div>{% endif %}
       <div class="row grand"><span>TOTAL</span><span>{{ sale.total|peso }}</span></div>
     </div>
 
@@ -99,7 +99,13 @@
   </div>
 
   <div class="actions">
+    {% if from == 'sales' %}
+    <a class="btn back" href="/sales">← Back to Sales</a>
+    {% elif from == 'customer' and cust %}
+    <a class="btn back" href="/customers/{{ cust }}/history">← Back to History</a>
+    {% else %}
     <a class="btn back" href="/pos">← New sale</a>
+    {% endif %}
     <button class="btn print" onclick="window.print()">🖨 Print</button>
   </div>
 </body>

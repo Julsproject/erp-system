@@ -18,7 +18,7 @@
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Name</th><th>TIN</th><th>Address</th><th class="num">Outstanding (Utang)</th><th></th></tr>
+      <tr><th>Name</th><th>TIN</th><th>Address</th><th></th></tr>
     </thead>
     <tbody>
       {% for c in customers %}
@@ -26,13 +26,13 @@
         <td class="strong">{{ c.name }}</td>
         <td>{{ c.tin or '—' }}</td>
         <td>{{ c.address or '—' }}</td>
-        <td class="num {{ 'owed' if outstanding.get(c.id, 0) > 0 }}">
-          {{ outstanding.get(c.id, 0)|peso }}
+        <td class="row-actions">
+          <a class="btn-link" href="/customers/{{ c.id }}/history">History</a>
+          <a class="btn-link" href="/customers/{{ c.id }}/edit">Edit</a>
         </td>
-        <td class="row-actions"><a class="btn-link" href="/customers/{{ c.id }}/edit">Edit</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="5" class="empty">No customers yet. They're also created automatically when you add an <strong>utang</strong> in POS.</td></tr>
+      <tr><td colspan="4" class="empty">No customers yet. They're also created automatically when you add an <strong>utang</strong> in POS.</td></tr>
       {% endfor %}
     </tbody>
   </table>

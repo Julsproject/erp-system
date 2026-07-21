@@ -7,6 +7,8 @@ services:
       POSTGRES_USER: erp
       POSTGRES_PASSWORD: erp
       POSTGRES_DB: hardware_erp
+      TZ: Asia/Manila
+      PGTZ: Asia/Manila
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
@@ -24,6 +26,7 @@ services:
     container_name: hardware-erp-app
     restart: unless-stopped
     environment:
+      TZ: Asia/Manila
       DATABASE_URL: postgresql+psycopg2://erp:erp@db:5432/hardware_erp
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       APP_NAME: ${APP_NAME:-Hardware ERP}
@@ -31,9 +34,46 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
     ports:
       - "8000:8000"
+    volumes:
+      # Same folder the backup service writes to, so the Backup page can list
+      # and re-download the automatic daily backups.
+      - ${BACKUP_DIR:-./backups}:/backups
     depends_on:
       db:
         condition: service_healthy
+
+  # Automatic daily database backup.
+  # Checks every 30 minutes whether today's backup exists and creates it if not,
+  # so the shop PC being switched off overnight never skips a day.
+  backup:
+    image: postgres:16
+    container_name: hardware-erp-backup
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Manila
+      PGPASSWORD: erp
+      KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ${BACKUP_DIR:-./backups}:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c 'echo "[backup] watching; keeping $$KEEP_DAYS days";
+      while true; do
+        f="/backups/hardware_erp_$$(date +%Y-%m-%d).sql";
+        if [ ! -f "$$f" ]; then
+          echo "[backup] creating $$f";
+          if pg_dump -h db -U erp hardware_erp > "$$f.tmp" 2>/tmp/bkerr; then
+            mv "$$f.tmp" "$$f";
+            echo "[backup] ok: $$(wc -c < "$$f") bytes";
+            find /backups -name "hardware_erp_*.sql" -type f -mtime +$$KEEP_DAYS -delete;
+          else
+            rm -f "$$f.tmp"; echo "[backup] FAILED: $$(cat /tmp/bkerr)";
+          fi;
+        fi;
+        sleep 1800;
+      done'
 
 volumes:
   pgdata:

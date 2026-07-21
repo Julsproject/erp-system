@@ -25,5 +25,32 @@ def qty(value) -> str:
     return s
 
 
+def price_alert_count() -> int:
+    """How many active products are selling at or below cost (or have no price).
+
+    Exposed to every template so the sidebar can show a live warning badge
+    no matter which page the user is on.
+    """
+    from . import models
+    from .database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        return (
+            db.query(models.Product)
+            .filter(
+                models.Product.is_active.is_(True),
+                models.Product.cost_price > 0,
+                models.Product.selling_price <= models.Product.cost_price,
+            )
+            .count()
+        )
+    except Exception:  # never let a badge break a page render
+        return 0
+    finally:
+        db.close()
+
+
 templates.env.filters["peso"] = peso
 templates.env.filters["qty"] = qty
+templates.env.globals["price_alert_count"] = price_alert_count

@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}{{ purchase.ref_no }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{{ purchase.ref_no }}</h1>
+    <p class="muted">
+      {% if purchase.txn_type == 'return' %}Purchase return{% else %}Goods received{% endif %}
+      · {{ purchase.created_at.strftime('%b %d, %Y %I:%M %p') if purchase.created_at else '' }}
+      {% if purchase.user %} · by {{ purchase.user.full_name or purchase.user.username }}{% endif %}
+    </p>
+  </div>
+  <div class="head-actions">
+    <a class="btn-secondary" href="/purchases">← Back</a>
+    <a class="btn" href="/purchases/new">+ New purchase</a>
+  </div>
+</div>
+
+{% if alerts %}
+<div class="alert" style="background:#fef3c7;border-color:#fcd34d;color:#92400e;">
+  <strong>⚠ Price review needed.</strong>
+  The cost went up on {{ alerts|length }} item{{ '' if alerts|length == 1 else 's' }} and the selling price no longer
+  covers it. Update the selling price in Inventory:
+  <ul style="margin:8px 0 0 18px;">
+    {% for r in alerts %}
+    <li>
+      <strong>{{ r.line.product_name }}</strong> — {{ r.alert.message }}
+      {% if r.line.product %}
+      (cost {{ r.line.product.cost_price|peso }} vs price {{ r.line.product.selling_price|peso }})
+      <a class="btn-link" href="/products/{{ r.line.product.id }}/edit">Set price →</a>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<div class="card" style="padding:18px; margin-bottom:16px;">
+  <div class="r-meta" style="display:flex;gap:26px;flex-wrap:wrap;font-size:13.5px;">
+    <span class="muted">Supplier: <strong style="color:var(--ink,#0f172a);">{{ purchase.supplier.name if purchase.supplier else '—' }}</strong></span>
+    <span class="muted">Supplier Invoice: <strong style="color:var(--ink,#0f172a);">{{ purchase.invoice_no or '—' }}</strong></span>
+    <span class="muted">Delivered: <strong style="color:var(--ink,#0f172a);">{{ purchase.delivery_date or '—' }}</strong></span>
+    {% if purchase.notes %}<span class="muted">Notes: {{ purchase.notes }}</span>{% endif %}
+  </div>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Unit Cost</th>
+        <th class="num">Total</th><th>Cost / base unit</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      {% set l = r.line %}
+      <tr>
+        <td class="strong">{{ l.product_name }}</td>
+        <td>{{ l.unit_name or '—' }}</td>
+        <td class="num">{{ l.qty|qty }}</td>
+        <td class="num">{{ l.unit_cost|peso }}</td>
+        <td class="num strong">{{ l.line_total|peso }}</td>
+        <td>
+          {% if purchase.txn_type == 'return' %}
+            <span class="muted">unchanged</span>
+          {% elif r.changed %}
+            <span class="muted">{{ l.old_cost|peso }}</span> →
+            <strong>{{ l.new_cost|peso }}</strong>
+            {% if r.increased %}
+              <span class="warn-tag">▲ +{{ r.diff|peso }}</span>
+            {% else %}
+              <span class="txn" style="background:#dcfce7;color:#15803d;">▼ {{ r.diff|peso }}</span>
+            {% endif %}
+          {% else %}
+            <span class="muted">{{ l.new_cost|peso }} (no change)</span>
+          {% endif %}
+          {% if r.alert %}
+          <div class="cost-warn">⚠ {{ r.alert.message }}</div>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <td colspan="4" class="num strong">Total</td>
+        <td class="num strong">{{ purchase.total|peso }}</td>
+        <td></td>
+      </tr>
+    </tfoot>
+  </table>
+</div>
+
+<p class="muted" style="margin-top:14px;">
+  {% if purchase.txn_type == 'return' %}
+  These quantities were <strong>removed</strong> from stock. Cost prices were left unchanged.
+  {% else %}
+  These quantities were <strong>added</strong> to stock and each product's cost price was updated to the amount paid here.
+  {% endif %}
+</p>
+{% endblock %}

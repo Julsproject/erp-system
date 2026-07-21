@@ -164,8 +164,12 @@ table.grid tr:last-child td { border-bottom: none; }
 
 /* ---------- Forms ---------- */
 .form { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 22px; max-width: 820px; }
+/* Grid items default to min-width:auto, so a wide child (the units table) can
+   push the columns past the card edge. Let them shrink and scroll instead. */
+.form > * { min-width: 0; }
+.form input, .form select { max-width: 100%; }
 .form label { display: flex; flex-direction: column; gap: 7px; font-size: 13px; color: var(--muted); font-weight: 500; }
-.form label.full { grid-column: 1 / -1; }
+.form .full { grid-column: 1 / -1; }
 .form input[type=text], .form input[type=number], .form input[type=search], .form input:not([type]), .form select {
   padding: 11px 13px; border: 1px solid var(--line-2); border-radius: var(--radius-sm);
   font-size: 14px; color: var(--ink); background: var(--surface); transition: border-color .16s, box-shadow .16s;
@@ -223,6 +227,15 @@ table.grid tr:last-child td { border-bottom: none; }
 .ladder-table input { width: 100%; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 8px; font-size: 13.5px; }
 .ladder-table input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
 .ladder-table input.w-sm { max-width: 130px; }
+.ladder-table input.w-md { min-width: 140px; max-width: 220px; }
+
+/* "Sell as" cell: wide enough to read by default, and drag the bottom-right
+   corner to widen it further (drag back when you're done). */
+.ladder-table .rz {
+  resize: horizontal; overflow: hidden; display: block;
+  min-width: 150px; max-width: 420px;
+}
+.ladder-table .rz input { width: 100%; }
 .ladder-example { margin-top: 10px; }
 
 /* ---------- POS ---------- */
@@ -240,11 +253,184 @@ table.grid tr:last-child td { border-bottom: none; }
 .pos-item-name { font-weight: 600; font-size: 14px; }
 .pos-item-sub { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
 .pos-item-sub .oos { color: var(--danger); font-weight: 600; }
+.pos-item-sub .open-bag { display: block; margin-top: 3px; color: var(--brand, #4f46e5); font-size: 12px; }
+.pos-item-sub .open-bag b { font-weight: 700; }
 
 .pos-cart-panel { padding: 20px; }
 .pos-customer { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); font-weight: 500; margin-bottom: 14px; }
 .pos-customer input { padding: 10px 12px; border: 1px solid var(--line-2); border-radius: var(--radius-sm); font-size: 14px; }
 .pos-customer input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
+
+.cust-field { position: relative; }
+.cust-dropdown {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 20; margin-top: 4px;
+  background: #fff; border: 1px solid var(--line-2); border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(15,23,42,.12); max-height: 240px; overflow-y: auto; padding: 4px;
+}
+.cust-item {
+  display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
+  background: none; border: none; border-radius: 8px; padding: 8px 10px; cursor: pointer;
+}
+.cust-item:hover { background: var(--brand-tint); }
+.cust-item-name { font-weight: 600; font-size: 13.5px; color: var(--ink, #0f172a); }
+.cust-item-sub { color: var(--muted); font-size: 11.5px; }
+
+/* ---- Cash drawer gate (shown to a cashier at login) -------------------- */
+.drawer-gate { display: flex; justify-content: center; padding: 24px 0 40px; }
+.drawer-card { max-width: 460px; width: 100%; padding: 30px 32px; text-align: center; }
+.drawer-icon { font-size: 40px; line-height: 1; margin-bottom: 8px; }
+.drawer-title { margin: 0 0 8px; font-size: 22px; font-weight: 800; letter-spacing: -.02em; }
+.drawer-field { display: block; text-align: left; margin: 20px 0 16px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.drawer-field input {
+  width: 100%; margin-top: 6px; padding: 14px 14px; font-size: 22px; font-weight: 700;
+  text-align: center; border: 1.5px solid var(--line-2); border-radius: var(--radius-sm);
+  font-variant-numeric: tabular-nums;
+}
+.drawer-field input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
+.drawer-btn { width: 100%; padding: 13px; font-size: 15px; }
+.drawer-foot { margin: 18px 0 0; font-size: 12.5px; }
+
+/* ---- Backup page ------------------------------------------------------- */
+.backup-status { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+.backup-dot { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+.backup-dot.ok { background: #16a34a; box-shadow: 0 0 0 4px rgba(22,163,74,.15); }
+.backup-dot.warn { background: #d97706; box-shadow: 0 0 0 4px rgba(217,119,6,.15); }
+.backup-dot.bad { background: #dc2626; box-shadow: 0 0 0 4px rgba(220,38,38,.15); }
+.code-block {
+  background: #0f172a; color: #e2e8f0; padding: 12px 14px; border-radius: var(--radius-sm);
+  font-size: 12.5px; overflow-x: auto; margin: 10px 0; white-space: pre-wrap; word-break: break-all;
+}
+
+/* ---- Dashboard --------------------------------------------------------- */
+.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 18px; }
+.kpi {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 16px 18px; box-shadow: var(--shadow-sm); display: flex; flex-direction: column; gap: 4px;
+}
+.kpi-label { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.kpi-value { font-size: 24px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.kpi-value.pos { color: #15803d; }
+.kpi-sub { font-size: 11.5px; color: var(--muted); }
+.kpi-warn { border-color: #fcd34d; background: #fffbeb; }
+.danger-text { color: #b91c1c; }
+
+.chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 18px; }
+@media (max-width: 900px) { .chart-row { grid-template-columns: 1fr; } }
+.chart-card { padding: 18px 20px; min-width: 0; }
+.card-title { margin: 0 0 14px; font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+
+/* bar chart */
+.bars { display: flex; align-items: flex-end; gap: 6px; height: 170px; }
+.bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; height: 100%; }
+.bar-wrap { flex: 1; width: 100%; display: flex; align-items: flex-end; }
+.bar {
+  width: 100%; min-height: 2px; border-radius: 5px 5px 2px 2px;
+  background: linear-gradient(180deg, #6366f1 0%, #4f46e5 100%); transition: opacity .15s;
+}
+.bar.today { background: linear-gradient(180deg, #22c55e 0%, #16a34a 100%); }
+.bar-col:hover .bar { opacity: .78; }
+.bar-label { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.bars-foot { display: flex; justify-content: space-between; margin-top: 10px; font-size: 12px; }
+
+/* donut chart */
+.donut-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.donut { width: 140px; height: 140px; flex: none; transform: rotate(-90deg); }
+.donut-num, .donut-cap { transform: rotate(90deg); transform-origin: 21px 21px; text-anchor: middle; }
+.donut-num { font-size: 6px; font-weight: 800; fill: var(--ink, #0f172a); }
+.donut-cap { font-size: 2.6px; fill: var(--muted); text-transform: uppercase; letter-spacing: .1em; }
+.legend { list-style: none; margin: 0; padding: 0; flex: 1; min-width: 190px; }
+.legend li { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 13px; }
+.legend .dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.legend-name { flex: 1; }
+.legend-val { font-weight: 700; font-variant-numeric: tabular-nums; }
+.legend-pct { color: var(--muted); font-size: 11.5px; min-width: 32px; text-align: right; }
+
+/* needs attention */
+.attention { padding: 18px 20px; margin-bottom: 18px; }
+.attn-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.attn {
+  display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 14px 10px;
+  border-radius: var(--radius-sm); text-decoration: none; border: 1px solid var(--line);
+  background: var(--surface-2); transition: transform .12s var(--ease), border-color .15s;
+}
+.attn:hover { transform: translateY(-2px); }
+.attn-num { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.attn-label { font-size: 11.5px; color: var(--muted); text-align: center; }
+.attn.ok .attn-num { color: #15803d; }
+.attn.warn { background: #fffbeb; border-color: #fcd34d; }
+.attn.warn .attn-num { color: #b45309; }
+.attn.bad { background: #fef2f2; border-color: #fca5a5; }
+.attn.bad .attn-num { color: #b91c1c; }
+
+.grid.mini th, .grid.mini td { padding: 8px 10px; font-size: 13px; }
+.grid.mini .rank { color: var(--muted); font-weight: 700; width: 26px; }
+
+/* ---- Loud price-review warnings ---------------------------------------- */
+
+/* Red count badge on the Inventory nav item (visible from every page) */
+.nav-badge {
+  margin-left: auto; min-width: 20px; padding: 1px 6px; border-radius: 999px;
+  background: #dc2626; color: #fff; font-size: 11px; font-weight: 700;
+  text-align: center; line-height: 18px; box-shadow: 0 0 0 2px rgba(220,38,38,.25);
+  animation: badgePulse 2s ease-in-out infinite;
+}
+@keyframes badgePulse { 0%,100% { box-shadow: 0 0 0 2px rgba(220,38,38,.25); } 50% { box-shadow: 0 0 0 5px rgba(220,38,38,0); } }
+
+/* Sticky warning bar across the top of every page */
+.alert-bar {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 18px;
+  padding: 13px 16px; border-radius: var(--radius-sm); text-decoration: none;
+  background: #fef2f2; border: 1.5px solid #fca5a5; color: #7f1d1d;
+  transition: background .15s var(--ease), border-color .15s;
+}
+.alert-bar:hover { background: #fee2e2; border-color: #f87171; }
+.alert-bar-icon { font-size: 20px; line-height: 1; }
+.alert-bar-text { flex: 1; font-size: 13.5px; }
+.alert-bar-text strong { color: #b91c1c; }
+.alert-bar-cta { white-space: nowrap; font-weight: 700; font-size: 13px; color: #b91c1c; }
+
+/* Big hero alert on the dashboard */
+.alert-hero {
+  display: flex; gap: 16px; align-items: flex-start; margin: 18px 0 24px;
+  padding: 20px 22px; border-radius: var(--radius); text-decoration: none;
+  background: linear-gradient(180deg, #fff5f5 0%, #fef2f2 100%);
+  border: 2px solid #fca5a5; box-shadow: 0 6px 20px rgba(220,38,38,.10);
+}
+.alert-hero:hover { border-color: #f87171; }
+.alert-hero-icon { font-size: 34px; line-height: 1; }
+.alert-hero-body h2 { margin: 0 0 6px; font-size: 19px; font-weight: 800; color: #b91c1c; letter-spacing: -.01em; }
+.alert-hero-body p { margin: 0 0 10px; font-size: 13.5px; color: #7f1d1d; max-width: 70ch; }
+.alert-hero-cta { font-weight: 700; font-size: 13.5px; color: #b91c1c; }
+
+/* Amber variant — for a warning that is urgent but not yet a disaster */
+.alert-hero.amber {
+  background: linear-gradient(180deg, #fffbeb 0%, #fef3c7 100%);
+  border-color: #fcd34d; box-shadow: 0 6px 20px rgba(217,119,6,.10);
+}
+.alert-hero.amber:hover { border-color: #fbbf24; }
+.alert-hero.amber .alert-hero-body h2,
+.alert-hero.amber .alert-hero-cta { color: #b45309; }
+.alert-hero.amber .alert-hero-body p { color: #78350f; }
+
+/* Purchasing: cost-change note + price-review warning under a line item */
+.line-note { display: block; font-weight: 400; margin-top: 3px; }
+.cost-note { display: block; font-size: 11.5px; color: var(--muted); }
+.cost-note b { color: var(--ink, #0f172a); font-weight: 700; }
+.cost-note .up { color: #b45309; font-weight: 600; }
+.cost-note .down { color: #15803d; font-weight: 600; }
+.cost-warn {
+  display: block; margin-top: 3px; font-size: 11.5px; font-weight: 600;
+  color: #b91c1c; background: #fef2f2; border-radius: 6px; padding: 3px 7px;
+}
+
+/* Broken-bulk (open bag) sub-line under a product row */
+.container-row td { border-top: none; padding-top: 0; }
+.container-line {
+  font-size: 12.5px; color: var(--muted); padding-left: 22px;
+  padding-top: 2px !important; padding-bottom: 10px;
+}
+.container-line strong { color: var(--ink, #0f172a); font-weight: 600; }
+.container-line .open-hl { color: var(--brand, #4f46e5); }
 
 .cart-table th, .cart-table td { padding: 9px 10px; white-space: nowrap; }
 .cart-unit { padding: 6px 8px; border: 1px solid var(--line-2); border-radius: 8px; font-size: 13px; background: #fff; max-width: 150px; }

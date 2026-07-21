@@ -7,3 +7,6 @@ venv/
 .pytest_cache/
 .idea/
 .vscode/
+
+# Local database backups
+backups/

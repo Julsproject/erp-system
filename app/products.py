@@ -92,6 +92,7 @@ def list_products(
     request: Request,
     q: str = "",
     page: int = 1,
+    alert: int = 0,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -104,6 +105,12 @@ def list_products(
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
         query = query.filter(models.Product.name.ilike(f"%{q}%"))
+    if alert:
+        # Only products whose selling price no longer covers cost.
+        query = query.filter(
+            models.Product.cost_price > 0,
+            models.Product.selling_price <= models.Product.cost_price,
+        )
 
     total = query.count()
     pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
@@ -127,6 +134,7 @@ def list_products(
             "page": page,
             "pages": pages,
             "total": total,
+            "alert": alert,
         },
     )
 
@@ -173,6 +181,7 @@ def _save_from_form(product: models.Product, db: Session, form):
     product.selling_price = _to_decimal(form.get("selling_price"))
     product.beginning_stock = _to_decimal(form.get("beginning_stock"))
     product.stock_qty = _to_decimal(form.get("stock_qty"))
+    product.reorder_level = _to_decimal(form.get("reorder_level"))
     product.is_vat = bool(form.get("is_vat"))
 
     # Units ladder (extra sellable units). Parallel arrays from the form.
@@ -379,8 +388,10 @@ def download_template(user=Depends(get_current_user)):
         cell.fill = header_fill
 
     # Example rows (delete these before importing your real data).
+    # The second row deliberately leaves "Cost of Sales" blank: cost is optional
+    # and gets filled in automatically when you receive stock in Purchasing.
     ws.append(["Portland Cement 40kg", "Cement", "Bag", 220, 260, 10, 5])
-    ws.append(["Common Wire Nail #4", "Fasteners", "Kg", 70, 95, 25.5, 0])
+    ws.append(["Common Wire Nail #4", "Fasteners", "Kg", None, 95, 25.5, 0])
 
     widths = [26, 16, 12, 14, 14, 24, 12]
     for i, width in enumerate(widths, start=1):

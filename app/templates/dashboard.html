@@ -1,39 +1,303 @@
 {% extends "base.html" %}
 {% block title %}Dashboard · {{ app_name }}{% endblock %}
 {% block content %}
-<h1 class="page-title">Dashboard</h1>
-<p class="muted">Welcome, {{ user.full_name or user.username }}. The system is running.</p>
 
-<section class="module-grid">
-  <a class="module-card done" href="/products" style="text-decoration:none;color:inherit;">
-    <h2>Inventory &amp; Products</h2>
-    <p>Encode products, categories, units, beginning stock.</p>
-    <span class="tag">Live · Open →</span>
-  </a>
-  <div class="module-card done">
-    <h2>Login &amp; Users</h2>
-    <p>Authentication is live.</p>
-    <span class="tag">Done</span>
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Dashboard</h1>
+    <p class="muted">{{ today.strftime('%A, %b %d, %Y') }} · Welcome, {{ user.full_name or user.username }}</p>
   </div>
-  <a class="module-card done" href="/pos">
-    <h2>Point of Sale</h2>
-    <p>Sell by any unit, discounts, VAT, payment &amp; printable receipt.</p>
-    <span class="tag">Live · Open →</span>
-  </a>
-  <div class="module-card done">
-    <h2>Multi-unit &amp; Conversions</h2>
-    <p>Units ladder on each product (Bag↔kg, load→sack).</p>
-    <span class="tag">Live</span>
+  <div class="seg">
+    <a class="seg-btn {{ 'active' if days == 7 }}" href="/?days=7">7 days</a>
+    <a class="seg-btn {{ 'active' if days == 30 }}" href="/?days=30">30 days</a>
+    <a class="seg-btn {{ 'active' if days == 90 }}" href="/?days=90">90 days</a>
   </div>
-  <div class="module-card">
-    <h2>Customers</h2>
-    <p>Full list, credit, receivables.</p>
-    <span class="tag">Phase 1</span>
+</div>
+
+{% if backup.stale %}
+<a class="alert-hero {{ '' if backup.missing else 'amber' }}" href="/backup">
+  <div class="alert-hero-icon">{{ '🛑' if backup.missing else '⚠' }}</div>
+  <div class="alert-hero-body">
+    {% if backup.missing %}
+    <h2>No backup exists yet</h2>
+    <p>
+      If this PC's hard drive fails right now, every sale, product and utang record is gone
+      permanently. Make a backup and copy it to the external hard drive.
+    </p>
+    {% else %}
+    <h2>Backup is {{ backup.days }} days old</h2>
+    <p>
+      The last backup was {{ backup.last.strftime('%b %d, %Y at %I:%M %p') }}. Anything recorded
+      since then is not protected. Check that the backup drive is connected.
+    </p>
+    {% endif %}
+    <span class="alert-hero-cta">Open Backup →</span>
   </div>
-  <div class="module-card">
-    <h2>Suppliers &amp; Purchasing</h2>
-    <p>PO, receiving, cost comparison.</p>
-    <span class="tag">Phase 2</span>
+</a>
+{% endif %}
+
+<!-- ============ KPI TILES ============ -->
+<div class="kpi-row">
+  <div class="kpi">
+    <span class="kpi-label">Sales Today</span>
+    <span class="kpi-value">{{ kpi.today|peso }}</span>
   </div>
+  <div class="kpi">
+    <span class="kpi-label">Sales This Month</span>
+    <span class="kpi-value">{{ kpi.month|peso }}</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Gross Profit · {{ days }}d</span>
+    <span class="kpi-value {{ 'pos' if kpi.profit > 0 }}">{{ kpi.profit|peso }}</span>
+    <span class="kpi-sub">from {{ kpi.period|peso }} sales</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Inventory Value</span>
+    <span class="kpi-value">{{ inventory.cost|peso }}</span>
+    <span class="kpi-sub">{{ inventory.skus }} items · {{ inventory.retail|peso }} at retail</span>
+  </div>
+  <div class="kpi {{ 'kpi-warn' if utang_total > 0 }}">
+    <span class="kpi-label">Outstanding Utang</span>
+    <span class="kpi-value">{{ utang_total|peso }}</span>
+    <span class="kpi-sub">
+      {% if overdue %}<strong class="danger-text">{{ overdue|length }} overdue</strong> · {% endif %}
+      {{ due_soon|length }} due within {{ 15 }} days
+    </span>
+  </div>
+</div>
+
+<!-- ============ CHARTS ============ -->
+<div class="chart-row">
+  <section class="card chart-card">
+    <h3 class="card-title">Sales · last {{ days }} days</h3>
+    {% if trend_max > 0 %}
+    <div class="bars">
+      {% for t in trend %}
+      <div class="bar-col" title="{{ t.label }} — {{ t.total|peso }}">
+        <div class="bar-wrap">
+          <div class="bar {{ 'today' if t.is_today }}" style="height:{{ '%.1f'|format(t.pct) }}%;"></div>
+        </div>
+        <span class="bar-label">{{ t.short if days <= 7 else t.date.strftime('%d') }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="bars-foot">
+      <span class="muted">Peak: {{ trend_max|peso }}</span>
+      <span class="muted">Total: {{ kpi.period|peso }}</span>
+    </div>
+    {% else %}
+    <p class="pos-hint">No sales recorded in this period yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="card chart-card">
+    <h3 class="card-title">Payment methods · {{ days }} days</h3>
+    {% if payments %}
+    <div class="donut-row">
+      <svg viewBox="0 0 42 42" class="donut" role="img" aria-label="Payment method breakdown">
+        <circle class="donut-hole" cx="21" cy="21" r="15.915" fill="none" stroke="var(--line)" stroke-width="6"></circle>
+        {% set ns = namespace(acc=0) %}
+        {% for p in payments %}
+        <circle cx="21" cy="21" r="15.915" fill="none" stroke="{{ p.color }}" stroke-width="6"
+                stroke-dasharray="{{ '%.2f'|format(p.pct) }} {{ '%.2f'|format(100 - p.pct) }}"
+                stroke-dashoffset="{{ '%.2f'|format(25 - ns.acc) }}"></circle>
+        {% set ns.acc = ns.acc + p.pct %}
+        {% endfor %}
+        <text x="21" y="20.2" class="donut-num">{{ payments|length }}</text>
+        <text x="21" y="24.4" class="donut-cap">methods</text>
+      </svg>
+      <ul class="legend">
+        {% for p in payments %}
+        <li>
+          <span class="dot" style="background:{{ p.color }};"></span>
+          <span class="legend-name">{{ p.label }}</span>
+          <span class="legend-val">{{ p.amount|peso }}</span>
+          <span class="legend-pct">{{ '%.0f'|format(p.pct) }}%</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% else %}
+    <p class="pos-hint">No payments recorded in this period yet.</p>
+    {% endif %}
+  </section>
+</div>
+
+<!-- ============ NEEDS ATTENTION ============ -->
+<section class="card attention">
+  <h3 class="card-title">Needs your attention</h3>
+  <div class="attn-grid">
+
+    <a class="attn {{ 'bad' if out_of_stock else 'ok' }}" href="/products">
+      <span class="attn-num">{{ out_of_stock|length }}</span>
+      <span class="attn-label">Out of stock</span>
+    </a>
+
+    <a class="attn {{ 'warn' if low_stock else 'ok' }}" href="/products">
+      <span class="attn-num">{{ low_stock|length }}</span>
+      <span class="attn-label">Low stock</span>
+    </a>
+
+    <a class="attn {{ 'bad' if overdue else 'ok' }}" href="/sales/receivables">
+      <span class="attn-num">{{ overdue|length }}</span>
+      <span class="attn-label">Overdue credits</span>
+    </a>
+
+    <a class="attn {{ 'warn' if due_soon else 'ok' }}" href="/sales/receivables">
+      <span class="attn-num">{{ due_soon|length }}</span>
+      <span class="attn-label">Due within 15 days</span>
+    </a>
+
+    <a class="attn {{ 'bad' if price_alerts else 'ok' }}" href="/products?alert=1">
+      <span class="attn-num">{{ price_alerts }}</span>
+      <span class="attn-label">Selling below cost</span>
+    </a>
+
+    <a class="attn {{ 'warn' if no_cost else 'ok' }}" href="/products">
+      <span class="attn-num">{{ no_cost }}</span>
+      <span class="attn-label">No cost yet</span>
+    </a>
+
+    <a class="attn {{ 'bad' if backup.missing else ('warn' if backup.stale else 'ok') }}" href="/backup">
+      <span class="attn-num">{{ '—' if backup.missing else backup.days }}</span>
+      <span class="attn-label">{{ 'No backup!' if backup.missing else 'Days since backup' }}</span>
+    </a>
+  </div>
+
+  {% if overdue or due_soon %}
+  <div class="table-wrap" style="margin-top:16px;">
+    <table class="grid">
+      <thead><tr><th>Invoice</th><th>Customer</th><th>Due</th><th>Status</th><th class="num">Outstanding</th><th></th></tr></thead>
+      <tbody>
+        {% for e in overdue + due_soon %}
+        <tr>
+          <td class="strong">{{ e.sale.invoice_no }}</td>
+          <td>{{ e.sale.customer_name or 'Walk-in' }}</td>
+          <td>{{ e.sale.due_date.strftime('%b %d, %Y') }}</td>
+          <td>
+            {% if e.days < 0 %}
+            <span class="txn" style="background:#fee2e2;color:#b91c1c;">{{ -e.days }} day{{ '' if -e.days == 1 else 's' }} overdue</span>
+            {% elif e.days == 0 %}
+            <span class="txn" style="background:#fef3c7;color:#b45309;">Due today</span>
+            {% else %}
+            <span class="txn" style="background:#fef3c7;color:#b45309;">in {{ e.days }} day{{ '' if e.days == 1 else 's' }}</span>
+            {% endif %}
+          </td>
+          <td class="num strong owed">{{ e.outstanding|peso }}</td>
+          <td class="row-actions"><a class="btn-link" href="/sales/receivables/{{ e.sale.id }}/pay">Collect</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if out_of_stock or low_stock %}
+  <div class="table-wrap" style="margin-top:16px;">
+    <table class="grid">
+      <thead><tr><th>Item</th><th class="num">On hand</th><th class="num">Alert at</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+        {% for p in out_of_stock[:5] %}
+        <tr>
+          <td class="strong">{{ p.name }}</td>
+          <td class="num">{{ p.total_qty|qty }}</td>
+          <td class="num">{{ p.reorder_level|qty if p.reorder_level > 0 else '—' }}</td>
+          <td><span class="txn" style="background:#fee2e2;color:#b91c1c;">Out of stock</span></td>
+          <td class="row-actions"><a class="btn-link" href="/purchases/new">Reorder</a></td>
+        </tr>
+        {% endfor %}
+        {% for p in low_stock[:5] %}
+        <tr>
+          <td class="strong">{{ p.name }}</td>
+          <td class="num">{{ p.total_qty|qty }}</td>
+          <td class="num">{{ p.reorder_level|qty }}</td>
+          <td><span class="txn" style="background:#fef3c7;color:#b45309;">Low stock</span></td>
+          <td class="row-actions"><a class="btn-link" href="/purchases/new">Reorder</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
 </section>
+
+<!-- ============ PRODUCT PERFORMANCE ============ -->
+<div class="chart-row">
+  <section class="card chart-card">
+    <h3 class="card-title">Top sellers · by revenue</h3>
+    {% if top_revenue %}
+    <table class="grid mini">
+      <thead><tr><th>#</th><th>Item</th><th class="num">Qty</th><th class="num">Revenue</th></tr></thead>
+      <tbody>
+        {% for r in top_revenue %}
+        <tr>
+          <td class="rank">{{ loop.index }}</td>
+          <td class="strong">{{ r.product_name }}</td>
+          <td class="num">{{ r.qty|qty }}</td>
+          <td class="num strong">{{ r.revenue|peso }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="pos-hint">No sales in this period.</p>{% endif %}
+  </section>
+
+  <section class="card chart-card">
+    <h3 class="card-title">Top sellers · by quantity</h3>
+    {% if top_qty %}
+    <table class="grid mini">
+      <thead><tr><th>#</th><th>Item</th><th class="num">Qty</th><th class="num">Revenue</th></tr></thead>
+      <tbody>
+        {% for r in top_qty %}
+        <tr>
+          <td class="rank">{{ loop.index }}</td>
+          <td class="strong">{{ r.product_name }}</td>
+          <td class="num strong">{{ r.qty|qty }}</td>
+          <td class="num">{{ r.revenue|peso }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="pos-hint">No sales in this period.</p>{% endif %}
+  </section>
+</div>
+
+<div class="chart-row">
+  <section class="card chart-card">
+    <h3 class="card-title">Slow movers <span class="muted">· in stock, no sales in 30 days</span></h3>
+    {% if dead_stock %}
+    <table class="grid mini">
+      <thead><tr><th>Item</th><th class="num">On hand</th><th class="num">Tied-up value</th></tr></thead>
+      <tbody>
+        {% for p in dead_stock %}
+        <tr>
+          <td class="strong">{{ p.name }}</td>
+          <td class="num">{{ p.total_qty|qty }}</td>
+          <td class="num">{{ (p.total_qty * (p.cost_price or 0))|peso }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="pos-hint">Everything in stock has moved recently. 🎉</p>{% endif %}
+  </section>
+
+  <section class="card chart-card">
+    <h3 class="card-title">Recent transactions</h3>
+    {% if recent %}
+    <table class="grid mini">
+      <thead><tr><th>Invoice</th><th>Type</th><th>Customer</th><th class="num">Total</th></tr></thead>
+      <tbody>
+        {% for s in recent %}
+        <tr>
+          <td class="strong"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales">{{ s.invoice_no }}</a></td>
+          <td><span class="txn txn-{{ s.txn_type }}">{{ s.txn_type|capitalize }}</span></td>
+          <td>{{ s.customer_name or 'Walk-in' }}</td>
+          <td class="num strong {{ 'neg' if s.total and s.total < 0 }}">{{ s.total|peso }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="pos-hint">No transactions yet.</p>{% endif %}
+  </section>
+</div>
 {% endblock %}

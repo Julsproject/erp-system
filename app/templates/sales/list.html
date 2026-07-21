@@ -31,7 +31,7 @@
         <td>{{ s.customer_name or 'Walk-in' }}</td>
         <td>{{ s.payment_method or '—' }}</td>
         <td class="num strong {{ 'neg' if s.total and s.total < 0 }}">{{ s.total|peso }}</td>
-        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}">Receipt</a></td>
+        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales">Receipt</a></td>
       </tr>
       {% else %}
       <tr><td colspan="7" class="empty">No fully-paid sales yet.</td></tr>

@@ -7,9 +7,12 @@ Phase 1:
 Multi-unit conversion ("units ladder") and barcode are intentionally deferred;
 the Product schema leaves room for them without rework.
 """
+from decimal import Decimal
+
 from sqlalchemy import (
     Boolean,
     Column,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -66,6 +69,9 @@ class Product(Base):
     beginning_stock = Column(Numeric(14, 3), nullable=False, server_default="0")
     stock_qty = Column(Numeric(14, 3), nullable=False, server_default="0")
 
+    # Low-stock alert threshold in base units. 0 = no alert for this product.
+    reorder_level = Column(Numeric(14, 3), nullable=False, server_default="0")
+
     is_vat = Column(Boolean, nullable=False, server_default="false")  # VAT toggle per product
     is_active = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -83,6 +89,44 @@ class Product(Base):
     @property
     def total_qty(self):
         return (self.beginning_stock or 0) + (self.stock_qty or 0)
+
+    @property
+    def container(self):
+        """Broken-bulk view: how many sealed packs + how much sits in the open
+        container, expressed in the loose (smallest) unit. Returns None for
+        products that aren't sold in both a pack and a loose unit.
+
+        Works whichever unit is the base:
+          - base = kg,   ladder Sack = 40      -> loose = kg,   pack = Sack
+          - base = Sack, ladder kg   = 0.025   -> loose = kg,   pack = Sack
+        The pack is the largest-factor unit, the loose unit the smallest-factor
+        one, both measured in base units. With one open bag at a time, the open
+        remainder is total mod pack_size, and sealed packs = total // pack_size.
+        """
+        base_name = self.unit_type.name if self.unit_type else "unit"
+        entries = [(base_name, Decimal("1"))]
+        for u in self.units:
+            f = Decimal(str(u.factor_to_base or 0))
+            if f > 0:
+                entries.append((u.name, f))
+        if len(entries) < 2:
+            return None
+
+        loose_name, loose_factor = min(entries, key=lambda e: e[1])
+        pack_name, pack_factor = max(entries, key=lambda e: e[1])
+        if pack_factor <= loose_factor or pack_factor <= 0 or loose_factor <= 0:
+            return None
+
+        total = Decimal(str(self.total_qty or 0))
+        sealed = int(total // pack_factor)
+        open_base = total - sealed * pack_factor       # remainder in base units
+        open_loose = open_base / loose_factor          # expressed in the loose unit
+        return {
+            "pack_name": pack_name,
+            "loose_name": loose_name,
+            "sealed": sealed,
+            "open": open_loose,
+        }
 
 
 class ProductUnit(Base):
@@ -124,6 +168,7 @@ class Sale(Base):
     amount_tendered = Column(Numeric(12, 2), nullable=False, server_default="0")  # paid now (non-receivable)
     change_amount = Column(Numeric(12, 2), nullable=False, server_default="0")
     receivable_amount = Column(Numeric(12, 2), nullable=False, server_default="0")  # utang on this sale
+    due_date = Column(Date, nullable=True)  # when the utang falls due (sale date + customer terms)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -149,6 +194,10 @@ class SaleLine(Base):
     line_total = Column(Numeric(12, 2), nullable=False, server_default="0")
     is_vat = Column(Boolean, nullable=False, server_default="false")
 
+    # Cost per BASE unit captured at the moment of sale, so profit stays correct
+    # even after a supplier price change. Cost of goods = qty * unit_factor * unit_cost.
+    unit_cost = Column(Numeric(12, 2), nullable=False, server_default="0")
+
     sale = relationship("Sale", back_populates="lines")
 
 
@@ -159,6 +208,8 @@ class Customer(Base):
     name = Column(String(150), nullable=False, index=True)
     tin = Column(String(30))
     address = Column(String(255))
+    # Credit terms in days; a sale on utang falls due this many days after the sale.
+    credit_days = Column(Integer, nullable=False, server_default="15")
     is_active = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -189,6 +240,86 @@ class ReceivableSettlement(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     sale = relationship("Sale", back_populates="settlements")
+
+
+class CashShift(Base):
+    """A cashier's drawer session: opening float, then a counted close."""
+    __tablename__ = "cash_shifts"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    opening_amount = Column(Numeric(12, 2), nullable=False, server_default="0")
+    opened_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    closing_amount = Column(Numeric(12, 2))    # what the cashier physically counted
+    expected_amount = Column(Numeric(12, 2))   # what the system says should be there
+    difference = Column(Numeric(12, 2))        # counted - expected (negative = short)
+    closed_at = Column(DateTime(timezone=True))
+    notes = Column(String(255))
+
+    user = relationship("User")
+
+    @property
+    def is_open(self) -> bool:
+        return self.closed_at is None
+
+
+class Supplier(Base):
+    __tablename__ = "suppliers"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(30), unique=True, index=True)
+    name = Column(String(150), nullable=False, index=True)
+    contact_person = Column(String(120))
+    mobile = Column(String(40))
+    telephone = Column(String(40))
+    email = Column(String(120))
+    address = Column(String(255))
+    tin = Column(String(30))
+    payment_terms = Column(String(60))     # e.g. COD, 30 days, 50% DP
+    is_active = Column(Boolean, nullable=False, server_default="true")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class Purchase(Base):
+    """A receiving (goods in) or a purchase return (goods back to supplier)."""
+    __tablename__ = "purchases"
+
+    id = Column(Integer, primary_key=True)
+    ref_no = Column(String(30), unique=True, index=True)
+    txn_type = Column(String(12), nullable=False, server_default="receive")  # receive | return
+    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
+    invoice_no = Column(String(40))        # supplier's invoice / DR number
+    delivery_date = Column(String(20))     # as printed on the DR
+    notes = Column(String(255))
+    total = Column(Numeric(12, 2), nullable=False, server_default="0")
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    supplier = relationship("Supplier")
+    user = relationship("User")
+    lines = relationship("PurchaseLine", back_populates="purchase", cascade="all, delete-orphan")
+
+
+class PurchaseLine(Base):
+    __tablename__ = "purchase_lines"
+
+    id = Column(Integer, primary_key=True)
+    purchase_id = Column(Integer, ForeignKey("purchases.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
+    product_name = Column(String(150), nullable=False)
+    unit_name = Column(String(40))
+    unit_factor = Column(Numeric(14, 4), nullable=False, server_default="1")
+    qty = Column(Numeric(14, 3), nullable=False, server_default="0")
+    unit_cost = Column(Numeric(12, 2), nullable=False, server_default="0")   # cost per purchase unit
+    line_total = Column(Numeric(12, 2), nullable=False, server_default="0")
+
+    # Cost history: what the product's per-base cost was before/after this line.
+    old_cost = Column(Numeric(12, 4), server_default="0")
+    new_cost = Column(Numeric(12, 4), server_default="0")
+
+    purchase = relationship("Purchase", back_populates="lines")
+    product = relationship("Product")
 
 
 class StockMovement(Base):

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if supplier else 'Add' }} supplier · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">{{ 'Edit supplier' if supplier else 'Add supplier' }}</h1>
+  <a class="btn-link" href="/suppliers">← Back to suppliers</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<form class="card form" method="post" novalidate
+      action="{{ '/suppliers/' ~ supplier.id if supplier else '/suppliers' }}">
+
+  <label>Supplier Code
+    <input name="code" value="{{ supplier.code if supplier else '' }}" placeholder="auto (SUP-0001)">
+    <small class="hint">Leave blank to generate automatically.</small>
+  </label>
+
+  <label>Supplier Name
+    <input name="name" value="{{ supplier.name if supplier else '' }}" required autofocus>
+  </label>
+
+  <label>Contact Person
+    <input name="contact_person" value="{{ supplier.contact_person or '' if supplier else '' }}">
+  </label>
+
+  <label>Mobile Number
+    <input name="mobile" value="{{ supplier.mobile or '' if supplier else '' }}" placeholder="09xx xxx xxxx">
+  </label>
+
+  <label>Telephone Number
+    <input name="telephone" value="{{ supplier.telephone or '' if supplier else '' }}" placeholder="(02) xxxx xxxx">
+  </label>
+
+  <label>Email Address
+    <input name="email" type="email" value="{{ supplier.email or '' if supplier else '' }}">
+  </label>
+
+  <label class="full">Complete Address
+    <input name="address" value="{{ supplier.address or '' if supplier else '' }}">
+  </label>
+
+  <label>TIN
+    <input name="tin" value="{{ supplier.tin or '' if supplier else '' }}">
+  </label>
+
+  <label>Payment Terms
+    <input name="payment_terms" list="terms-list" value="{{ supplier.payment_terms or '' if supplier else '' }}"
+           placeholder="e.g. COD, 30 days">
+    <datalist id="terms-list">
+      {% for t in terms %}<option value="{{ t }}">{% endfor %}
+    </datalist>
+    <small class="hint">Type your own if it's not in the list.</small>
+  </label>
+
+  <label>Status
+    <select name="status">
+      <option value="active" {{ 'selected' if not supplier or supplier.is_active }}>Active</option>
+      <option value="inactive" {{ 'selected' if supplier and not supplier.is_active }}>Inactive</option>
+    </select>
+  </label>
+
+  <div class="form-actions full">
+    <button class="btn" type="submit">{{ 'Save changes' if supplier else 'Save supplier' }}</button>
+    <a class="btn-secondary" href="/suppliers">Cancel</a>
+  </div>
+</form>
+{% endblock %}

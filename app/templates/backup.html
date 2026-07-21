@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Backup · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Backup</h1>
+    <p class="muted">Save a copy of everything — products, sales, purchases, customers and utang.</p>
+  </div>
+  <a class="btn" href="/backup/download">⬇ Download backup now</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<div class="card" style="padding:18px 20px; margin-bottom:16px;">
+  {% if latest %}
+    <div class="backup-status ok">
+      <span class="backup-dot ok"></span>
+      <div>
+        <strong>Last automatic backup: {{ latest.when.strftime('%b %d, %Y at %I:%M %p') }}</strong>
+        <div class="muted">{{ files|length }} backup{{ '' if files|length == 1 else 's' }} kept · runs automatically every day</div>
+      </div>
+    </div>
+  {% elif folder_mounted %}
+    <div class="backup-status warn">
+      <span class="backup-dot warn"></span>
+      <div>
+        <strong>No automatic backup has run yet.</strong>
+        <div class="muted">The first one is created within 30 minutes of starting the system.</div>
+      </div>
+    </div>
+  {% else %}
+    <div class="backup-status bad">
+      <span class="backup-dot bad"></span>
+      <div>
+        <strong>Automatic backups are not set up.</strong>
+        <div class="muted">The backup folder isn't attached. Run <code>docker compose up -d</code> to start the backup service.</div>
+      </div>
+    </div>
+  {% endif %}
+</div>
+
+<div class="hint-box" style="margin-bottom:18px;">
+  <strong>Important:</strong> a backup kept only on this PC will be lost if the hard drive fails.
+  Copy the file to your <strong>external hard drive</strong> (or a USB stick) regularly — that is what
+  protects you from a dead PC, fire or theft.
+</div>
+
+<h3 class="ex-h">Automatic daily backups</h3>
+<div class="table-wrap">
+  <table class="grid">
+    <thead><tr><th>File</th><th>Created</th><th class="num">Size</th><th></th></tr></thead>
+    <tbody>
+      {% for f in files %}
+      <tr>
+        <td class="strong">{{ f.name }}</td>
+        <td>{{ f.when.strftime('%b %d, %Y %I:%M %p') }}</td>
+        <td class="num">{{ '%.1f'|format(f.size / 1024) }} KB</td>
+        <td class="row-actions"><a class="btn-link" href="/backup/file/{{ f.name }}">Download</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">No automatic backups yet. Use <strong>Download backup now</strong> above to make one immediately.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h3 class="ex-h" style="margin-top:24px;">How to restore</h3>
+<div class="card" style="padding:18px 20px;">
+  <p class="muted" style="margin-top:0;">
+    If the database is ever lost or you move to a new PC, restore a backup file with this command
+    (run it in PowerShell from the project folder):
+  </p>
+  <pre class="code-block">Get-Content backup.sql | docker exec -i hardware-erp-db psql -U erp -d hardware_erp</pre>
+  <p class="muted" style="margin-bottom:0;">
+    Replace <code>backup.sql</code> with the file you want to restore. Restoring writes the data back
+    into the database — do it on a fresh/empty database to avoid duplicate records.
+  </p>
+</div>
+{% endblock %}
