@@ -14,7 +14,7 @@
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Customer</th><th>TIN</th><th>Address</th><th class="num">Outstanding Utang</th><th></th></tr>
+      <tr><th>Customer</th><th>TIN</th><th>Address</th><th class="num">Outstanding Credits</th><th></th></tr>
     </thead>
     <tbody>
       {% for c in customers %}
@@ -26,7 +26,7 @@
         <td class="row-actions"><a class="btn-pay" href="/credits/{{ c.id }}">View statement</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="5" class="empty">No customers with credit yet. Credit purchases (utang) from POS appear here.</td></tr>
+      <tr><td colspan="5" class="empty">No customers with credit yet. Credit purchases from POS appear here.</td></tr>
       {% endfor %}
     </tbody>
   </table>

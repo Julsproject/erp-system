@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Quotations · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Sales</h1>
+</div>
+
+<div class="tabs">
+  <a class="tab" href="/sales">All Sales</a>
+  <a class="tab" href="/sales/receivables">Receivables (Credits)</a>
+  <a class="tab active" href="/quotations">Quotations</a>
+</div>
+
+<p class="muted" style="margin:-6px 0 16px;">
+  Estimates given to customers. Go to <strong>POS → Quotation</strong> to create a new one.
+</p>
+
+<div class="tabs" style="margin-bottom:18px;">
+  <a class="tab {{ 'active' if not status_filter }}" href="/quotations">All <span class="muted">({{ counts.values()|sum }})</span></a>
+  {% for s, label in labels.items() %}
+  <a class="tab {{ 'active' if status_filter == s }}" href="/quotations?status_filter={{ s }}">{{ label }} <span class="muted">({{ counts.get(s, 0) }})</span></a>
+  {% endfor %}
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Quote #</th><th>Date</th><th>Customer</th><th class="num">Total</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for q in quotes %}
+      <tr>
+        <td class="strong">{{ q.quote_no }}</td>
+        <td>{{ q.created_at.strftime('%b %d, %Y %I:%M %p') if q.created_at else '' }}</td>
+        <td>{{ q.customer_name or 'Walk-in' }}</td>
+        <td class="num strong">{{ q.total|peso }}</td>
+        <td>
+          {% if q.status == 'pending' %}
+          <span class="txn" style="background:#fef3c7;color:#b45309;">Pending</span>
+          {% elif q.status == 'confirmed' %}
+          <span class="txn" style="background:#dbeafe;color:#1d4ed8;">Confirmed</span>
+          {% elif q.status == 'paid' %}
+          <span class="txn" style="background:#dcfce7;color:#15803d;">Paid</span>
+          {% else %}
+          <span class="txn" style="background:#f1f5f9;color:#64748b;">Cancelled</span>
+          {% endif %}
+        </td>
+        <td class="row-actions"><a class="btn-link" href="/quotations/{{ q.id }}">View</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No quotations {{ 'with this status' if status_filter else 'yet' }}.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

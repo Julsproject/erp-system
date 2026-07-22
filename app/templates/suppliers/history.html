@@ -28,7 +28,7 @@
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Ref #</th><th>Type</th><th>Date</th><th>Supplier Invoice</th><th>Delivered</th><th class="num">Amount</th><th></th></tr>
+      <tr><th>Ref #</th><th>Type</th><th>Status</th><th>Date</th><th>Supplier Invoice</th><th>Delivered</th><th class="num">Amount</th><th></th></tr>
     </thead>
     <tbody>
       {% for p in purchases %}
@@ -41,6 +41,19 @@
           <span class="txn" style="background:#dcfce7;color:#15803d;">Received</span>
           {% endif %}
         </td>
+        <td>
+          {% if p.txn_type == 'return' %}
+          <span class="muted">—</span>
+          {% elif p.status == 'pending' %}
+          <span class="txn" style="background:#fef3c7;color:#b45309;">Pending</span>
+          {% elif p.status == 'confirmed' %}
+          <span class="txn" style="background:#dbeafe;color:#1d4ed8;">Confirmed</span>
+          {% elif p.status == 'paid' %}
+          <span class="txn" style="background:#dcfce7;color:#15803d;">Paid</span>
+          {% else %}
+          <span class="txn" style="background:#f1f5f9;color:#64748b;">Cancelled</span>
+          {% endif %}
+        </td>
         <td>{{ p.created_at.strftime('%b %d, %Y %I:%M %p') if p.created_at else '' }}</td>
         <td>{{ p.invoice_no or '—' }}</td>
         <td>{{ p.delivery_date or '—' }}</td>
@@ -48,7 +61,7 @@
         <td class="row-actions"><a class="btn-link" href="/purchases/{{ p.id }}">View</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="empty">No purchases from this supplier yet.</td></tr>
+      <tr><td colspan="8" class="empty">No purchases from this supplier yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

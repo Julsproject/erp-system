@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Cashier Activity · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Cashier Activity</h1>
+    <p class="muted">{{ day.strftime('%A, %b %d, %Y') }}</p>
+  </div>
+  <form method="get" class="toolbar" style="margin:0;">
+    <input class="search" type="date" name="day" value="{{ day.isoformat() }}" onchange="this.form.submit()" style="max-width:170px;">
+  </form>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Cashier</th><th class="num">Transactions</th><th class="num">Total Sales</th><th class="num">Credit Collected</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="strong">{{ r.user.full_name or r.user.username }}</td>
+        <td class="num">{{ r.summary.count }}</td>
+        <td class="num strong">{{ r.summary.net_total|peso }}</td>
+        <td class="num">{{ r.summary.collections|peso }}</td>
+        <td class="row-actions"><a class="btn-link" href="/activity/user/{{ r.user.id }}?day={{ day.isoformat() }}">View</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="empty">No cashier activity recorded on this day.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

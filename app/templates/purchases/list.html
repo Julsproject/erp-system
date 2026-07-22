@@ -20,10 +20,18 @@
   <div class="mini-stat"><span class="mini-num">{{ returned|peso }}</span><span>Total Returned</span></div>
 </div>
 
+<div class="tabs" style="margin-bottom:18px;">
+  <a class="tab {{ 'active' if not status_filter }}" href="/purchases">All <span class="muted">({{ counts.values()|sum }})</span></a>
+  {% for s, label in labels.items() %}
+  <a class="tab {{ 'active' if status_filter == s }}" href="/purchases?status_filter={{ s }}">{{ label }} <span class="muted">({{ counts.get(s, 0) }})</span></a>
+  {% endfor %}
+  <a class="tab {{ 'active' if status_filter == 'return' }}" href="/purchases?status_filter=return">Returns <span class="muted">({{ counts.get('return', 0) }})</span></a>
+</div>
+
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Ref #</th><th>Type</th><th>Date</th><th>Supplier</th><th>Supplier Invoice</th><th class="num">Amount</th><th></th></tr>
+      <tr><th>Ref #</th><th>Type</th><th>Status</th><th>Date</th><th>Supplier</th><th>Supplier Invoice</th><th class="num">Amount</th><th></th></tr>
     </thead>
     <tbody>
       {% for p in purchases %}
@@ -36,6 +44,19 @@
           <span class="txn" style="background:#dcfce7;color:#15803d;">Received</span>
           {% endif %}
         </td>
+        <td>
+          {% if p.txn_type == 'return' %}
+          <span class="muted">—</span>
+          {% elif p.status == 'pending' %}
+          <span class="txn" style="background:#fef3c7;color:#b45309;">Pending</span>
+          {% elif p.status == 'confirmed' %}
+          <span class="txn" style="background:#dbeafe;color:#1d4ed8;">Confirmed</span>
+          {% elif p.status == 'paid' %}
+          <span class="txn" style="background:#dcfce7;color:#15803d;">Paid</span>
+          {% else %}
+          <span class="txn" style="background:#f1f5f9;color:#64748b;">Cancelled</span>
+          {% endif %}
+        </td>
         <td>{{ p.created_at.strftime('%b %d, %Y %I:%M %p') if p.created_at else '' }}</td>
         <td>{{ p.supplier.name if p.supplier else '—' }}</td>
         <td>{{ p.invoice_no or '—' }}</td>
@@ -43,7 +64,7 @@
         <td class="row-actions"><a class="btn-link" href="/purchases/{{ p.id }}">View</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="empty">No purchases yet. Click <strong>New purchase</strong> to receive stock from a supplier.</td></tr>
+      <tr><td colspan="8" class="empty">No purchases {{ 'with this status' if status_filter else 'yet' }}.</td></tr>
       {% endfor %}
     </tbody>
   </table>

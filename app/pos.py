@@ -11,6 +11,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from . import models
@@ -128,40 +129,35 @@ def pos_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_curr
     return {"products": out}
 
 
-@router.post("/pos/checkout")
-async def pos_checkout(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    if not user:
-        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied, discount_total, lines, payments):
+    """Create and commit a real Sale from line items + payments.
 
-    data = await request.json()
-    lines = data.get("lines") or []
-    if not lines:
-        return JSONResponse({"ok": False, "error": "Cart is empty."}, status_code=400)
-
-    invoice_no = (data.get("invoice_no") or "").strip()
+    Shared by POS checkout and by quotations converting to a paid sale, so the
+    stock/cost/VAT/receivable math only lives in one place.
+    Returns (True, sale) on success, or (False, error_message) on failure.
+    """
+    invoice_no = (invoice_no or "").strip()
     if not invoice_no:
-        return JSONResponse({"ok": False, "error": "Invoice number is required."}, status_code=400)
+        return False, "Invoice number is required."
     if db.query(models.Sale).filter(models.Sale.invoice_no == invoice_no).first():
-        return JSONResponse(
-            {"ok": False, "error": f"Invoice number '{invoice_no}' is already used."}, status_code=400
-        )
+        return False, f"Invoice number '{invoice_no}' is already used."
 
-    customer_name = (data.get("customer_name") or "").strip()
-    vat_applied = bool(data.get("vat_applied"))
+    customer_name = (customer_name or "").strip()
+    vat_applied = bool(vat_applied)
     sale = models.Sale(invoice_no=invoice_no, customer_name=customer_name or None, cashier_id=user.id)
     db.add(sale)
 
     subtotal = Decimal("0")
 
     for ln in lines:
-        product = db.get(models.Product, int(ln["product_id"]))
+        product = db.get(models.Product, int(ln["product_id"])) if ln.get("product_id") else None
         if not product:
             continue
         qty = _dec(ln.get("qty"))
         unit_price = _dec(ln.get("unit_price"))
         factor = _dec(ln.get("factor"), "1")
         discount = _dec(ln.get("discount"))
-        is_vat = vat_applied  # VAT is now a whole-transaction toggle
+        is_vat = vat_applied  # VAT is a whole-transaction toggle
 
         line_total = qty * unit_price - discount
         if line_total < 0:
@@ -186,7 +182,7 @@ async def pos_checkout(request: Request, db: Session = Depends(get_db), user=Dep
             unit_cost=_money(product.cost_price or 0),
         ))
 
-    discount_total = _dec(data.get("discount_total"))
+    discount_total = _dec(discount_total)
     total = subtotal - discount_total
     if total < 0:
         total = Decimal("0")
@@ -196,11 +192,10 @@ async def pos_checkout(request: Request, db: Session = Depends(get_db), user=Dep
     net = _money(total) - vat_amount
 
     # --- Payments (split) ---------------------------------------------------
-    payments_in = data.get("payments") or []
     receivable_amount = Decimal("0")
     paid_amount = Decimal("0")
     method_rows = []
-    for pay in payments_in:
+    for pay in payments or []:
         method = (pay.get("method") or "").strip().lower()
         amount = _dec(pay.get("amount"))
         if amount <= 0 or method not in METHOD_LABELS:
@@ -212,31 +207,26 @@ async def pos_checkout(request: Request, db: Session = Depends(get_db), user=Dep
             paid_amount += amount
 
     if not method_rows:
-        return JSONResponse({"ok": False, "error": "Add at least one payment."}, status_code=400)
+        return False, "Add at least one payment."
 
     if receivable_amount > total:
         receivable_amount = total
     if receivable_amount > 0 and not customer_name:
-        return JSONResponse(
-            {"ok": False, "error": "Receivable (utang) requires a customer name."}, status_code=400
-        )
+        return False, "Receivable (credit) requires a customer name."
 
     amount_due_now = total - receivable_amount
     if paid_amount + Decimal("0.01") < amount_due_now:
         short = amount_due_now - paid_amount
-        return JSONResponse(
-            {"ok": False, "error": f"Payment is short by ₱{short:.2f}. Add a payment or receivable."},
-            status_code=400,
-        )
+        return False, f"Payment is short by ₱{short:.2f}. Add a payment or receivable."
     change = paid_amount - amount_due_now
     if change < 0:
         change = Decimal("0")
 
-    # Attach customer (create by name if needed) when there is utang or a name.
+    # Attach customer (create by name if needed) when there is credit or a name.
     customer = get_or_create_customer(db, customer_name) if customer_name else None
     if customer:
         sale.customer_id = customer.id
-        # Utang falls due after the customer's agreed credit terms.
+        # Credit falls due after the customer's agreed credit terms.
         if receivable_amount > 0:
             days = customer.credit_days if customer.credit_days is not None else 15
             sale.due_date = date.today() + timedelta(days=int(days))
@@ -257,7 +247,32 @@ async def pos_checkout(request: Request, db: Session = Depends(get_db), user=Dep
     )
 
     db.commit()
+    return True, sale
 
+
+@router.post("/pos/checkout")
+async def pos_checkout(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+    data = await request.json()
+    lines = data.get("lines") or []
+    if not lines:
+        return JSONResponse({"ok": False, "error": "Cart is empty."}, status_code=400)
+
+    ok, result = _finalize_sale(
+        db, user,
+        invoice_no=data.get("invoice_no"),
+        customer_name=data.get("customer_name"),
+        vat_applied=data.get("vat_applied"),
+        discount_total=data.get("discount_total"),
+        lines=lines,
+        payments=data.get("payments") or [],
+    )
+    if not ok:
+        return JSONResponse({"ok": False, "error": result}, status_code=400)
+
+    sale = result
     return {"ok": True, "sale_id": sale.id, "invoice_no": sale.invoice_no}
 
 
@@ -472,6 +487,7 @@ def pos_receipt(
     request: Request,
     from_: str = Query("", alias="from"),
     cust: int = 0,
+    quote: int = 0,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -480,8 +496,30 @@ def pos_receipt(
     sale = db.get(models.Sale, sale_id)
     if not sale:
         return RedirectResponse("/pos", status_code=302)
+
+    # Refunds/exchanges made FROM this invoice (there can be more than one —
+    # e.g. two separate partial refunds over time).
+    linked = (
+        db.query(models.Sale)
+        .filter(models.Sale.original_sale_id == sale.id)
+        .order_by(models.Sale.id)
+        .all()
+    )
+    # If this receipt IS a refund/exchange, the invoice it came from.
+    original = db.get(models.Sale, sale.original_sale_id) if sale.original_sale_id else None
+
+    # Live outstanding credit (original minus every payment collected since),
+    # instead of the frozen amount recorded at the moment of sale.
+    credit_paid = (
+        db.query(func.coalesce(func.sum(models.ReceivableSettlement.amount), 0))
+        .filter(models.ReceivableSettlement.sale_id == sale.id)
+        .scalar()
+    )
+    credit_outstanding = (sale.receivable_amount or Decimal("0")) - Decimal(str(credit_paid or 0))
+
     return templates.TemplateResponse(
         "receipt.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "sale": sale, "from": from_, "cust": cust},
+         "sale": sale, "from": from_, "cust": cust, "quote": quote,
+         "linked": linked, "original": original, "credit_outstanding": credit_outstanding},
     )

@@ -264,8 +264,8 @@ table.grid tr:last-child td { border-bottom: none; }
 .cust-field { position: relative; }
 .cust-dropdown {
   position: absolute; top: 100%; left: 0; right: 0; z-index: 20; margin-top: 4px;
-  background: #fff; border: 1px solid var(--line-2); border-radius: var(--radius-sm);
-  box-shadow: 0 8px 24px rgba(15,23,42,.12); max-height: 240px; overflow-y: auto; padding: 4px;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg); max-height: 240px; overflow-y: auto; padding: 4px;
 }
 .cust-item {
   display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
@@ -679,3 +679,18 @@ table.grid tr:last-child td { border-bottom: none; }
 }
 .theme-toggle:hover { background: var(--brand-tint); color: var(--brand-600); }
 .theme-toggle svg { width: 15px; height: 15px; stroke-width: 2; }
+
+/* ---- Quotations ---------------------------------------------------------- */
+.quo-status-banner {
+  display: flex; align-items: center; gap: 12px; padding: 13px 16px; border-radius: var(--radius-sm);
+  margin-bottom: 18px; font-size: 13.5px;
+}
+.quo-status-banner.pending { background: #fffbeb; border: 1.5px solid #fcd34d; color: #92400e; }
+.quo-status-banner.confirmed { background: #eff6ff; border: 1.5px solid #93c5fd; color: #1e40af; }
+.quo-status-banner.paid { background: #f0fdf4; border: 1.5px solid #86efac; color: #166534; }
+.quo-status-banner.cancelled { background: #f8fafc; border: 1.5px solid var(--line-2); color: var(--muted); }
+/* Printing a quotation: hide navigation and buttons, keep just the quote itself. */
+@media print {
+  .sidebar, .no-print { display: none !important; }
+  .main, .content { margin: 0 !important; padding: 0 !important; max-width: none !important; }
+}

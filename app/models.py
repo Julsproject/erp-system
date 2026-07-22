@@ -167,8 +167,8 @@ class Sale(Base):
     payment_method = Column(String(40))
     amount_tendered = Column(Numeric(12, 2), nullable=False, server_default="0")  # paid now (non-receivable)
     change_amount = Column(Numeric(12, 2), nullable=False, server_default="0")
-    receivable_amount = Column(Numeric(12, 2), nullable=False, server_default="0")  # utang on this sale
-    due_date = Column(Date, nullable=True)  # when the utang falls due (sale date + customer terms)
+    receivable_amount = Column(Numeric(12, 2), nullable=False, server_default="0")  # credit on this sale
+    due_date = Column(Date, nullable=True)  # when the credit falls due (sale date + customer terms)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -201,6 +201,61 @@ class SaleLine(Base):
     sale = relationship("Sale", back_populates="lines")
 
 
+class Quotation(Base):
+    """A price estimate given to a customer, before it becomes a real sale.
+
+    Lifecycle: pending -> confirmed -> paid (converts into a Sale), or
+    pending/confirmed -> cancelled. Nothing here touches stock or costing
+    until it is converted — a quotation is just a promise of a price.
+    """
+    __tablename__ = "quotations"
+
+    id = Column(Integer, primary_key=True)
+    quote_no = Column(String(20), unique=True, index=True)
+    status = Column(String(12), nullable=False, server_default="pending")  # pending | confirmed | paid | cancelled
+
+    customer_name = Column(String(150))
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True)
+
+    vat_applied = Column(Boolean, nullable=False, server_default="false")
+    subtotal = Column(Numeric(12, 2), nullable=False, server_default="0")
+    discount_total = Column(Numeric(12, 2), nullable=False, server_default="0")
+    vat_amount = Column(Numeric(12, 2), nullable=False, server_default="0")
+    total = Column(Numeric(12, 2), nullable=False, server_default="0")
+
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Set once the quotation turns into a real, paid sale.
+    converted_sale_id = Column(Integer, ForeignKey("sales.id"), nullable=True)
+    paid_at = Column(DateTime(timezone=True), nullable=True)
+
+    lines = relationship("QuotationLine", back_populates="quotation", cascade="all, delete-orphan")
+    customer = relationship("Customer")
+    creator = relationship("User")
+    converted_sale = relationship("Sale")
+
+
+class QuotationLine(Base):
+    __tablename__ = "quotation_lines"
+
+    id = Column(Integer, primary_key=True)
+    quotation_id = Column(Integer, ForeignKey("quotations.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
+    product_name = Column(String(150), nullable=False)
+    unit_name = Column(String(40))
+    unit_factor = Column(Numeric(14, 4), nullable=False, server_default="1")
+    qty = Column(Numeric(14, 3), nullable=False, server_default="0")
+    unit_price = Column(Numeric(12, 2), nullable=False, server_default="0")
+    discount = Column(Numeric(12, 2), nullable=False, server_default="0")
+    line_total = Column(Numeric(12, 2), nullable=False, server_default="0")
+
+    quotation = relationship("Quotation", back_populates="lines")
+    product = relationship("Product")
+
+
 class Customer(Base):
     __tablename__ = "customers"
 
@@ -208,7 +263,7 @@ class Customer(Base):
     name = Column(String(150), nullable=False, index=True)
     tin = Column(String(30))
     address = Column(String(255))
-    # Credit terms in days; a sale on utang falls due this many days after the sale.
+    # Credit terms in days; a sale on credit falls due this many days after the sale.
     credit_days = Column(Integer, nullable=False, server_default="15")
     is_active = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -226,7 +281,7 @@ class Payment(Base):
 
 
 class ReceivableSettlement(Base):
-    """A payment collected against a sale's outstanding utang."""
+    """A payment collected against a sale's outstanding credit."""
     __tablename__ = "receivable_settlements"
 
     id = Column(Integer, primary_key=True)
@@ -242,26 +297,47 @@ class ReceivableSettlement(Base):
     sale = relationship("Sale", back_populates="settlements")
 
 
-class CashShift(Base):
-    """A cashier's drawer session: opening float, then a counted close."""
-    __tablename__ = "cash_shifts"
+class PostDatedCheque(Base):
+    """A post-dated cheque — received from a customer settling their credit,
+    or issued to pay a supplier. The money it represents stays in limbo
+    (status=pending) until the bank actually honors it on/after cheque_date:
+      cleared  -> received: creates the ReceivableSettlement now (credit
+                  finally goes down); issued: the purchase is marked paid now.
+      bounced  -> received: nothing to reverse, since it was never applied;
+                  issued: the purchase stays unpaid.
+      cancelled -> the cheque was returned/replaced before ever being deposited.
+    """
+    __tablename__ = "post_dated_cheques"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    opening_amount = Column(Numeric(12, 2), nullable=False, server_default="0")
-    opened_at = Column(DateTime(timezone=True), server_default=func.now())
+    direction = Column(String(10), nullable=False)              # received | issued
+    status = Column(String(12), nullable=False, server_default="pending")  # pending | cleared | bounced | cancelled
 
-    closing_amount = Column(Numeric(12, 2))    # what the cashier physically counted
-    expected_amount = Column(Numeric(12, 2))   # what the system says should be there
-    difference = Column(Numeric(12, 2))        # counted - expected (negative = short)
-    closed_at = Column(DateTime(timezone=True))
+    bank = Column(String(60))
+    cheque_no = Column(String(40))
+    cheque_date = Column(Date, nullable=False)
+    amount = Column(Numeric(12, 2), nullable=False, server_default="0")
     notes = Column(String(255))
 
-    user = relationship("User")
+    # Received: which sale/customer this is settling.
+    sale_id = Column(Integer, ForeignKey("sales.id"), nullable=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True)
+    settlement_id = Column(Integer, ForeignKey("receivable_settlements.id"), nullable=True)
 
-    @property
-    def is_open(self) -> bool:
-        return self.closed_at is None
+    # Issued: which purchase/supplier this is paying.
+    purchase_id = Column(Integer, ForeignKey("purchases.id"), nullable=True)
+    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
+
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+
+    sale = relationship("Sale")
+    customer = relationship("Customer")
+    settlement = relationship("ReceivableSettlement")
+    purchase = relationship("Purchase")
+    supplier = relationship("Supplier")
+    creator = relationship("User")
 
 
 class Supplier(Base):
@@ -282,12 +358,20 @@ class Supplier(Base):
 
 
 class Purchase(Base):
-    """A receiving (goods in) or a purchase return (goods back to supplier)."""
+    """A receiving (goods in) or a purchase return (goods back to supplier).
+
+    A receive-type purchase goes through a status lifecycle, mirroring
+    Quotations: pending (PO raised, nothing in stock yet) -> confirmed (goods
+    physically arrived — stock added and cost updated right here) -> paid
+    (payment settled with the supplier afterward; no further stock effect).
+    A return has no staging — it takes effect immediately, same as before.
+    """
     __tablename__ = "purchases"
 
     id = Column(Integer, primary_key=True)
     ref_no = Column(String(30), unique=True, index=True)
     txn_type = Column(String(12), nullable=False, server_default="receive")  # receive | return
+    status = Column(String(12), nullable=False, server_default="pending")   # pending | confirmed | paid | cancelled
     supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
     invoice_no = Column(String(40))        # supplier's invoice / DR number
     delivery_date = Column(String(20))     # as printed on the DR
@@ -296,9 +380,18 @@ class Purchase(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    payment_method = Column(String(20), nullable=True)   # cash | bank_transfer | cheque | gcash | other
+    paid_at = Column(DateTime(timezone=True), nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+
+    # For a return: which delivery it's being sent back from.
+    original_purchase_id = Column(Integer, ForeignKey("purchases.id"), nullable=True)
+
     supplier = relationship("Supplier")
     user = relationship("User")
     lines = relationship("PurchaseLine", back_populates="purchase", cascade="all, delete-orphan")
+    original_purchase = relationship("Purchase", remote_side=[id])
 
 
 class PurchaseLine(Base):

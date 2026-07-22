@@ -21,7 +21,7 @@
   <label>Credit Terms (days)
     <input name="credit_days" type="number" step="1" min="0"
            value="{{ customer.credit_days if customer else 15 }}">
-    <small class="hint">An utang from this customer falls due this many days after the sale. 0 = due immediately.</small>
+    <small class="hint">A credit from this customer falls due this many days after the sale. 0 = due immediately.</small>
   </label>
   <div class="form-actions full">
     <button class="btn" type="submit">{{ 'Save changes' if customer else 'Save customer' }}</button>

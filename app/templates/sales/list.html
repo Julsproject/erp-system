@@ -7,7 +7,8 @@
 
 <div class="tabs">
   <a class="tab {{ 'active' if tab == 'all' }}" href="/sales">All Sales</a>
-  <a class="tab {{ 'active' if tab == 'receivables' }}" href="/sales/receivables">Receivables (Utang)</a>
+  <a class="tab {{ 'active' if tab == 'receivables' }}" href="/sales/receivables">Receivables (Credits)</a>
+  <a class="tab" href="/quotations">Quotations</a>
 </div>
 
 <div class="stat-row">
@@ -15,7 +16,13 @@
   <div class="mini-stat"><span class="mini-num">{{ totals.sales|peso }}</span><span>Total Sales (Paid)</span></div>
 </div>
 
-<p class="muted" style="margin:-6px 0 16px;">Fully-paid transactions only. Sales with outstanding utang appear under <a href="/sales/receivables">Receivables</a>.</p>
+<p class="muted" style="margin:-6px 0 16px;">Fully-paid transactions only. Sales with outstanding credit appear under <a href="/sales/receivables">Receivables</a>.</p>
+
+<form class="toolbar" method="get" action="/sales">
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search invoice # or customer…">
+  <button class="btn-secondary" type="submit">Search</button>
+  {% if q %}<a class="btn-link" href="/sales">Clear</a>{% endif %}
+</form>
 
 <div class="table-wrap">
   <table class="grid">
@@ -34,9 +41,17 @@
         <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales">Receipt</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="empty">No fully-paid sales yet.</td></tr>
+      <tr><td colspan="7" class="empty">No fully-paid sales {{ 'match that search' if q else 'yet' }}.</td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn-secondary" href="/sales?page={{ page - 1 }}&q={{ q }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-secondary" href="/sales?page={{ page + 1 }}&q={{ q }}">Next →</a>{% endif %}
+</div>
+{% endif %}
 {% endblock %}

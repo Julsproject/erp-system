@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Post-Dated Cheques · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Post-Dated Cheques</h1>
+    <p class="muted">Cheques received from customers and issued to suppliers, held until they clear.</p>
+  </div>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ counts.get('pending', 0) }}</span><span>Pending</span></div>
+  <div class="mini-stat owed"><span class="mini-num">{{ pending_total|peso }}</span><span>Total Pending Value</span></div>
+</div>
+
+<div class="tabs">
+  <a class="tab {{ 'active' if not direction }}" href="/pdc?status_filter={{ status_filter }}">All</a>
+  <a class="tab {{ 'active' if direction == 'received' }}" href="/pdc?direction=received&status_filter={{ status_filter }}">Received <span class="muted">(from customers)</span></a>
+  <a class="tab {{ 'active' if direction == 'issued' }}" href="/pdc?direction=issued&status_filter={{ status_filter }}">Issued <span class="muted">(to suppliers)</span></a>
+</div>
+
+<div class="tabs" style="margin-bottom:18px;">
+  <a class="tab {{ 'active' if not status_filter }}" href="/pdc?direction={{ direction }}">All <span class="muted">({{ counts.values()|sum }})</span></a>
+  {% for s, label in labels.items() %}
+  <a class="tab {{ 'active' if status_filter == s }}" href="/pdc?direction={{ direction }}&status_filter={{ s }}">{{ label }} <span class="muted">({{ counts.get(s, 0) }})</span></a>
+  {% endfor %}
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Direction</th><th>Bank / Cheque #</th><th>Cheque Date</th><th>From / To</th>
+        <th class="num">Amount</th><th>Status</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in rows %}
+      <tr>
+        <td>
+          {% if p.direction == 'received' %}
+          <span class="txn" style="background:#dcfce7;color:#15803d;">Received</span>
+          {% else %}
+          <span class="txn" style="background:#e0f2fe;color:#0369a1;">Issued</span>
+          {% endif %}
+        </td>
+        <td class="strong">{{ p.bank or '—' }}{% if p.cheque_no %} · {{ p.cheque_no }}{% endif %}</td>
+        <td>
+          {{ p.cheque_date.strftime('%b %d, %Y') if p.cheque_date else '—' }}
+          {% if p.status == 'pending' and p.cheque_date < today %}
+          <span class="warn-tag" title="Past due — deposit or follow up">⚠ overdue</span>
+          {% elif p.status == 'pending' and p.cheque_date <= horizon %}
+          <span class="txn" style="background:#fef3c7;color:#b45309;">due soon</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if p.direction == 'received' %}{{ p.customer.name if p.customer else (p.sale.customer_name if p.sale else '—') }}
+          {% else %}{{ p.supplier.name if p.supplier else '—' }}{% endif %}
+        </td>
+        <td class="num strong">{{ p.amount|peso }}</td>
+        <td>
+          {% if p.status == 'pending' %}
+          <span class="txn" style="background:#fef3c7;color:#b45309;">Pending</span>
+          {% elif p.status == 'cleared' %}
+          <span class="txn" style="background:#dcfce7;color:#15803d;">Cleared</span>
+          {% elif p.status == 'bounced' %}
+          <span class="txn" style="background:#fee2e2;color:#b91c1c;">Bounced</span>
+          {% else %}
+          <span class="txn" style="background:#f1f5f9;color:#64748b;">Cancelled</span>
+          {% endif %}
+        </td>
+        <td class="row-actions"><a class="btn-link" href="/pdc/{{ p.id }}">View</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No cheques {{ 'with this status' if status_filter else 'on file' }}.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

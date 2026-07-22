@@ -10,6 +10,7 @@
   <button type="button" class="mode-btn active" data-m="payment" onclick="setMode('payment')">Payment</button>
   <button type="button" class="mode-btn" data-m="refund" onclick="setMode('refund')">Refund</button>
   <button type="button" class="mode-btn" data-m="exchange" onclick="setMode('exchange')">Exchange</button>
+  <button type="button" class="mode-btn" data-m="quotation" onclick="setMode('quotation')">Quotation</button>
 </div>
 
 <div class="pos-grid" id="saleView">
@@ -77,7 +78,7 @@
             <option value="gcash">GCash</option>
             <option value="card">Card (Debit/Credit)</option>
             <option value="bank_transfer">Bank Transfer</option>
-            <option value="receivable">Receivable (Utang)</option>
+            <option value="receivable">Receivable (Credit)</option>
           </select>
         </label>
       </div>
@@ -88,7 +89,7 @@
       </div>
 
       <div class="totals-row"><span>Paid now</span><span id="tPaid">₱0.00</span></div>
-      <div class="totals-row receivable" id="rowReceivable" style="display:none;"><span>Receivable (Utang)</span><span id="tReceivable">₱0.00</span></div>
+      <div class="totals-row receivable" id="rowReceivable" style="display:none;"><span>Receivable (Credit)</span><span id="tReceivable">₱0.00</span></div>
       <div class="totals-row change" id="rowChange" style="display:none;"><span>Change</span><span id="tChange">₱0.00</span></div>
       <div class="pay-warn" id="payWarn" style="display:none;"></div>
     </div>
@@ -171,10 +172,62 @@
   </div>
 </div>
 
+<!-- QUOTATION -->
+<div id="quotationView" style="display:none;">
+  <div class="pos-grid">
+    <section class="card pos-search-panel">
+      <input id="quoSearch" class="search pos-search" type="search" placeholder="Search product to add…" autocomplete="off">
+      <div id="quoResults" class="pos-results"><p class="pos-hint">Type a product name to begin.</p></div>
+    </section>
+
+    <section class="card pos-cart-panel">
+      <div class="pos-head-fields">
+        <label class="pos-customer">Customer <span class="muted">(optional)</span>
+          <input id="quoCustomerName" type="text" placeholder="Walk-in" autocomplete="off">
+        </label>
+      </div>
+
+      <div class="table-wrap">
+        <table class="grid cart-table">
+          <thead><tr><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Disc</th><th class="num">Total</th><th></th></tr></thead>
+          <tbody id="quoCartBody"><tr><td colspan="7" class="empty">No items yet — add products from the left.</td></tr></tbody>
+        </table>
+      </div>
+
+      <div class="totals">
+        <div class="totals-row"><span>Subtotal</span><span id="quoSubtotal">₱0.00</span></div>
+        <div class="totals-row">
+          <span>Discount</span>
+          <span class="disc-cell">
+            <button type="button" class="disc-toggle" id="quoDiscTypeBtn" onclick="quoToggleDiscType()">₱</button>
+            <input id="quoDiscount" class="disc-input" type="number" step="0.01" min="0" value="0" oninput="quoComputeTotals()">
+          </span>
+        </div>
+        <div class="totals-row">
+          <span><label class="vat-label"><input type="checkbox" id="quoVatOn" onchange="quoComputeTotals()"> VAT (12%) · included</label></span>
+          <span id="quoVat">₱0.00</span>
+        </div>
+        <div class="totals-row" id="quoRowNetVat" style="display:none;"><span class="muted">Net of VAT</span><span id="quoNetVat">₱0.00</span></div>
+        <div class="totals-row grand"><span>Total</span><span id="quoTotal">₱0.00</span></div>
+      </div>
+
+      <p class="muted" style="margin:10px 0 0;font-size:12.5px;">
+        A quotation is an estimate only — it does not affect stock. Convert it to a real sale later from the Quotations page.
+      </p>
+
+      <div class="pos-actions">
+        <button class="btn-secondary" onclick="quoClear()">Clear</button>
+        <button class="btn pos-complete" id="quoSaveBtn" onclick="quoSave()" disabled>Save Quotation</button>
+      </div>
+      <div id="quoError" class="alert" style="display:none;margin-top:14px;"></div>
+    </section>
+  </div>
+</div>
+
 <script>
 const peso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const VAT_DIV = 1.12, VAT_RATE = 0.12;
-const METHODS = [['cash','Cash'],['gcash','GCash'],['card','Card'],['bank_transfer','Bank Transfer'],['receivable','Receivable (Utang)']];
+const METHODS = [['cash','Cash'],['gcash','GCash'],['card','Card'],['bank_transfer','Bank Transfer'],['receivable','Receivable (Credit)']];
 let cart = [];
 let payments = [{ method: 'cash', amount: '' }];
 let paymentMode = 'full';   // 'full' | 'split'
@@ -243,6 +296,7 @@ function setMode(m) {
   document.getElementById('saleView').style.display = m === 'payment' ? '' : 'none';
   document.getElementById('refundView').style.display = m === 'refund' ? 'block' : 'none';
   document.getElementById('exchangeView').style.display = m === 'exchange' ? 'block' : 'none';
+  document.getElementById('quotationView').style.display = m === 'quotation' ? 'block' : 'none';
 }
 
 function setPaymentMode(m) {
@@ -417,7 +471,7 @@ function computeTotals() {
   let ok = cart.length > 0, warn = '';
   if (cart.length === 0) { ok = false; }
   else if (!invoice) { ok = false; warn = 'Enter the invoice number (from your booklet).'; }
-  else if (receivable > 0 && !custName) { ok = false; warn = 'Receivable (utang) needs a customer name above.'; }
+  else if (receivable > 0 && !custName) { ok = false; warn = 'Receivable (credit) needs a customer name above.'; }
   else if (remaining > 0.009) { ok = false; warn = 'Short by ' + peso(remaining) + ' — add a payment or receivable.'; }
 
   const w = document.getElementById('payWarn');
@@ -664,8 +718,134 @@ async function doExchange() {
   else { const e = document.getElementById('exError'); e.textContent = data.error || 'Exchange failed.'; e.style.display = 'block'; btn.disabled = false; btn.textContent = 'Complete Exchange'; }
 }
 
+/* ===== QUOTATION ===== */
+let quoCart = [];
+let quoDiscType = 'amt';
+let quoSearchTimer = null;
+document.getElementById('quoSearch').addEventListener('input', () => { clearTimeout(quoSearchTimer); quoSearchTimer = setTimeout(quoRunSearch, 180); });
+
+async function quoRunSearch() {
+  const q = document.getElementById('quoSearch').value.trim();
+  const res = await fetch('/pos/search?q=' + encodeURIComponent(q));
+  const data = await res.json();
+  const box = document.getElementById('quoResults');
+  const products = data.products || [];
+  if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
+  box.innerHTML = '';
+  products.forEach(p => {
+    const el = document.createElement('button');
+    el.type = 'button'; el.className = 'pos-item'; el.onclick = () => quoAdd(p);
+    el.innerHTML =
+      '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span></div>' +
+      '<div class="pos-item-sub">' + peso(p.units[0].price) + ' / ' + escapeHtml(p.base_unit) + '</div>';
+    box.appendChild(el);
+  });
+}
+function quoAdd(p) { quoCart.push({ product: p, unitIndex: 0, qty: 1, discount: 0, discType: 'amt' }); quoRenderCart(); }
+function quoLineDiscAmt(line) {
+  const gross = line.qty * line.product.units[line.unitIndex].price;
+  return line.discType === 'pct' ? gross * (line.discount || 0) / 100 : (line.discount || 0);
+}
+function quoLineTotalOf(line) { return Math.max(line.qty * line.product.units[line.unitIndex].price - quoLineDiscAmt(line), 0); }
+function quoToggleLineDiscType(i) { quoCart[i].discType = quoCart[i].discType === 'pct' ? 'amt' : 'pct'; quoRenderCart(); }
+function quoToggleDiscType() {
+  quoDiscType = quoDiscType === 'pct' ? 'amt' : 'pct';
+  document.getElementById('quoDiscTypeBtn').textContent = quoDiscType === 'pct' ? '%' : '₱';
+  quoComputeTotals();
+}
+function quoOverallDiscAmt(subtotal) {
+  const v = parseFloat(document.getElementById('quoDiscount').value) || 0;
+  return quoDiscType === 'pct' ? subtotal * v / 100 : v;
+}
+function quoRenderCart() {
+  const body = document.getElementById('quoCartBody');
+  if (!quoCart.length) {
+    body.innerHTML = '<tr><td colspan="7" class="empty">No items yet — add products from the left.</td></tr>';
+    quoComputeTotals(); return;
+  }
+  body.innerHTML = '';
+  quoCart.forEach((line, i) => {
+    const unit = line.product.units[line.unitIndex];
+    const opts = line.product.units.map((u, ui) =>
+      '<option value="' + ui + '"' + (ui === line.unitIndex ? ' selected' : '') + '>' +
+      escapeHtml(u.name) + ' (' + peso(u.price) + ')</option>').join('');
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td class="strong">' + escapeHtml(line.product.name) + '</td>' +
+      '<td><select class="cart-unit" onchange="quoSetUnit(' + i + ', this.value)">' + opts + '</select></td>' +
+      '<td class="num"><input class="cart-qty" type="number" step="any" min="0" value="' + fmtQty(line.qty) + '" oninput="quoSetQty(' + i + ', this.value)"></td>' +
+      '<td class="num">' + peso(unit.price) + '</td>' +
+      '<td class="num"><div class="disc-cell"><button type="button" class="disc-toggle" onclick="quoToggleLineDiscType(' + i + ')">' + (line.discType === 'pct' ? '%' : '₱') + '</button><input class="cart-disc" type="number" step="any" min="0" value="' + line.discount + '" oninput="quoSetDisc(' + i + ', this.value)"></div></td>' +
+      '<td class="num strong line-total"></td>' +
+      '<td><button class="btn-link danger" onclick="quoRemove(' + i + ')">✕</button></td>';
+    body.appendChild(tr);
+  });
+  quoRefreshComputed();
+}
+/* Update line totals WITHOUT rebuilding inputs, so typing keeps focus. */
+function quoRefreshComputed() {
+  const rows = document.querySelectorAll('#quoCartBody tr');
+  quoCart.forEach((line, i) => {
+    const tr = rows[i];
+    if (!tr) return;
+    const tot = tr.querySelector('.line-total');
+    if (tot) tot.textContent = peso(quoLineTotalOf(line));
+  });
+  quoComputeTotals();
+}
+function quoSetUnit(i, v) { quoCart[i].unitIndex = parseInt(v); quoRenderCart(); }
+function quoSetQty(i, v) { quoCart[i].qty = parseFloat(v) || 0; quoRefreshComputed(); }
+function quoSetDisc(i, v) { quoCart[i].discount = parseFloat(v) || 0; quoRefreshComputed(); }
+function quoRemove(i) { quoCart.splice(i, 1); quoRenderCart(); }
+function quoClear() {
+  quoCart = [];
+  document.getElementById('quoDiscount').value = 0;
+  document.getElementById('quoCustomerName').value = '';
+  document.getElementById('quoVatOn').checked = false;
+  quoDiscType = 'amt'; document.getElementById('quoDiscTypeBtn').textContent = '₱';
+  quoRenderCart(); document.getElementById('quoSearch').focus();
+}
+function quoComputeTotals() {
+  let subtotal = 0;
+  quoCart.forEach(l => subtotal += quoLineTotalOf(l));
+  // VAT is inclusive, same convention as a normal sale: total never changes.
+  const grand = Math.max(subtotal - quoOverallDiscAmt(subtotal), 0);
+  const vat = document.getElementById('quoVatOn').checked ? grand * VAT_RATE / VAT_DIV : 0;
+
+  document.getElementById('quoSubtotal').textContent = peso(subtotal);
+  document.getElementById('quoVat').textContent = peso(vat);
+  document.getElementById('quoTotal').textContent = peso(grand);
+  toggleRow('quoRowNetVat', vat > 0, 'quoNetVat', grand - vat);
+  document.getElementById('quoSaveBtn').disabled = quoCart.length === 0;
+}
+async function quoSave() {
+  if (!quoCart.length) return;
+  const btn = document.getElementById('quoSaveBtn'); btn.disabled = true; btn.textContent = 'Saving…';
+  let subtotal = 0; quoCart.forEach(l => subtotal += quoLineTotalOf(l));
+  const payload = {
+    customer_name: document.getElementById('quoCustomerName').value,
+    vat_applied: document.getElementById('quoVatOn').checked,
+    discount_total: quoOverallDiscAmt(subtotal),
+    lines: quoCart.map(line => {
+      const unit = line.product.units[line.unitIndex];
+      return { product_id: line.product.id, unit_name: unit.name, factor: unit.factor,
+               qty: line.qty, unit_price: unit.price, discount: quoLineDiscAmt(line) };
+    })
+  };
+  try {
+    const res = await fetch('/quotations', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+    const data = await res.json();
+    if (data.ok) { window.location = '/quotations/' + data.quotation_id; }
+    else { showQuoError(data.error || 'Save failed.'); btn.disabled = false; btn.textContent = 'Save Quotation'; }
+  } catch (e) {
+    showQuoError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Save Quotation';
+  }
+}
+function showQuoError(msg) { const e = document.getElementById('quoError'); e.textContent = msg; e.style.display = 'block'; }
+
 tick(); setInterval(tick, 30000);
 renderPayments();
 renderCart();
+quoRenderCart();
 </script>
 {% endblock %}

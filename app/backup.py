@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_db
-from .deps import get_current_user
+from .deps import get_current_user, is_admin
 from .templating import templates
 
 router = APIRouter()
@@ -83,6 +83,8 @@ def _list_backups():
 def backup_page(request: Request, error: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
     files = _list_backups()
     return templates.TemplateResponse(
         "backup.html",
@@ -99,6 +101,8 @@ def backup_download(user=Depends(get_current_user)):
     """Make a fresh dump right now and send it to the browser."""
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
     sql, err = run_pg_dump()
     if err:
         return RedirectResponse(f"/backup?error={err[:200]}", status_code=302)
@@ -115,6 +119,8 @@ def backup_file(name: str, user=Depends(get_current_user)):
     """Re-download one of the automatic daily backups."""
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
     if not SAFE_NAME.match(name):
         return RedirectResponse("/backup?error=Invalid+file+name.", status_code=302)
     path = (BACKUP_DIR / name).resolve()

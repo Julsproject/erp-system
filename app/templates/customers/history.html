@@ -16,7 +16,7 @@
 <div class="stat-row">
   <div class="mini-stat"><span class="mini-num">{{ count }}</span><span>Transactions</span></div>
   <div class="mini-stat"><span class="mini-num">{{ total_spent|peso }}</span><span>Total Purchases</span></div>
-  <div class="mini-stat"><span class="mini-num {{ 'owed' if total_out > 0 }}">{{ total_out|peso }}</span><span>Outstanding (Utang)</span></div>
+  <div class="mini-stat"><span class="mini-num {{ 'owed' if total_out > 0 }}">{{ total_out|peso }}</span><span>Outstanding (Credits)</span></div>
 </div>
 
 {% if rows %}
@@ -41,7 +41,7 @@
         <td class="num strong {{ 'neg' if s.total and s.total < 0 }}">{{ s.total|peso }}</td>
         <td>
           {% if r.outstanding > 0 %}
-          <span class="txn" style="background:#fef3c7;color:#b7791f;">Utang {{ r.outstanding|peso }}</span>
+          <span class="txn" style="background:#fef3c7;color:#b7791f;">Credit {{ r.outstanding|peso }}</span>
           {% else %}
           <span class="txn" style="background:#dcfce7;color:#15803d;">Paid</span>
           {% endif %}

@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+{% block title %}{{ quote.quote_no }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head no-print">
+  <div>
+    <h1 class="page-title">{{ quote.quote_no }}</h1>
+    <p class="muted">{{ quote.created_at.strftime('%b %d, %Y %I:%M %p') if quote.created_at else '' }}</p>
+  </div>
+  <div class="head-actions">
+    <a class="btn-secondary" href="/quotations">← Back to Quotations</a>
+    <button class="btn-secondary" type="button" onclick="window.print()">🖨 Print</button>
+  </div>
+</div>
+
+{% if error %}<div class="alert no-print">{{ error }}</div>{% endif %}
+
+{% if quote.status == 'pending' %}
+<div class="quo-status-banner pending">
+  <strong>Pending.</strong> This is an estimate only — nothing has been reserved or sold yet.
+</div>
+{% elif quote.status == 'confirmed' %}
+<div class="quo-status-banner confirmed">
+  <strong>Confirmed.</strong> The customer has agreed to this price. Convert it to a sale once they pay.
+</div>
+{% elif quote.status == 'paid' %}
+<div class="quo-status-banner paid">
+  <strong>Paid.</strong> Converted to Sale
+  {% if quote.converted_sale %}<a href="/pos/receipt/{{ quote.converted_sale.id }}?from=quotation&quote={{ quote.id }}">{{ quote.converted_sale.invoice_no }}</a>{% endif %}
+  on {{ quote.paid_at.strftime('%b %d, %Y %I:%M %p') if quote.paid_at else '' }}.
+</div>
+{% else %}
+<div class="quo-status-banner cancelled">
+  <strong>Cancelled</strong>{% if quote.cancelled_at %} on {{ quote.cancelled_at.strftime('%b %d, %Y %I:%M %p') }}{% endif %}.
+</div>
+{% endif %}
+
+<div class="card" style="padding:24px; max-width:640px;">
+  <div class="r-meta" style="display:flex;justify-content:space-between;font-size:13.5px;color:var(--muted);margin-bottom:16px;">
+    <span>Customer: <strong style="color:var(--ink,#0f172a);">{{ quote.customer_name or 'Walk-in' }}</strong></span>
+    <span>{{ quote.quote_no }}</span>
+  </div>
+
+  <table class="grid" style="box-shadow:none;border:none;">
+    <thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Total</th></tr></thead>
+    <tbody>
+      {% for l in quote.lines %}
+      <tr>
+        <td class="strong">{{ l.product_name }}<small class="muted" style="display:block;">{{ l.unit_name }}{% if l.discount and l.discount > 0 %} · − {{ l.discount|peso }}{% endif %}</small></td>
+        <td class="num">{{ l.qty|qty }}</td>
+        <td class="num">{{ l.unit_price|peso }}</td>
+        <td class="num strong">{{ l.line_total|peso }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="r-tot" style="border-top:1px dashed var(--line);margin-top:10px;padding-top:10px;">
+    <div class="row" style="display:flex;justify-content:space-between;padding:3px 0;"><span>Subtotal</span><b>{{ quote.subtotal|peso }}</b></div>
+    {% if quote.discount_total and quote.discount_total > 0 %}
+    <div class="row" style="display:flex;justify-content:space-between;padding:3px 0;"><span>Discount</span><b>− {{ quote.discount_total|peso }}</b></div>
+    {% endif %}
+    {% if quote.vat_amount and quote.vat_amount > 0 %}
+    <div class="row" style="display:flex;justify-content:space-between;padding:3px 0;"><span>Net of VAT</span><b>{{ (quote.total - quote.vat_amount)|peso }}</b></div>
+    <div class="row" style="display:flex;justify-content:space-between;padding:3px 0;"><span>VAT (12%) · included</span><b>{{ quote.vat_amount|peso }}</b></div>
+    {% endif %}
+    <div class="row grand" style="display:flex;justify-content:space-between;font-size:18px;font-weight:800;padding-top:8px;"><span>TOTAL</span><span>{{ quote.total|peso }}</span></div>
+  </div>
+</div>
+
+<div class="no-print" style="margin-top:18px;">
+  {% if quote.status == 'pending' %}
+  <div class="pos-actions" style="justify-content:flex-start;">
+    <form method="post" action="/quotations/{{ quote.id }}/confirm"><button class="btn" type="submit">✓ Customer confirmed — proceed</button></form>
+    <form method="post" action="/quotations/{{ quote.id }}/cancel" onsubmit="return confirm('Cancel this quotation?');"><button class="btn-secondary" type="submit">Cancel quotation</button></form>
+  </div>
+  {% elif quote.status == 'confirmed' %}
+  <section class="card" style="padding:20px;">
+    <h3 class="card-title">Convert to Sale</h3>
+    <p class="muted" style="margin-top:0;">
+      The customer is paying now. Enter the invoice number from your booklet — split the payment across
+      methods if needed.
+    </p>
+
+    <label class="pos-customer" style="max-width:280px;">Invoice # <span class="muted">(booklet)</span>
+      <input id="qcInvoice" type="text" autocomplete="off" oninput="qcRecompute()" autofocus>
+    </label>
+
+    <div class="pay" style="margin-top:14px;max-width:520px;">
+      <div class="pay-head">
+        <span class="pay-title">Payment</span>
+        <div class="seg">
+          <button type="button" class="seg-btn active" id="qcSegFull" onclick="qcSetMode('full')">Full</button>
+          <button type="button" class="seg-btn" id="qcSegSplit" onclick="qcSetMode('split')">Split</button>
+        </div>
+      </div>
+
+      <div id="qcFullPay">
+        <label class="pay-full-method">Method
+          <select id="qcFullMethod" onchange="qcRecompute()">
+            {% for value, label in methods.items() %}
+            <option value="{{ value }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+
+      <div id="qcSplitPay" style="display:none;">
+        <div class="pay-subhead"><span class="muted">Enter each method and amount</span><button type="button" class="btn-link" onclick="qcAddPayment()">+ Add method</button></div>
+        <div id="qcPaymentsList"></div>
+      </div>
+
+      <div class="totals-row"><span>Quote total</span><span>{{ quote.total|peso }}</span></div>
+      <div class="totals-row"><span>Paid now</span><span id="qcPaid">₱0.00</span></div>
+      <div class="totals-row receivable" id="qcRowReceivable" style="display:none;"><span>Receivable (Credit)</span><span id="qcReceivable">₱0.00</span></div>
+      <div class="totals-row change" id="qcRowChange" style="display:none;"><span>Change</span><span id="qcChange">₱0.00</span></div>
+      <div class="pay-warn" id="qcPayWarn" style="display:none;"></div>
+    </div>
+
+    <div class="pos-actions">
+      <button class="btn pos-complete" id="qcCompleteBtn" onclick="qcConvert()" disabled>Complete Sale</button>
+    </div>
+    <div id="qcError" class="alert" style="display:none;margin-top:14px;"></div>
+
+    <form method="post" action="/quotations/{{ quote.id }}/cancel" style="margin-top:14px;" onsubmit="return confirm('Cancel this quotation?');">
+      <button class="btn-link danger" type="submit">Cancel this quotation instead</button>
+    </form>
+  </section>
+
+  <script>
+    const QUOTE_ID = {{ quote.id }};
+    const QUOTE_TOTAL = {{ quote.total }};
+    const QUOTE_HAS_CUSTOMER = {{ 'true' if quote.customer_name else 'false' }};
+    const QC_METHODS = { {% for value, label in methods.items() %}'{{ value }}': '{{ label }}',{% endfor %} };
+    const qcPeso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+    let qcPayments = [{ method: 'cash', amount: '' }];
+    let qcMode = 'full';
+
+    function qcSetMode(m) {
+      qcMode = m;
+      document.getElementById('qcSegFull').classList.toggle('active', m === 'full');
+      document.getElementById('qcSegSplit').classList.toggle('active', m === 'split');
+      document.getElementById('qcFullPay').style.display = m === 'full' ? 'block' : 'none';
+      document.getElementById('qcSplitPay').style.display = m === 'split' ? 'block' : 'none';
+      qcRecompute();
+    }
+    function qcRenderPayments() {
+      const box = document.getElementById('qcPaymentsList');
+      box.innerHTML = '';
+      qcPayments.forEach((p, i) => {
+        const opts = Object.entries(QC_METHODS).map(([v, l]) =>
+          '<option value="' + v + '"' + (p.method === v ? ' selected' : '') + '>' + l + '</option>').join('');
+        const row = document.createElement('div');
+        row.className = 'pay-line';
+        row.innerHTML =
+          '<select class="pay-method" onchange="qcSetMethod(' + i + ', this.value)">' + opts + '</select>' +
+          '<input class="pay-amount" type="number" step="0.01" min="0" value="' + p.amount + '" placeholder="0.00" oninput="qcSetAmount(' + i + ', this.value)">' +
+          '<button type="button" class="pay-exact" onclick="qcFillExact(' + i + ')" title="Fill remaining">Exact</button>' +
+          (qcPayments.length > 1 ? '<button type="button" class="btn-link danger pay-remove" onclick="qcRemovePayment(' + i + ')">✕</button>' : '<span class="pay-remove"></span>');
+        box.appendChild(row);
+      });
+    }
+    function qcSetMethod(i, v) { qcPayments[i].method = v; qcRecompute(); }
+    function qcSetAmount(i, v) { qcPayments[i].amount = v; qcRecompute(); }
+    function qcAddPayment() { qcPayments.push({ method: 'cash', amount: '' }); qcRenderPayments(); qcRecompute(); }
+    function qcRemovePayment(i) { qcPayments.splice(i, 1); qcRenderPayments(); qcRecompute(); }
+    function qcFillExact(i) {
+      const others = qcPayments.reduce((s, p, idx) => idx === i ? s : s + (parseFloat(p.amount) || 0), 0);
+      qcPayments[i].amount = Math.max(Math.round((QUOTE_TOTAL - others) * 100) / 100, 0);
+      qcRenderPayments(); qcRecompute();
+    }
+    function qcToggleRow(rowId, show, valId, val) {
+      document.getElementById(rowId).style.display = show ? 'flex' : 'none';
+      if (show) document.getElementById(valId).textContent = qcPeso(val);
+    }
+    function qcRecompute() {
+      let paid = 0, receivable = 0;
+      if (qcMode === 'full') {
+        const method = document.getElementById('qcFullMethod').value;
+        if (method === 'receivable') receivable = QUOTE_TOTAL; else paid = QUOTE_TOTAL;
+      } else {
+        qcPayments.forEach(p => { const a = parseFloat(p.amount) || 0; if (p.method === 'receivable') receivable += a; else paid += a; });
+      }
+      if (receivable > QUOTE_TOTAL) receivable = QUOTE_TOTAL;
+      const dueNow = Math.max(QUOTE_TOTAL - receivable, 0);
+      const change = Math.max(paid - dueNow, 0);
+      const remaining = Math.max(dueNow - paid, 0);
+
+      document.getElementById('qcPaid').textContent = qcPeso(paid);
+      qcToggleRow('qcRowReceivable', receivable > 0, 'qcReceivable', receivable);
+      qcToggleRow('qcRowChange', change > 0.001, 'qcChange', change);
+
+      const invoice = document.getElementById('qcInvoice').value.trim();
+      let ok = true, warn = '';
+      if (!invoice) { ok = false; warn = 'Enter the invoice number (from your booklet).'; }
+      else if (receivable > 0 && !QUOTE_HAS_CUSTOMER) { ok = false; warn = 'Receivable (credit) needs a customer name on this quotation.'; }
+      else if (remaining > 0.009) { ok = false; warn = 'Short by ' + qcPeso(remaining) + ' — add a payment or receivable.'; }
+
+      const w = document.getElementById('qcPayWarn');
+      if (warn) { w.textContent = warn; w.style.display = 'block'; } else { w.style.display = 'none'; }
+      document.getElementById('qcCompleteBtn').disabled = !ok;
+    }
+    async function qcConvert() {
+      const btn = document.getElementById('qcCompleteBtn'); btn.disabled = true; btn.textContent = 'Processing…';
+      let payList;
+      if (qcMode === 'full') {
+        payList = [{ method: document.getElementById('qcFullMethod').value, amount: QUOTE_TOTAL }];
+      } else {
+        payList = qcPayments.map(p => ({ method: p.method, amount: parseFloat(p.amount) || 0 })).filter(p => p.amount > 0);
+      }
+      const payload = { invoice_no: document.getElementById('qcInvoice').value, payments: payList };
+      try {
+        const res = await fetch('/quotations/' + QUOTE_ID + '/convert', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (data.ok) { window.location = '/pos/receipt/' + data.sale_id + '?from=quotation&quote=' + QUOTE_ID; }
+        else { qcShowError(data.error || 'Conversion failed.'); btn.disabled = false; btn.textContent = 'Complete Sale'; }
+      } catch (e) {
+        qcShowError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Complete Sale';
+      }
+    }
+    function qcShowError(msg) { const e = document.getElementById('qcError'); e.textContent = msg; e.style.display = 'block'; }
+
+    qcRenderPayments();
+    qcRecompute();
+  </script>
+  {% elif quote.status == 'cancelled' %}
+  <form method="post" action="/quotations/{{ quote.id }}/reopen">
+    <button class="btn-secondary" type="submit">↺ Reopen as pending</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

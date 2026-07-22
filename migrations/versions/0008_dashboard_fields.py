@@ -1,4 +1,4 @@
-"""low-stock threshold, customer credit terms, utang due date, sale cost snapshot
+"""low-stock threshold, customer credit terms, credit due date, sale cost snapshot
 
 Revision ID: 0008
 Revises: 0007
@@ -17,10 +17,10 @@ def upgrade() -> None:
     # Low-stock alerts: per-product threshold in base units (0 = no alert).
     op.add_column("products", sa.Column("reorder_level", sa.Numeric(14, 3), server_default="0", nullable=False))
 
-    # Credit terms per customer, used to compute an utang's due date.
+    # Credit terms per customer, used to compute a credit's due date.
     op.add_column("customers", sa.Column("credit_days", sa.Integer(), server_default="15", nullable=False))
 
-    # When the utang on a sale falls due.
+    # When the credit on a sale falls due.
     op.add_column("sales", sa.Column("due_date", sa.Date(), nullable=True))
 
     # Snapshot of the product's cost (per base unit) at the moment of sale.

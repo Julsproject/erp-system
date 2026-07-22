@@ -1,4 +1,4 @@
-"""receivable settlements (utang collections)
+"""receivable settlements (credit collections)
 
 Revision ID: 0005
 Revises: 0004

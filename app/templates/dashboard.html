@@ -21,7 +21,7 @@
     {% if backup.missing %}
     <h2>No backup exists yet</h2>
     <p>
-      If this PC's hard drive fails right now, every sale, product and utang record is gone
+      If this PC's hard drive fails right now, every sale, product and credit record is gone
       permanently. Make a backup and copy it to the external hard drive.
     </p>
     {% else %}
@@ -56,9 +56,9 @@
     <span class="kpi-value">{{ inventory.cost|peso }}</span>
     <span class="kpi-sub">{{ inventory.skus }} items · {{ inventory.retail|peso }} at retail</span>
   </div>
-  <div class="kpi {{ 'kpi-warn' if utang_total > 0 }}">
-    <span class="kpi-label">Outstanding Utang</span>
-    <span class="kpi-value">{{ utang_total|peso }}</span>
+  <div class="kpi {{ 'kpi-warn' if credit_total > 0 }}">
+    <span class="kpi-label">Outstanding Credits</span>
+    <span class="kpi-value">{{ credit_total|peso }}</span>
     <span class="kpi-sub">
       {% if overdue %}<strong class="danger-text">{{ overdue|length }} overdue</strong> · {% endif %}
       {{ due_soon|length }} due within {{ 15 }} days
@@ -162,6 +162,11 @@
       <span class="attn-num">{{ '—' if backup.missing else backup.days }}</span>
       <span class="attn-label">{{ 'No backup!' if backup.missing else 'Days since backup' }}</span>
     </a>
+
+    <a class="attn {{ 'warn' if pdc_alert_count else 'ok' }}" href="/pdc">
+      <span class="attn-num">{{ pdc_alert_count }}</span>
+      <span class="attn-label">Cheques due/overdue</span>
+    </a>
   </div>
 
   {% if overdue or due_soon %}
@@ -243,22 +248,26 @@
   </section>
 
   <section class="card chart-card">
-    <h3 class="card-title">Top customers <span class="muted">· by amount spent</span></h3>
-    {% if top_customers %}
+    <h3 class="card-title">Incoming deliveries <span class="muted">· Purchase Orders awaiting receipt</span></h3>
+    {% if pending_pos %}
     <table class="grid mini">
-      <thead><tr><th>#</th><th>Customer</th><th class="num">Orders</th><th class="num">Spent</th></tr></thead>
+      <thead><tr><th>Ref #</th><th>Supplier</th><th class="num">Total</th><th></th></tr></thead>
       <tbody>
-        {% for c in top_customers %}
+        {% for p in pending_pos %}
         <tr>
-          <td class="rank">{{ loop.index }}</td>
-          <td class="strong">{{ c.customer_name }}</td>
-          <td class="num">{{ c.orders }}</td>
-          <td class="num strong">{{ c.spent|peso }}</td>
+          <td class="strong">{{ p.ref_no }}</td>
+          <td>{{ p.supplier.name if p.supplier else '—' }}</td>
+          <td class="num strong">{{ p.total|peso }}</td>
+          <td class="row-actions"><a class="btn-link" href="/purchases/{{ p.id }}">View</a></td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
-    {% else %}<p class="pos-hint">No named customers in this period. Walk-in sales aren't counted here.</p>{% endif %}
+    {% if pending_po_count > pending_pos|length %}
+    <p class="muted" style="margin:8px 0 0;font-size:12px;">+ {{ pending_po_count - pending_pos|length }} more — <a href="/purchases?status_filter=pending">see all pending</a></p>
+    {% endif %}
+    <p class="muted" style="margin:10px 0 0;font-size:12.5px;">{{ pending_po_count }} pending · {{ pending_pos_total|peso }} total value</p>
+    {% else %}<p class="pos-hint">No Purchase Orders waiting on a delivery. 🎉</p>{% endif %}
   </section>
 </div>
 

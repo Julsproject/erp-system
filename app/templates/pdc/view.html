@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Cheque #{{ pdc.cheque_no or pdc.id }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{{ 'Received' if pdc.direction == 'received' else 'Issued' }} Cheque {{ '#' ~ pdc.cheque_no if pdc.cheque_no else '' }}</h1>
+    <p class="muted">Recorded {{ pdc.created_at.strftime('%b %d, %Y %I:%M %p') if pdc.created_at else '' }}
+      {% if pdc.creator %} · by {{ pdc.creator.full_name or pdc.creator.username }}{% endif %}</p>
+  </div>
+  <a class="btn-secondary" href="/pdc">← Back to Cheques</a>
+</div>
+
+{% if pdc.status == 'pending' %}
+  {% if pdc.cheque_date < today %}
+  <div class="quo-status-banner cancelled" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">
+    <strong>⚠ Overdue.</strong> This cheque's date ({{ pdc.cheque_date.strftime('%b %d, %Y') }}) has passed —
+    deposit it (if received) or follow up with the supplier (if issued), then update its status below.
+  </div>
+  {% else %}
+  <div class="quo-status-banner pending">
+    <strong>Pending.</strong> Dated {{ pdc.cheque_date.strftime('%b %d, %Y') }} —
+    {% if pdc.direction == 'received' %}the customer's credit stays outstanding until this clears.
+    {% else %}the delivery it's paying for stays unpaid until this clears.{% endif %}
+  </div>
+  {% endif %}
+{% elif pdc.status == 'cleared' %}
+<div class="quo-status-banner paid">
+  <strong>Cleared.</strong> {{ 'Credit was settled' if pdc.direction == 'received' else 'Purchase was marked paid' }}
+  on {{ pdc.resolved_at.strftime('%b %d, %Y %I:%M %p') if pdc.resolved_at else '' }}.
+</div>
+{% elif pdc.status == 'bounced' %}
+<div class="quo-status-banner cancelled" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">
+  <strong>Bounced.</strong> {{ 'The credit remains outstanding.' if pdc.direction == 'received' else 'The purchase remains unpaid.' }}
+  {% if pdc.notes %}<br>Note: {{ pdc.notes }}{% endif %}
+</div>
+{% else %}
+<div class="quo-status-banner cancelled">
+  <strong>Cancelled</strong>{% if pdc.resolved_at %} on {{ pdc.resolved_at.strftime('%b %d, %Y %I:%M %p') }}{% endif %}.
+</div>
+{% endif %}
+
+<div class="card" style="padding:20px;max-width:560px;">
+  <div class="r-meta" style="display:flex;flex-direction:column;gap:10px;font-size:13.5px;">
+    <div class="totals-row"><span class="muted">Bank</span><strong>{{ pdc.bank or '—' }}</strong></div>
+    <div class="totals-row"><span class="muted">Cheque #</span><strong>{{ pdc.cheque_no or '—' }}</strong></div>
+    <div class="totals-row"><span class="muted">Cheque date</span><strong>{{ pdc.cheque_date.strftime('%b %d, %Y') if pdc.cheque_date else '—' }}</strong></div>
+    <div class="totals-row"><span class="muted">Amount</span><strong>{{ pdc.amount|peso }}</strong></div>
+    {% if pdc.direction == 'received' %}
+    <div class="totals-row"><span class="muted">Customer</span><strong>{{ pdc.customer.name if pdc.customer else (pdc.sale.customer_name if pdc.sale else '—') }}</strong></div>
+    {% if pdc.sale %}<div class="totals-row"><span class="muted">Invoice</span><a class="btn-link" href="/pos/receipt/{{ pdc.sale.id }}?from=sales">{{ pdc.sale.invoice_no }}</a></div>{% endif %}
+    {% if pdc.customer %}<div class="totals-row"><span class="muted">Statement</span><a class="btn-link" href="/credits/{{ pdc.customer.id }}">View full account →</a></div>{% endif %}
+    {% else %}
+    <div class="totals-row"><span class="muted">Supplier</span><strong>{{ pdc.supplier.name if pdc.supplier else '—' }}</strong></div>
+    {% if pdc.purchase %}<div class="totals-row"><span class="muted">Purchase</span><a class="btn-link" href="/purchases/{{ pdc.purchase.id }}">{{ pdc.purchase.ref_no }}</a></div>{% endif %}
+    {% endif %}
+    {% if pdc.settlement_id %}<div class="totals-row"><span class="muted">Settlement recorded</span><strong>#{{ pdc.settlement_id }}</strong></div>{% endif %}
+  </div>
+</div>
+
+{% if pdc.status == 'pending' %}
+<div class="pos-actions" style="justify-content:flex-start;margin-top:16px;">
+  <form method="post" action="/pdc/{{ pdc.id }}/clear">
+    <button class="btn" type="submit">✓ Mark Cleared</button>
+  </form>
+  <form method="post" action="/pdc/{{ pdc.id }}/bounce" onsubmit="return confirm('Mark this cheque as bounced?');">
+    <input type="hidden" name="notes" value="">
+    <button class="btn-secondary" type="submit" style="color:#b91c1c;">✕ Mark Bounced</button>
+  </form>
+  <form method="post" action="/pdc/{{ pdc.id }}/cancel" onsubmit="return confirm('Cancel this cheque record?');">
+    <button class="btn-secondary" type="submit">Cancel</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

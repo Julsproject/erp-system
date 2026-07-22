@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from . import models
 from .backup import latest_backup
 from .database import get_db
-from .deps import get_current_user
+from .deps import get_current_user, is_admin
 from .templating import templates
 
 router = APIRouter()
@@ -68,6 +68,8 @@ def _profit_between(db: Session, start: date, end: date) -> Decimal:
 def dashboard(request: Request, days: int = 7, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
 
     if days not in (7, 30, 90):
         days = 7
@@ -163,7 +165,17 @@ def dashboard(request: Request, days: int = 7, db: Session = Depends(get_db), us
         .scalar()
     ) or 0
 
-    # ---- credit / utang due --------------------------------------------
+    # Post-dated cheques due within 3 days or already overdue (received or issued).
+    pdc_alert_count = (
+        db.query(func.count(models.PostDatedCheque.id))
+        .filter(
+            models.PostDatedCheque.status == "pending",
+            models.PostDatedCheque.cheque_date <= today + timedelta(days=3),
+        )
+        .scalar()
+    ) or 0
+
+    # ---- credit due ------------------------------------------------------
     settled_sub = (
         db.query(
             models.ReceivableSettlement.sale_id.label("sid"),
@@ -180,13 +192,13 @@ def dashboard(request: Request, days: int = 7, db: Session = Depends(get_db), us
         .all()
     )
     due_soon, overdue = [], []
-    utang_total = ZERO
+    credit_total = ZERO
     horizon = today + timedelta(days=DUE_SOON_DAYS)
     for sale, paid in credit_rows:
         outstanding = Decimal(str(sale.receivable_amount or 0)) - Decimal(str(paid or 0))
         if outstanding <= 0:
             continue
-        utang_total += outstanding
+        credit_total += outstanding
         if not sale.due_date:
             continue
         entry = {"sale": sale, "outstanding": outstanding, "days": (sale.due_date - today).days}
@@ -213,22 +225,18 @@ def dashboard(request: Request, days: int = 7, db: Session = Depends(get_db), us
     )
     top_revenue = sorted(perf, key=lambda r: float(r.revenue or 0), reverse=True)[:5]
 
-    # Which customers bought the most in this period (walk-ins have no name).
-    top_customers = (
-        db.query(
-            models.Sale.customer_name,
-            func.count(models.Sale.id).label("orders"),
-            func.coalesce(func.sum(models.Sale.total), 0).label("spent"),
-        )
-        .filter(
-            models.Sale.txn_type == "sale",
-            _local_date(models.Sale.created_at).between(period_start, today),
-            models.Sale.customer_name.isnot(None),
-            models.Sale.customer_name != "",
-        )
-        .group_by(models.Sale.customer_name)
-        .order_by(func.coalesce(func.sum(models.Sale.total), 0).desc())
-        .limit(5)
+    # Purchase Orders raised but not yet received — nothing in stock for these yet.
+    pending_po_count, pending_pos_total = (
+        db.query(func.count(models.Purchase.id), func.coalesce(func.sum(models.Purchase.total), 0))
+        .filter(models.Purchase.txn_type == "receive", models.Purchase.status == "pending")
+        .one()
+    )
+    pending_pos_total = Decimal(str(pending_pos_total or 0))
+    pending_pos = (
+        db.query(models.Purchase)
+        .filter(models.Purchase.txn_type == "receive", models.Purchase.status == "pending")
+        .order_by(models.Purchase.id.desc())
+        .limit(8)
         .all()
     )
 
@@ -265,8 +273,10 @@ def dashboard(request: Request, days: int = 7, db: Session = Depends(get_db), us
             "trend": trend, "trend_max": trend_max,
             "payments": payments, "pay_total": pay_total,
             "out_of_stock": out_of_stock, "low_stock": low_stock, "no_cost": no_cost,
-            "utang_total": utang_total, "due_soon": due_soon, "overdue": overdue,
-            "top_revenue": top_revenue, "top_customers": top_customers, "dead_stock": dead_stock,
+            "pdc_alert_count": pdc_alert_count,
+            "credit_total": credit_total, "due_soon": due_soon, "overdue": overdue,
+            "top_revenue": top_revenue, "dead_stock": dead_stock,
+            "pending_pos": pending_pos, "pending_po_count": pending_po_count, "pending_pos_total": pending_pos_total,
             "recent": recent, "backup": backup_info, "backup_stale_days": BACKUP_STALE_DAYS,
         },
     )

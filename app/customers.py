@@ -108,7 +108,7 @@ def customer_history(customer_id: int, request: Request, db: Session = Depends(g
         .all()
     )
 
-    # settlements collected per sale, to show each sale's paid/utang status
+    # settlements collected per sale, to show each sale's paid/credit status
     sale_ids = [s.id for s in sales]
     settled = {}
     if sale_ids:

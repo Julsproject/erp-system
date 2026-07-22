@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from . import models
 from .auth import hash_password
 from .database import get_db
-from .deps import get_current_user
+from .deps import get_current_user, is_admin
 from .templating import templates
 
 router = APIRouter()
@@ -15,15 +15,11 @@ router = APIRouter()
 ROLES = [("cashier", "Cashier"), ("admin", "Admin")]
 
 
-def _is_admin(user) -> bool:
-    return user is not None and (user.role or "").lower() == "admin"
-
-
 @router.get("/users", response_class=HTMLResponse)
 def list_users(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not _is_admin(user):
+    if not is_admin(user):
         return RedirectResponse("/", status_code=302)
     users = db.query(models.User).order_by(models.User.username).all()
     return templates.TemplateResponse(
@@ -44,7 +40,7 @@ def _render_form(request, user, target=None, error=None):
 def new_user(request: Request, user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not _is_admin(user):
+    if not is_admin(user):
         return RedirectResponse("/", status_code=302)
     return _render_form(request, user)
 
@@ -53,7 +49,7 @@ def new_user(request: Request, user=Depends(get_current_user)):
 def edit_user(user_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not _is_admin(user):
+    if not is_admin(user):
         return RedirectResponse("/", status_code=302)
     target = db.get(models.User, user_id)
     if not target:
@@ -65,7 +61,7 @@ def edit_user(user_id: int, request: Request, db: Session = Depends(get_db), use
 async def create_user(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not _is_admin(user):
+    if not is_admin(user):
         return RedirectResponse("/", status_code=302)
 
     form = await request.form()
@@ -93,7 +89,7 @@ async def create_user(request: Request, db: Session = Depends(get_db), user=Depe
 async def update_user(user_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not _is_admin(user):
+    if not is_admin(user):
         return RedirectResponse("/", status_code=302)
     target = db.get(models.User, user_id)
     if not target:

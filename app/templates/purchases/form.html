@@ -55,17 +55,52 @@
           <option value="{{ s.id }}" {{ 'selected' if preselect and s.id == preselect }}>{{ s.name }}{{ ' (' ~ s.code ~ ')' if s.code }}</option>
           {% endfor %}
         </select>
+        <button type="button" class="btn-link" style="margin-top:4px;font-size:12.5px;" onclick="showNewSupplier()">＋ New supplier</button>
       </label>
       <label class="pos-customer">Supplier Invoice / DR #
         <input id="invoiceNo" type="text" placeholder="optional" autocomplete="off">
       </label>
     </div>
+
+    <div id="nsPanel" class="np-panel" style="display:none;">
+      <h3 class="np-title">New supplier</h3>
+      <label>Supplier name
+        <input id="nsName" type="text" autocomplete="off">
+      </label>
+      <label>Contact person
+        <input id="nsContact" type="text" placeholder="optional" autocomplete="off">
+      </label>
+      <label>Mobile
+        <input id="nsMobile" type="text" placeholder="optional" autocomplete="off">
+      </label>
+      <label>Payment terms
+        <input id="nsTerms" type="text" list="ns-terms" placeholder="e.g. COD, 30 days" autocomplete="off">
+      </label>
+      <datalist id="ns-terms">
+        <option value="COD"><option value="7 days"><option value="15 days">
+        <option value="30 days"><option value="60 days"><option value="50% DP"><option value="Consignment">
+      </datalist>
+      <div class="np-actions">
+        <button type="button" class="btn" onclick="createSupplier()">Create &amp; select</button>
+        <button type="button" class="btn-secondary" onclick="hideNewSupplier()">Cancel</button>
+      </div>
+      <div id="nsError" class="alert" style="display:none;margin:10px 0 0;"></div>
+    </div>
+
     <div class="pos-head-fields">
       <label class="pos-customer">Delivery date
         <input id="deliveryDate" type="date">
       </label>
       <label class="pos-customer">Notes
         <input id="notes" type="text" placeholder="optional" autocomplete="off">
+      </label>
+    </div>
+
+    <div class="pos-head-fields" id="returnAgainstRow" style="display:none;">
+      <label class="pos-customer">Return against delivery <span class="muted">(optional)</span>
+        <select id="returnAgainst">
+          <option value="">— not tied to a specific delivery —</option>
+        </select>
       </label>
     </div>
 
@@ -102,13 +137,34 @@ let searchTimer = null;
 const searchBox = document.getElementById('pSearch');
 
 searchBox.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 180); });
-document.getElementById('supplierId').addEventListener('change', recompute);
+document.getElementById('supplierId').addEventListener('change', () => { recompute(); refreshReceipts(); });
 
 function setType(t) {
   txnType = t;
   document.getElementById('mReceive').classList.toggle('active', t === 'receive');
   document.getElementById('mReturn').classList.toggle('active', t === 'return');
+  document.getElementById('returnAgainstRow').style.display = t === 'return' ? 'flex' : 'none';
+  if (t === 'return') refreshReceipts();
   renderLines();
+}
+
+/* Populate "Return against delivery" with this supplier's past receipts. */
+async function refreshReceipts() {
+  if (txnType !== 'return') return;
+  const sel = document.getElementById('returnAgainst');
+  const supplierId = document.getElementById('supplierId').value;
+  sel.innerHTML = '<option value="">— not tied to a specific delivery —</option>';
+  if (!supplierId) return;
+  try {
+    const res = await fetch('/purchases/receipts?supplier_id=' + encodeURIComponent(supplierId));
+    const data = await res.json();
+    (data.receipts || []).forEach(r => {
+      const opt = document.createElement('option');
+      opt.value = r.id;
+      opt.textContent = r.ref_no + ' — ' + r.date + ' — ' + peso(r.total);
+      sel.appendChild(opt);
+    });
+  } catch (e) { /* leave the default option */ }
 }
 
 async function runSearch() {
@@ -223,6 +279,7 @@ function clearAll() {
   document.getElementById('invoiceNo').value = '';
   document.getElementById('deliveryDate').value = '';
   document.getElementById('notes').value = '';
+  document.getElementById('returnAgainst').value = '';
   renderLines(); searchBox.focus();
 }
 
@@ -259,6 +316,7 @@ async function savePurchase() {
     invoice_no: document.getElementById('invoiceNo').value,
     delivery_date: document.getElementById('deliveryDate').value,
     notes: document.getElementById('notes').value,
+    original_purchase_id: txnType === 'return' ? document.getElementById('returnAgainst').value : null,
     lines: lines.map(l => {
       const u = l.product.units[l.unitIndex];
       return { product_id: l.product.id, unit_name: u.name, factor: u.factor, qty: l.qty,
@@ -310,6 +368,46 @@ async function createProduct() {
     document.getElementById('pResults').innerHTML =
       '<p class="pos-hint">' + escapeHtml(data.product.name) +
       (data.existed ? ' already existed — added to this purchase.' : ' created and added.') + '</p>';
+  } catch (e) {
+    err.textContent = 'Network error. Please try again.'; err.style.display = 'block';
+  }
+}
+
+/* ---- create a supplier that isn't on file yet ---- */
+function showNewSupplier() {
+  document.getElementById('nsPanel').style.display = 'block';
+  document.getElementById('nsName').focus();
+}
+function hideNewSupplier() {
+  document.getElementById('nsPanel').style.display = 'none';
+  ['nsName', 'nsContact', 'nsMobile', 'nsTerms'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('nsError').style.display = 'none';
+}
+async function createSupplier() {
+  const err = document.getElementById('nsError');
+  err.style.display = 'none';
+  const name = document.getElementById('nsName').value.trim();
+  if (!name) { err.textContent = 'Enter a supplier name.'; err.style.display = 'block'; return; }
+  const payload = {
+    name: name,
+    contact_person: document.getElementById('nsContact').value,
+    mobile: document.getElementById('nsMobile').value,
+    payment_terms: document.getElementById('nsTerms').value,
+  };
+  try {
+    const res = await fetch('/suppliers/quick', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!data.ok) { err.textContent = data.error || 'Could not create the supplier.'; err.style.display = 'block'; return; }
+    const sel = document.getElementById('supplierId');
+    const opt = document.createElement('option');
+    opt.value = data.supplier.id;
+    opt.textContent = data.supplier.name + (data.supplier.code ? ' (' + data.supplier.code + ')' : '');
+    sel.appendChild(opt);
+    sel.value = data.supplier.id;
+    hideNewSupplier();
+    recompute();
   } catch (e) {
     err.textContent = 'Network error. Please try again.'; err.style.display = 'block';
   }

@@ -1,4 +1,4 @@
-"""Credits menu: look up a customer and view/print their credit (utang) statement."""
+"""Credits menu: look up a customer and view/print their credit statement."""
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Request

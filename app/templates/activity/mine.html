@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Activity · ' ~ (viewing.full_name or viewing.username) if viewing else 'My Activity' }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{{ 'Activity — ' ~ (viewing.full_name or viewing.username) if viewing else 'My Activity' }}</h1>
+    <p class="muted">{{ day.strftime('%A, %b %d, %Y') }}</p>
+  </div>
+  <form method="get" class="toolbar" style="margin:0;">
+    <input class="search" type="date" name="day" value="{{ day.isoformat() }}" onchange="this.form.submit()" style="max-width:170px;">
+    {% if viewing %}<a class="btn-secondary" href="/activity/all?day={{ day.isoformat() }}">← All cashiers</a>{% endif %}
+  </form>
+</div>
+
+<div class="kpi-row">
+  <div class="kpi"><span class="kpi-label">Transactions</span><span class="kpi-value">{{ summary.count }}</span></div>
+  <div class="kpi"><span class="kpi-label">Total Sales</span><span class="kpi-value">{{ summary.net_total|peso }}</span></div>
+  <div class="kpi"><span class="kpi-label">Credit Collected</span><span class="kpi-value">{{ summary.collections|peso }}</span></div>
+</div>
+
+{% if summary.by_method %}
+<div class="card" style="padding:16px 20px;margin-bottom:18px;">
+  <h3 class="card-title">By payment method</h3>
+  <div class="attn-grid">
+    {% for m in summary.by_method %}
+    <div class="attn ok" style="cursor:default;">
+      <span class="attn-num" style="font-size:16px;">{{ m.amount|peso }}</span>
+      <span class="attn-label">{{ m.label }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Invoice</th><th>Type</th><th>Time</th><th>Customer</th><th>Payment</th><th class="num">Total</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for s in summary.sales %}
+      <tr>
+        <td class="strong">{{ s.invoice_no }}</td>
+        <td><span class="txn txn-{{ s.txn_type }}">{{ s.txn_type|capitalize }}</span></td>
+        <td>{{ s.created_at.strftime('%I:%M %p') if s.created_at else '' }}</td>
+        <td>{{ s.customer_name or 'Walk-in' }}</td>
+        <td>{{ s.payment_method or '—' }}</td>
+        <td class="num strong {{ 'neg' if s.total and s.total < 0 }}">{{ s.total|peso }}</td>
+        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales">Receipt</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No transactions processed on this day.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

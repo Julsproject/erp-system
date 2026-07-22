@@ -5,7 +5,7 @@
   <div>
     <h1 class="page-title">{{ purchase.ref_no }}</h1>
     <p class="muted">
-      {% if purchase.txn_type == 'return' %}Purchase return{% else %}Goods received{% endif %}
+      {% if purchase.txn_type == 'return' %}Purchase return{% else %}Purchase Order{% endif %}
       · {{ purchase.created_at.strftime('%b %d, %Y %I:%M %p') if purchase.created_at else '' }}
       {% if purchase.user %} · by {{ purchase.user.full_name or purchase.user.username }}{% endif %}
     </p>
@@ -16,11 +16,53 @@
   </div>
 </div>
 
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+{% if purchase.txn_type == 'receive' %}
+  {% if purchase.status == 'pending' %}
+  <div class="quo-status-banner pending">
+    <strong>Pending.</strong> This Purchase Order has been raised with the supplier — stock and cost have
+    <strong>not</strong> changed yet. Confirm it once the delivery physically arrives.
+  </div>
+  {% elif purchase.status == 'confirmed' %}
+  <div class="quo-status-banner confirmed">
+    <strong>Confirmed — goods received.</strong> Stock was added and cost prices updated on
+    {{ purchase.confirmed_at.strftime('%b %d, %Y %I:%M %p') if purchase.confirmed_at else '' }}.
+    Mark it paid once you've settled with the supplier.
+  </div>
+  {% elif purchase.status == 'paid' %}
+  <div class="quo-status-banner paid">
+    <strong>Paid.</strong> Settled via {{ purchase.payment_method|replace('_',' ')|title }}
+    on {{ purchase.paid_at.strftime('%b %d, %Y %I:%M %p') if purchase.paid_at else '' }}.
+  </div>
+  {% else %}
+  <div class="quo-status-banner cancelled">
+    <strong>Cancelled</strong>{% if purchase.cancelled_at %} on {{ purchase.cancelled_at.strftime('%b %d, %Y %I:%M %p') }}{% endif %}.
+    Nothing was ever added to stock for this PO.
+  </div>
+  {% endif %}
+{% endif %}
+
+{% if purchase.txn_type == 'return' and purchase.original_purchase %}
+<div class="alert" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;margin-bottom:16px;">
+  ↩ Return from delivery
+  <a href="/purchases/{{ purchase.original_purchase.id }}" style="color:inherit;font-weight:700;text-decoration:underline;">{{ purchase.original_purchase.ref_no }}</a>
+</div>
+{% endif %}
+{% for lr in linked_returns %}
+<div class="alert" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;margin-bottom:16px;">
+  ⚠ Item(s) from this delivery were returned:
+  <a href="/purchases/{{ lr.id }}" style="color:inherit;font-weight:700;text-decoration:underline;">{{ lr.ref_no }}</a> · {{ lr.total|peso }}
+</div>
+{% endfor %}
+
 {% if alerts %}
 <div class="alert" style="background:#fef3c7;border-color:#fcd34d;color:#92400e;">
-  <strong>⚠ Price review needed.</strong>
-  The cost went up on {{ alerts|length }} item{{ '' if alerts|length == 1 else 's' }} and the selling price no longer
-  covers it. Update the selling price in Inventory:
+  <strong>⚠ Price review {{ 'will be' if purchase.status == 'pending' else '' }} needed.</strong>
+  The cost {{ 'will go' if purchase.status == 'pending' else 'went' }} up on
+  {{ alerts|length }} item{{ '' if alerts|length == 1 else 's' }} and the selling price no longer covers it.
+  {{ 'It will apply once this PO is confirmed.' if purchase.status == 'pending' }}
+  Update the selling price in Inventory:
   <ul style="margin:8px 0 0 18px;">
     {% for r in alerts %}
     <li>
@@ -67,7 +109,9 @@
           {% elif r.changed %}
             <span class="muted">{{ l.old_cost|peso }}</span> →
             <strong>{{ l.new_cost|peso }}</strong>
-            {% if r.increased %}
+            {% if purchase.status == 'pending' %}
+              <span class="txn" style="background:#e0f2fe;color:#0369a1;">preview</span>
+            {% elif r.increased %}
               <span class="warn-tag">▲ +{{ r.diff|peso }}</span>
             {% else %}
               <span class="txn" style="background:#dcfce7;color:#15803d;">▼ {{ r.diff|peso }}</span>
@@ -92,11 +136,68 @@
   </table>
 </div>
 
+{% if purchase.txn_type == 'return' %}
 <p class="muted" style="margin-top:14px;">
-  {% if purchase.txn_type == 'return' %}
   These quantities were <strong>removed</strong> from stock. Cost prices were left unchanged.
-  {% else %}
-  These quantities were <strong>added</strong> to stock and each product's cost price was updated to the amount paid here.
-  {% endif %}
 </p>
+{% elif purchase.status == 'pending' %}
+<div class="pos-actions" style="justify-content:flex-start;margin-top:16px;">
+  <form method="post" action="/purchases/{{ purchase.id }}/confirm">
+    <button class="btn" type="submit">✓ Confirm receipt — goods have arrived</button>
+  </form>
+  <form method="post" action="/purchases/{{ purchase.id }}/cancel" onsubmit="return confirm('Cancel this Purchase Order?');">
+    <button class="btn-secondary" type="submit">Cancel PO</button>
+  </form>
+</div>
+{% elif purchase.status == 'confirmed' %}
+<p class="muted" style="margin-top:14px;">
+  These quantities were <strong>added</strong> to stock and each product's cost price was updated to the amount paid here.
+</p>
+
+{% if pending_pdc %}
+<section class="card" style="padding:20px;margin-top:6px;max-width:480px;">
+  <h3 class="card-title">Payment pending</h3>
+  <p class="muted" style="margin-top:0;">
+    A cheque has already been issued for this delivery and is awaiting clearance.
+  </p>
+  <a class="btn-link" href="/pdc/{{ pending_pdc.id }}">View the cheque →</a>
+</section>
+{% else %}
+<section class="card" style="padding:20px;margin-top:6px;max-width:480px;">
+  <h3 class="card-title">Mark as paid</h3>
+  <p class="muted" style="margin-top:0;">Record that this delivery has been settled with the supplier.</p>
+  <form method="post" action="/purchases/{{ purchase.id }}/pay" class="form" style="grid-template-columns:1fr;gap:12px;" id="payForm">
+    <label>Payment method
+      <select name="method" id="payMethod" onchange="toggleChequeFields()">
+        {% for value, label in methods %}
+        <option value="{{ value }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div id="payChequeFields" class="cheque-grid" style="display:none;">
+      <label>Bank<input name="bank" type="text" placeholder="e.g. BDO"></label>
+      <label>Cheque #<input name="cheque_no" type="text" placeholder="000123"></label>
+      <label>Cheque date<input name="cheque_date" type="date"></label>
+    </div>
+    <p class="hint" id="payChequeHint" style="display:none;margin:0;">
+      This won't mark the purchase paid yet — it goes into the <a href="/pdc">Cheques register</a> as pending until it clears.
+    </p>
+    <div class="form-actions">
+      <button class="btn" type="submit">Mark as Paid</button>
+    </div>
+  </form>
+  <script>
+    function toggleChequeFields() {
+      var isCheque = document.getElementById('payMethod').value === 'cheque';
+      document.getElementById('payChequeFields').style.display = isCheque ? 'grid' : 'none';
+      document.getElementById('payChequeHint').style.display = isCheque ? 'block' : 'none';
+    }
+  </script>
+</section>
+{% endif %}
+{% else %}
+<p class="muted" style="margin-top:14px;">
+  These quantities were <strong>added</strong> to stock and each product's cost price was updated to the amount paid here.
+</p>
+{% endif %}
 {% endblock %}
