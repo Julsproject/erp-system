@@ -21,7 +21,7 @@ from .templating import templates
 router = APIRouter()
 
 MANILA = ZoneInfo("Asia/Manila")
-METHOD_LABELS = {"cash": "Cash", "gcash": "GCash", "card": "Card", "bank_transfer": "Bank Transfer", "receivable": "Receivable (Credit)"}
+METHOD_LABELS = {"cash": "Cash", "gcash": "GCash", "card": "Card", "bank_transfer": "Bank Transfer", "cheque": "Cheque", "receivable": "Receivable (Credit)"}
 
 
 def _today() -> date:

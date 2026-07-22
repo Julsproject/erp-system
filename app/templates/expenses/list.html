@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Expenses · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Expenses</h1>
+    <p class="muted">Business costs outside of inventory purchases — rent, utilities, salaries, and so on</p>
+  </div>
+  <a class="btn" href="/expenses/new">+ Add expense</a>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ total_count }}</span><span>Transactions</span></div>
+  <div class="mini-stat owed"><span class="mini-num">{{ total_amount|peso }}</span><span>Total (this filter)</span></div>
+</div>
+
+{% set qs = '&q=' ~ q if q else '' %}
+{% set qs = qs ~ ('&category_id=' ~ category_id if category_id else '') %}
+{% set qs = qs ~ ('&date_from=' ~ date_from if date_from else '') %}
+{% set qs = qs ~ ('&date_to=' ~ date_to if date_to else '') %}
+{% set filter_count = (1 if category_id else 0) + (1 if date_from else 0) + (1 if date_to else 0) %}
+
+<form class="toolbar" method="get" action="/expenses">
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search payee, description, or ref #…">
+  <button class="btn-secondary" type="submit">Search</button>
+
+  <details class="filter-drop" {{ 'open' if filter_count }}>
+    <summary>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16l-6.5 7.5V19l-3 1.5v-8z"/></svg>
+      Filters
+      {% if filter_count %}<span class="filter-count">{{ filter_count }}</span>{% endif %}
+    </summary>
+    <div class="filter-panel">
+      <div class="field">
+        <label>Category</label>
+        <select name="category_id">
+          <option value="0">All categories</option>
+          {% for c in categories %}
+          <option value="{{ c.id }}" {{ 'selected' if category_id == c.id }}>{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>From</label><input type="date" name="date_from" value="{{ date_from }}"></div>
+        <div class="field"><label>To</label><input type="date" name="date_to" value="{{ date_to }}"></div>
+      </div>
+      <div class="actions">
+        <a class="btn-link" href="/expenses">Clear all</a>
+        <button class="btn" type="submit">Apply</button>
+      </div>
+    </div>
+  </details>
+</form>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Ref #</th><th>Date</th><th>Category</th><th>Payee</th><th>Description</th><th>Payment</th><th class="num">Amount</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for e in expenses %}
+      <tr>
+        <td class="strong">{{ e.ref_no }}</td>
+        <td>{{ e.expense_date.strftime('%b %d, %Y') if e.expense_date else '—' }}</td>
+        <td>{{ e.category.name if e.category else '—' }}</td>
+        <td>{{ e.payee or '—' }}</td>
+        <td>{{ e.description or '—' }}</td>
+        <td>{{ e.payment_method|replace('_',' ')|title }}</td>
+        <td class="num strong">{{ e.amount|peso }}</td>
+        <td class="row-actions"><a class="btn-link" href="/expenses/{{ e.id }}/edit">Edit</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="empty">No expenses {{ 'match that filter' if (q or category_id or date_from or date_to) else 'recorded yet' }}.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn-secondary" href="/expenses?page={{ page - 1 }}{{ qs }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-secondary" href="/expenses?page={{ page + 1 }}{{ qs }}">Next →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

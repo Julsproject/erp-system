@@ -170,6 +170,16 @@ Schema changes are versioned with **Alembic** migrations in `migrations/versions
 | 0004 | customers, payments (split), receivable on sales |
 | 0005 | receivable_settlements (utang collections) |
 | 0006 | refund/exchange transaction type |
+| 0007 | suppliers, purchases (receiving) |
+| 0008 | dashboard support fields |
+| 0009 | cash_shifts (later dropped, see 0011) |
+| 0010 | quotations (estimates) |
+| 0011 | drop cash_shifts — replaced by automatic Cashier Activity history |
+| 0012 | purchase status lifecycle (pending/confirmed/paid/cancelled) |
+| 0013 | link a purchase return back to the delivery it came from |
+| 0014 | post_dated_cheques (PDC register) |
+| 0015 | expense_categories, expenses, deliveries |
+| 0016 | bank_accounts, bank_transactions (Cash & Banking) |
 
 ---
 
@@ -201,7 +211,52 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 ## Roadmap
 
-- **Phase 1 (in progress)** — Inventory, POS (payment/refund/exchange), customers, receivables, credits ✅
-- **Next** — no-invoice refunds, cashier shift / cash-drawer float, expenses, low-stock alerts
-- **Phase 2** — Suppliers & Purchasing (Purchase Orders, Receiving, supplier cost comparison, Accounts Payable)
-- **Phase 3** — Accounting (GL, P&L, Balance Sheet, VAT reports), banking, PDC/cheques, dashboards
+Checked against an 18-module wishlist (photo of a handwritten list) and prioritized
+into tiers. This section is the source of truth for "what's left" — keep it updated
+so picking this up from a different device doesn't require re-deriving status from
+git log.
+
+### ✅ Core operations (done)
+Dashboard · Sales/POS (payment, refund, exchange, split payment incl. **Cheque**
+as a post-dated-cheque-backed method) · Inventory · Purchasing (PO lifecycle) ·
+Customers · Suppliers · Quotations · PDC (post-dated cheque) register ·
+role-based access (admin vs cashier) · pagination + filters across all list pages.
+
+### ✅ Tier 1 (done)
+- **Expenses** (`/expenses`) — categorized (create-your-own, same idea as Product
+  categories), filterable, admin-only, void instead of delete.
+- **Delivery Management** (`/deliveries`) — schedule from a receipt or by invoice #
+  lookup, pending → out for delivery → delivered/cancelled. Open to cashiers too
+  (operational, not back-office).
+- Dashboard: Expenses KPI tile + net-profit sub-line, custom date-range picker,
+  fixed the 90-day chart's overlapping labels (bars stay daily, labels thin to ~12).
+
+### ✅ Tier 2 (done)
+- **Reports** (`/reports`) — hub page; **Profit & Loss** (revenue, gross profit,
+  expenses by category, net profit, any date range) and **Inventory Valuation**
+  (by category and by product), both with Excel export.
+- **Cash & Banking** (`/banking`) — multiple bank accounts, running balance derived
+  from a deposit/withdrawal ledger (never stored, always computed). Scope was
+  deliberately limited to balance-tracking, not statement reconciliation — confirm
+  with the user before expanding that.
+
+### 🔜 Tier 3 (not started — pick up here)
+1. **Settings UI** — in-app screen for app name / admin password / etc. Right now
+   config is `.env`-file only. Low effort, low urgency (only matters if someone
+   besides the owner needs to change settings without editing files).
+2. **Notifications Center** — centralize the alerts that already exist scattered
+   around (low-stock/out-of-stock, overdue credits, cheques due, pending
+   deliveries — currently nav badges + the Dashboard "Needs your attention"
+   widget) into one inbox with history/read state.
+3. **Full Accounting** (GL, P&L, Balance Sheet, VAT/BIR reports) — deliberately
+   deprioritized: the owner's accountant/other software handles this externally.
+   Only revisit if that changes; until then the P&L report + per-module Excel
+   exports are the intended output for an accountant to work from.
+
+### Skip unless a specific need shows up
+- **Document Management** (file/receipt attachments) — no current need.
+- **Generic configurable Approval Workflow** — the pending → confirmed → paid
+  lifecycles already on Purchases/Quotations/PDC cover this for a small team; a
+  configurable approval engine would be over-engineering here.
+- **Full Employee/HR management** (attendance, payroll) — `users.py` stays scoped
+  to login accounts + role only; no payroll processing planned in-app.

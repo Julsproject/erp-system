@@ -424,3 +424,114 @@ class StockMovement(Base):
     reason = Column(String(30), nullable=False)         # sale | adjustment | ...
     ref = Column(String(30))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ExpenseCategory(Base):
+    """Create-your-own, same idea as Category/UnitType on Products."""
+    __tablename__ = "expense_categories"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(80), nullable=False, unique=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class Expense(Base):
+    """A business expense already paid — rent, utilities, salaries, etc.
+
+    Unlike Purchases this has no pending/confirmed staging: recording one here
+    means the money is already out the door. A cheque used to pay one is just
+    a reference detail, not a post-dated PDC — expenses this small a shop pays
+    by cheque are typically cut and cleared same-day, not held in limbo.
+    """
+    __tablename__ = "expenses"
+
+    id = Column(Integer, primary_key=True)
+    ref_no = Column(String(20), unique=True, index=True)   # EXP-000001
+    category_id = Column(Integer, ForeignKey("expense_categories.id"), nullable=True)
+    payee = Column(String(150))                # who got paid — vendor, landlord, employee...
+    description = Column(String(255))
+    amount = Column(Numeric(12, 2), nullable=False, server_default="0")
+    expense_date = Column(Date, nullable=False)
+    payment_method = Column(String(20), nullable=False, server_default="cash")  # cash|gcash|bank_transfer|cheque
+    reference_no = Column(String(60))           # OR#, cheque #, transfer ref — freeform
+    notes = Column(String(255))
+    is_voided = Column(Boolean, nullable=False, server_default="false")
+
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    category = relationship("ExpenseCategory")
+    creator = relationship("User")
+
+
+class Delivery(Base):
+    """Fulfillment of an already-completed Sale: pending (scheduled) ->
+    out_for_delivery (driver has it) -> delivered, or -> cancelled.
+    Doesn't touch stock — that already happened when the Sale was made.
+    """
+    __tablename__ = "deliveries"
+
+    id = Column(Integer, primary_key=True)
+    delivery_no = Column(String(20), unique=True, index=True)   # DEL-000001
+    sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False)
+    status = Column(String(20), nullable=False, server_default="pending")  # pending|out_for_delivery|delivered|cancelled
+
+    recipient_name = Column(String(150))
+    address = Column(String(255))
+    contact_no = Column(String(40))
+    driver_name = Column(String(100))
+    vehicle = Column(String(60))
+    scheduled_date = Column(Date, nullable=True)
+    notes = Column(String(255))
+
+    dispatched_at = Column(DateTime(timezone=True), nullable=True)
+    delivered_at = Column(DateTime(timezone=True), nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    sale = relationship("Sale")
+    creator = relationship("User")
+
+
+class BankAccount(Base):
+    """A bank account (or labeled cash box) whose balance the app tracks.
+    Balance is never stored — it's opening_balance plus the sum of its
+    BankTransactions, computed on the fly, same idea as how a sale's
+    outstanding credit is derived rather than cached.
+    """
+    __tablename__ = "bank_accounts"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False, unique=True)   # e.g. "BDO Checking - 1234"
+    bank_name = Column(String(80))
+    account_no = Column(String(60))
+    opening_balance = Column(Numeric(12, 2), nullable=False, server_default="0")
+    is_active = Column(Boolean, nullable=False, server_default="true")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    transactions = relationship("BankTransaction", back_populates="account", cascade="all, delete-orphan")
+
+
+class BankTransaction(Base):
+    """A deposit into or withdrawal from a BankAccount. Moving money between
+    two accounts is just a withdrawal on one and a deposit on the other —
+    no separate 'transfer' type needed.
+    """
+    __tablename__ = "bank_transactions"
+
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("bank_accounts.id"), nullable=False)
+    txn_type = Column(String(12), nullable=False)   # deposit | withdrawal
+    amount = Column(Numeric(12, 2), nullable=False, server_default="0")
+    txn_date = Column(Date, nullable=False)
+    description = Column(String(255))
+    reference_no = Column(String(60))
+    is_voided = Column(Boolean, nullable=False, server_default="false")
+
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    account = relationship("BankAccount", back_populates="transactions")
+    creator = relationship("User")

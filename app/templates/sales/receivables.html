@@ -13,7 +13,7 @@
 
 <div class="stat-row">
   <div class="mini-stat owed"><span class="mini-num">{{ total_credit|peso }}</span><span>Total Outstanding Credits</span></div>
-  <div class="mini-stat"><span class="mini-num">{{ rows|length }}</span><span>Unpaid Invoices</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>Unpaid Invoices</span></div>
 </div>
 
 <p class="muted" style="margin:-6px 0 16px;">Invoices with outstanding credit. Once fully paid, they move to <a href="/sales">All Sales</a>.</p>
@@ -49,4 +49,12 @@
     </tbody>
   </table>
 </div>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn-secondary" href="/sales/receivables?page={{ page - 1 }}&q={{ q }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-secondary" href="/sales/receivables?page={{ page + 1 }}&q={{ q }}">Next →</a>{% endif %}
+</div>
+{% endif %}
 {% endblock %}

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Inventory Valuation · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Inventory Valuation</h1>
+    <p class="muted">Snapshot as of {{ today.strftime('%b %d, %Y') }}</p>
+  </div>
+  <a class="btn-secondary" href="/reports/inventory-valuation/export">⬇ Download Excel</a>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ rows|length }}</span><span>Active SKUs</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total_cost|peso }}</span><span>Total Cost Value</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total_retail|peso }}</span><span>Total Retail Value</span></div>
+</div>
+
+<h3 class="ex-h">By category</h3>
+<div class="table-wrap" style="margin-bottom:22px;">
+  <table class="grid">
+    <thead><tr><th>Category</th><th class="num">SKUs</th><th class="num">Cost Value</th><th class="num">Retail Value</th></tr></thead>
+    <tbody>
+      {% for c in by_category %}
+      <tr>
+        <td class="strong">{{ c.category }}</td>
+        <td class="num">{{ c.count }}</td>
+        <td class="num">{{ c.cost_value|peso }}</td>
+        <td class="num">{{ c.retail_value|peso }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">No active products.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h3 class="ex-h">By product</h3>
+<div class="table-wrap">
+  <table class="grid">
+    <thead><tr><th>Product</th><th>Category</th><th class="num">Qty</th><th class="num">Cost Price</th><th class="num">Cost Value</th><th class="num">Retail Value</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="strong">{{ r.product.name }}</td>
+        <td>{{ r.category }}</td>
+        <td class="num">{{ r.qty|qty }}</td>
+        <td class="num">{{ r.product.cost_price|peso }}</td>
+        <td class="num">{{ r.cost_value|peso }}</td>
+        <td class="num">{{ r.retail_value|peso }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No active products.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

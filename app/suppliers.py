@@ -14,6 +14,7 @@ from .templating import templates
 router = APIRouter()
 
 PAYMENT_TERMS = ["COD", "7 days", "15 days", "30 days", "60 days", "50% DP", "Consignment"]
+PAGE_SIZE = 20
 
 
 def _next_code(db: Session) -> str:
@@ -73,19 +74,35 @@ async def quick_supplier(request: Request, db: Session = Depends(get_db), user=D
 
 
 @router.get("/suppliers", response_class=HTMLResponse)
-def list_suppliers(request: Request, q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+def list_suppliers(
+    request: Request,
+    q: str = "",
+    page: int = 1,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     q = (q or "").strip()
+    page = max(page, 1)
     query = db.query(models.Supplier)
     if q:
         query = query.filter(models.Supplier.name.ilike(f"%{q}%"))
-    suppliers = query.order_by(models.Supplier.name).all()
+    total = query.count()
+    pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+    page = min(page, pages)
+    suppliers = (
+        query.order_by(models.Supplier.name)
+        .offset((page - 1) * PAGE_SIZE)
+        .limit(PAGE_SIZE)
+        .all()
+    )
     return templates.TemplateResponse(
         "suppliers/list.html",
-        {"request": request, "app_name": request.app.title, "user": user, "suppliers": suppliers, "q": q},
+        {"request": request, "app_name": request.app.title, "user": user, "suppliers": suppliers, "q": q,
+         "page": page, "pages": pages, "total": total},
     )
 
 

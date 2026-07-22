@@ -27,6 +27,7 @@ METHOD_LABELS = {
     "gcash": "GCash",
     "card": "Card",
     "bank_transfer": "Bank Transfer",
+    "cheque": "Cheque",
     "receivable": "Receivable",
 }
 
@@ -192,19 +193,37 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
     net = _money(total) - vat_amount
 
     # --- Payments (split) ---------------------------------------------------
+    # A cheque is post-dated: like Receivable, it isn't cash in hand yet, so it
+    # counts toward receivable_amount rather than paid_amount. It stays owed
+    # until the cheque actually clears (see /pdc), which is when a
+    # ReceivableSettlement finally gets created — the same mechanism a credit
+    # sale uses when a customer later pays off their balance by cheque.
     receivable_amount = Decimal("0")
     paid_amount = Decimal("0")
     method_rows = []
+    cheque_rows = []
     for pay in payments or []:
         method = (pay.get("method") or "").strip().lower()
         amount = _dec(pay.get("amount"))
         if amount <= 0 or method not in METHOD_LABELS:
             continue
         method_rows.append((method, amount))
-        if method == "receivable":
+        if method in ("receivable", "cheque"):
             receivable_amount += amount
         else:
             paid_amount += amount
+        if method == "cheque":
+            raw_date = (pay.get("cheque_date") or "").strip()
+            try:
+                cheque_date = date.fromisoformat(raw_date)
+            except ValueError:
+                return False, "Enter a valid cheque date (the date printed on the cheque)."
+            cheque_rows.append({
+                "amount": amount,
+                "bank": (pay.get("bank") or "").strip() or None,
+                "cheque_no": (pay.get("cheque_no") or "").strip() or None,
+                "cheque_date": cheque_date,
+            })
 
     if not method_rows:
         return False, "Add at least one payment."
@@ -212,12 +231,12 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
     if receivable_amount > total:
         receivable_amount = total
     if receivable_amount > 0 and not customer_name:
-        return False, "Receivable (credit) requires a customer name."
+        return False, "Receivable (credit) or cheque payment requires a customer name."
 
     amount_due_now = total - receivable_amount
     if paid_amount + Decimal("0.01") < amount_due_now:
         short = amount_due_now - paid_amount
-        return False, f"Payment is short by ₱{short:.2f}. Add a payment or receivable."
+        return False, f"Payment is short by ₱{short:.2f}. Add a payment, cheque, or receivable."
     change = paid_amount - amount_due_now
     if change < 0:
         change = Decimal("0")
@@ -226,7 +245,7 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
     customer = get_or_create_customer(db, customer_name) if customer_name else None
     if customer:
         sale.customer_id = customer.id
-        # Credit falls due after the customer's agreed credit terms.
+        # Credit (and post-dated cheques) fall due after the customer's agreed terms.
         if receivable_amount > 0:
             days = customer.credit_days if customer.credit_days is not None else 15
             sale.due_date = date.today() + timedelta(days=int(days))
@@ -245,6 +264,15 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
     sale.payment_method = " + ".join(
         dict.fromkeys(METHOD_LABELS[m] for m, _ in method_rows)  # unique, order-preserving
     )
+
+    db.flush()  # need sale.id / sale.customer_id before creating the cheque records below
+    for row in cheque_rows:
+        db.add(models.PostDatedCheque(
+            direction="received", amount=_money(row["amount"]),
+            bank=row["bank"], cheque_no=row["cheque_no"], cheque_date=row["cheque_date"],
+            sale_id=sale.id, customer_id=sale.customer_id,
+            created_by=user.id,
+        ))
 
     db.commit()
     return True, sale
@@ -461,7 +489,7 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
     ex.total = diff
     if diff > 0:
         method = (data.get("payment_method") or "cash").strip().lower()
-        if method not in METHOD_LABELS or method == "receivable":
+        if method not in METHOD_LABELS or method in ("receivable", "cheque"):
             method = "cash"
         ex.payments.append(models.Payment(method=method, amount=_money(diff)))
         ex.amount_tendered = _money(diff)

@@ -146,6 +146,43 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 }
 .search:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
 
+/* ---------- Filter dropdown (native <details>, no JS needed to open) ---------- */
+.filter-drop { position: relative; }
+.filter-drop > summary {
+  display: inline-flex; align-items: center; gap: 7px; list-style: none; cursor: pointer;
+  padding: 10px 16px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 600;
+  background: var(--surface); color: var(--ink-soft); border: 1px solid var(--line-2); box-shadow: var(--shadow-sm);
+  transition: background .18s var(--ease), box-shadow .18s var(--ease), transform .15s var(--ease), border-color .15s;
+  user-select: none;
+}
+.filter-drop > summary::-webkit-details-marker { display: none; }
+.filter-drop > summary::marker { content: ""; }
+.filter-drop > summary:hover { background: var(--surface-2); transform: translateY(-1px); box-shadow: var(--shadow-md); }
+.filter-drop[open] > summary { border-color: var(--brand); color: var(--brand-600); }
+.filter-drop > summary svg { width: 15px; height: 15px; flex: none; }
+.filter-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+  background: var(--brand); color: #fff; font-size: 11px; font-weight: 700;
+}
+.filter-panel {
+  display: none;
+  position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; min-width: 300px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); padding: 16px; flex-direction: column; gap: 12px;
+}
+.filter-drop[open] > .filter-panel { display: flex; }
+.filter-panel .field { display: flex; flex-direction: column; gap: 5px; flex: 1; }
+.filter-panel .field-row { display: flex; gap: 8px; }
+.filter-panel label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.filter-panel select, .filter-panel input {
+  padding: 9px 11px; font-size: 13.5px; border: 1px solid var(--line-2); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink);
+}
+.filter-panel select:focus, .filter-panel input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
+.filter-panel .actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; }
+@media (max-width: 640px) { .filter-panel { left: auto; right: 0; min-width: 260px; } }
+
 /* ---------- Data grid ---------- */
 .table-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
 table.grid { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -482,7 +519,17 @@ table.grid tr:last-child td { border-bottom: none; }
 .pay-exact:hover { background: var(--brand-tint); color: var(--brand-600); border-color: #d6d9fb; }
 .pay-remove { width: 22px; text-align: center; }
 .totals-row.receivable span:last-child { color: var(--warn); font-weight: 800; }
+.totals-row.cheque span:last-child { color: var(--warn); font-weight: 800; }
 .pay-warn { margin-top: 10px; background: var(--warn-tint); color: #8a5a12; border: 1px solid #f3d9ac; padding: 9px 12px; border-radius: var(--radius-sm); font-size: 13px; }
+
+/* Cheque detail sub-fields (date / bank / cheque #), shown when a payment's method is "Cheque" */
+.cheque-fields { display: flex; gap: 8px; flex-wrap: wrap; margin: 2px 0 10px; padding: 10px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; }
+.cheque-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--muted); font-weight: 600; flex: 1; min-width: 110px; }
+.cheque-fields input { padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 7px; font-size: 13px; background: #fff; }
+.cheque-fields input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
+.pay-line-wrap { margin-bottom: 8px; }
+.pay-line-wrap .pay-line { margin-bottom: 0; }
+.pay-line-wrap .cheque-fields { margin-bottom: 0; }
 
 /* overselling */
 .warn-tag { font-size: 10.5px; font-weight: 700; color: var(--warn); background: var(--warn-tint); padding: 2px 6px; border-radius: 6px; margin-left: 4px; }

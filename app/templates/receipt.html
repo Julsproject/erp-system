@@ -136,6 +136,9 @@
     {% else %}
     <a class="btn back" href="/pos">← New sale</a>
     {% endif %}
+    {% if sale.txn_type == 'sale' %}
+    <a class="btn back" href="/deliveries/new?sale_id={{ sale.id }}">📦 Schedule Delivery</a>
+    {% endif %}
     <button class="btn print" onclick="window.print()">🖨 Print</button>
   </div>
 </body>

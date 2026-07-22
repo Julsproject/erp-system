@@ -27,6 +27,7 @@ router = APIRouter()
 MANILA = ZoneInfo("Asia/Manila")
 STATUS_LABELS = {"pending": "Pending", "cleared": "Cleared", "bounced": "Bounced", "cancelled": "Cancelled"}
 DUE_SOON_DAYS = 3
+PAGE_SIZE = 20
 
 
 def _today() -> date:
@@ -38,6 +39,7 @@ def list_pdc(
     request: Request,
     direction: str = "",
     status_filter: str = "",
+    page: int = 1,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -46,20 +48,26 @@ def list_pdc(
     if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
 
+    page = max(page, 1)
     query = db.query(models.PostDatedCheque)
     if direction in ("received", "issued"):
         query = query.filter(models.PostDatedCheque.direction == direction)
     if status_filter in STATUS_LABELS:
         query = query.filter(models.PostDatedCheque.status == status_filter)
 
+    total = query.count()
+    pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+    page = min(page, pages)
+
     # Pending ones soonest-due first; resolved ones most-recent first.
     if status_filter == "pending" or not status_filter:
-        rows = query.order_by(
+        ordered = query.order_by(
             (models.PostDatedCheque.status != "pending"),
             models.PostDatedCheque.cheque_date,
-        ).all()
+        )
     else:
-        rows = query.order_by(models.PostDatedCheque.cheque_date.desc()).all()
+        ordered = query.order_by(models.PostDatedCheque.cheque_date.desc())
+    rows = ordered.offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE).all()
 
     today = _today()
     horizon = today + timedelta(days=DUE_SOON_DAYS)
@@ -73,7 +81,7 @@ def list_pdc(
             "request": request, "app_name": request.app.title, "user": user,
             "rows": rows, "direction": direction, "status_filter": status_filter,
             "counts": counts, "labels": STATUS_LABELS, "pending_total": pending_total,
-            "today": today, "horizon": horizon,
+            "today": today, "horizon": horizon, "page": page, "pages": pages,
         },
     )
 

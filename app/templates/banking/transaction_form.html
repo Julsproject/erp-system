@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Deposit' if txn_type == 'deposit' else 'Withdrawal' }} · {{ account.name }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">{{ 'Add Deposit' if txn_type == 'deposit' else 'Add Withdrawal' }}</h1>
+  <a class="btn-link" href="/banking/accounts/{{ account.id }}">← Back to {{ account.name }}</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<form class="card form" method="post" novalidate action="/banking/accounts/{{ account.id }}/transactions">
+  <input type="hidden" name="txn_type" value="{{ txn_type }}">
+
+  <label>Type
+    <select name="txn_type_display" disabled>
+      <option>{{ 'Deposit' if txn_type == 'deposit' else 'Withdrawal' }}</option>
+    </select>
+  </label>
+
+  <label>Amount
+    <input name="amount" type="number" step="0.01" min="0.01" required autofocus>
+  </label>
+
+  <label>Date
+    <input name="txn_date" type="date" value="{{ today }}" required>
+  </label>
+
+  <label>Reference # <span class="muted">(deposit slip, cheque #, etc.)</span>
+    <input name="reference_no">
+  </label>
+
+  <label class="full">Description
+    <input name="description" placeholder="{{ 'e.g. Cash sales banked, EOD deposit' if txn_type == 'deposit' else 'e.g. Paid to supplier, cash withdrawal' }}">
+  </label>
+
+  <div class="form-actions full">
+    <button class="btn" type="submit">Save {{ 'deposit' if txn_type == 'deposit' else 'withdrawal' }}</button>
+    <a class="btn-secondary" href="/banking/accounts/{{ account.id }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

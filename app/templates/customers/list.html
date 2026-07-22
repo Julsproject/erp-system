@@ -4,7 +4,7 @@
 <div class="page-head">
   <div>
     <h1 class="page-title">Customers</h1>
-    <p class="muted">{{ customers|length }} account{{ '' if customers|length == 1 else 's' }}</p>
+    <p class="muted">{{ total }} account{{ '' if total == 1 else 's' }}</p>
   </div>
   <a class="btn" href="/customers/new">+ Add customer</a>
 </div>
@@ -37,4 +37,12 @@
     </tbody>
   </table>
 </div>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn-secondary" href="/customers?page={{ page - 1 }}&q={{ q }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-secondary" href="/customers?page={{ page + 1 }}&q={{ q }}">Next →</a>{% endif %}
+</div>
+{% endif %}
 {% endblock %}

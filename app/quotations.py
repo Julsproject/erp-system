@@ -4,11 +4,12 @@ pending -> confirmed -> paid (converts into a real Sale via _finalize_sale),
 or pending/confirmed -> cancelled. A quotation never touches stock or costing
 until it is converted.
 """
+from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from . import models
@@ -21,6 +22,7 @@ from .templating import templates
 router = APIRouter()
 
 STATUS_LABELS = {"pending": "Pending", "confirmed": "Confirmed", "paid": "Paid", "cancelled": "Cancelled"}
+PAGE_SIZE = 20
 
 
 def _dec(value, default="0") -> Decimal:
@@ -28,6 +30,17 @@ def _dec(value, default="0") -> Decimal:
         return Decimal(str(value).strip().replace(",", "") or default)
     except (InvalidOperation, AttributeError, ValueError):
         return Decimal(default)
+
+
+def _parse_date(s: str):
+    try:
+        return date.fromisoformat(s) if s else None
+    except ValueError:
+        return None
+
+
+def _local_date(col):
+    return func.date(func.timezone("Asia/Manila", col))
 
 
 @router.post("/quotations")
@@ -98,6 +111,10 @@ async def create_quotation(request: Request, db: Session = Depends(get_db), user
 def list_quotations(
     request: Request,
     status_filter: str = "",
+    q: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    page: int = 1,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -105,16 +122,38 @@ def list_quotations(
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
+    page = max(page, 1)
+    q = (q or "").strip()
+    df, dt = _parse_date(date_from), _parse_date(date_to)
+
     query = db.query(models.Quotation)
     if status_filter in STATUS_LABELS:
         query = query.filter(models.Quotation.status == status_filter)
-    quotes = query.order_by(models.Quotation.id.desc()).limit(300).all()
+    if q:
+        like = f"%{q}%"
+        query = query.filter(or_(models.Quotation.quote_no.ilike(like), models.Quotation.customer_name.ilike(like)))
+    if df:
+        query = query.filter(_local_date(models.Quotation.created_at) >= df)
+    if dt:
+        query = query.filter(_local_date(models.Quotation.created_at) <= dt)
+
+    total = query.count()
+    pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+    page = min(page, pages)
+    quotes = (
+        query.order_by(models.Quotation.id.desc())
+        .offset((page - 1) * PAGE_SIZE)
+        .limit(PAGE_SIZE)
+        .all()
+    )
     counts = {s: db.query(models.Quotation).filter(models.Quotation.status == s).count() for s in STATUS_LABELS}
     return templates.TemplateResponse(
         "quotations/list.html",
         {
             "request": request, "app_name": request.app.title, "user": user,
             "quotes": quotes, "status_filter": status_filter, "counts": counts, "labels": STATUS_LABELS,
+            "q": q, "date_from": date_from, "date_to": date_to,
+            "page": page, "pages": pages,
         },
     )
 

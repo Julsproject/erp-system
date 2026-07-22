@@ -73,14 +73,20 @@
 
       <div id="fullPay">
         <label class="pay-full-method">Method
-          <select id="fullMethod" onchange="computeTotals()">
+          <select id="fullMethod" onchange="onFullMethodChange()">
             <option value="cash">Cash</option>
             <option value="gcash">GCash</option>
             <option value="card">Card (Debit/Credit)</option>
             <option value="bank_transfer">Bank Transfer</option>
+            <option value="cheque">Cheque</option>
             <option value="receivable">Receivable (Credit)</option>
           </select>
         </label>
+        <div class="cheque-fields" id="fullChequeFields" style="display:none;">
+          <label>Cheque date <input id="fullChequeDate" type="date" oninput="computeTotals()"></label>
+          <label>Bank <input id="fullChequeBank" type="text" placeholder="Optional"></label>
+          <label>Cheque # <input id="fullChequeNo" type="text" placeholder="Optional"></label>
+        </div>
       </div>
 
       <div id="splitPay" style="display:none;">
@@ -89,6 +95,7 @@
       </div>
 
       <div class="totals-row"><span>Paid now</span><span id="tPaid">₱0.00</span></div>
+      <div class="totals-row cheque" id="rowCheque" style="display:none;"><span>Cheque (pending clearance)</span><span id="tCheque">₱0.00</span></div>
       <div class="totals-row receivable" id="rowReceivable" style="display:none;"><span>Receivable (Credit)</span><span id="tReceivable">₱0.00</span></div>
       <div class="totals-row change" id="rowChange" style="display:none;"><span>Change</span><span id="tChange">₱0.00</span></div>
       <div class="pay-warn" id="payWarn" style="display:none;"></div>
@@ -227,7 +234,7 @@
 <script>
 const peso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const VAT_DIV = 1.12, VAT_RATE = 0.12;
-const METHODS = [['cash','Cash'],['gcash','GCash'],['card','Card'],['bank_transfer','Bank Transfer'],['receivable','Receivable (Credit)']];
+const METHODS = [['cash','Cash'],['gcash','GCash'],['card','Card'],['bank_transfer','Bank Transfer'],['cheque','Cheque'],['receivable','Receivable (Credit)']];
 let cart = [];
 let payments = [{ method: 'cash', amount: '' }];
 let paymentMode = 'full';   // 'full' | 'split'
@@ -305,6 +312,12 @@ function setPaymentMode(m) {
   document.getElementById('segSplit').classList.toggle('active', m === 'split');
   document.getElementById('fullPay').style.display = m === 'full' ? 'block' : 'none';
   document.getElementById('splitPay').style.display = m === 'split' ? 'block' : 'none';
+  computeTotals();
+}
+
+function onFullMethodChange() {
+  document.getElementById('fullChequeFields').style.display =
+    document.getElementById('fullMethod').value === 'cheque' ? 'flex' : 'none';
   computeTotals();
 }
 
@@ -399,6 +412,8 @@ function clearCart() {
   cart = []; payments = [{ method: 'cash', amount: '' }];
   document.getElementById('overallDiscount').value = 0; customerBox.value = ''; invoiceBox.value = '';
   document.getElementById('fullMethod').value = 'cash';
+  document.getElementById('fullChequeFields').style.display = 'none';
+  document.getElementById('fullChequeDate').value = ''; document.getElementById('fullChequeBank').value = ''; document.getElementById('fullChequeNo').value = '';
   document.getElementById('vatOn').checked = false;
   overallDiscType = 'amt'; document.getElementById('overallDiscTypeBtn').textContent = '₱';
   setPaymentMode('full');
@@ -411,6 +426,8 @@ function renderPayments() {
   box.innerHTML = '';
   payments.forEach((p, i) => {
     const opts = METHODS.map(m => '<option value="' + m[0] + '"' + (p.method === m[0] ? ' selected' : '') + '>' + m[1] + '</option>').join('');
+    const wrap = document.createElement('div');
+    wrap.className = 'pay-line-wrap';
     const row = document.createElement('div');
     row.className = 'pay-line';
     row.innerHTML =
@@ -418,11 +435,22 @@ function renderPayments() {
       '<input class="pay-amount" type="number" step="0.01" min="0" value="' + p.amount + '" placeholder="0.00" oninput="setPayAmount(' + i + ', this.value)">' +
       '<button type="button" class="pay-exact" onclick="fillExact(' + i + ')" title="Fill remaining">Exact</button>' +
       (payments.length > 1 ? '<button type="button" class="btn-link danger pay-remove" onclick="removePayment(' + i + ')">✕</button>' : '<span class="pay-remove"></span>');
-    box.appendChild(row);
+    wrap.appendChild(row);
+    if (p.method === 'cheque') {
+      const cf = document.createElement('div');
+      cf.className = 'cheque-fields';
+      cf.innerHTML =
+        '<label>Cheque date <input type="date" value="' + (p.cheque_date || '') + '" oninput="setPayChequeField(' + i + ', \'cheque_date\', this.value)"></label>' +
+        '<label>Bank <input type="text" placeholder="Optional" value="' + (p.bank || '') + '" oninput="setPayChequeField(' + i + ', \'bank\', this.value)"></label>' +
+        '<label>Cheque # <input type="text" placeholder="Optional" value="' + (p.cheque_no || '') + '" oninput="setPayChequeField(' + i + ', \'cheque_no\', this.value)"></label>';
+      wrap.appendChild(cf);
+    }
+    box.appendChild(wrap);
   });
 }
-function setPayMethod(i, v) { payments[i].method = v; computeTotals(); }
+function setPayMethod(i, v) { payments[i].method = v; renderPayments(); computeTotals(); }
 function setPayAmount(i, v) { payments[i].amount = v; computeTotals(); }
+function setPayChequeField(i, key, v) { payments[i][key] = v; computeTotals(); }
 function addPayment() { payments.push({ method: 'cash', amount: '' }); renderPayments(); computeTotals(); }
 function removePayment(i) { payments.splice(i, 1); renderPayments(); computeTotals(); }
 function fillExact(i) {
@@ -446,15 +474,25 @@ function computeTotals() {
   const grand = Math.max(subtotal - overallDiscAmt(subtotal), 0);
   const vat = document.getElementById('vatOn').checked ? grand * VAT_RATE / VAT_DIV : 0;
 
-  let paid = 0, receivable = 0;
+  // A cheque, like Receivable, isn't cash in hand yet — it doesn't count as "paid".
+  let paid = 0, receivable = 0, chequeAmt = 0, chequeDateMissing = false;
   if (paymentMode === 'full') {
     const method = document.getElementById('fullMethod').value;
-    if (method === 'receivable') receivable = grand; else paid = grand;
+    if (method === 'receivable') receivable = grand;
+    else if (method === 'cheque') {
+      chequeAmt = grand;
+      if (!document.getElementById('fullChequeDate').value) chequeDateMissing = true;
+    } else paid = grand;
   } else {
-    payments.forEach(p => { const a = parseFloat(p.amount) || 0; if (p.method === 'receivable') receivable += a; else paid += a; });
+    payments.forEach(p => {
+      const a = parseFloat(p.amount) || 0;
+      if (p.method === 'receivable') receivable += a;
+      else if (p.method === 'cheque') { chequeAmt += a; if (a > 0 && !p.cheque_date) chequeDateMissing = true; }
+      else paid += a;
+    });
   }
-  if (receivable > grand) receivable = grand;
-  const dueNow = Math.max(grand - receivable, 0);
+  if (receivable + chequeAmt > grand) receivable = Math.max(grand - chequeAmt, 0);
+  const dueNow = Math.max(grand - receivable - chequeAmt, 0);
   const change = Math.max(paid - dueNow, 0);
   const remaining = Math.max(dueNow - paid, 0);
 
@@ -463,6 +501,7 @@ function computeTotals() {
   document.getElementById('tTotal').textContent = peso(grand);
   document.getElementById('tPaid').textContent = peso(paid);
   toggleRow('rowNetVat', vat > 0, 'tNetVat', grand - vat);
+  toggleRow('rowCheque', chequeAmt > 0, 'tCheque', chequeAmt);
   toggleRow('rowReceivable', receivable > 0, 'tReceivable', receivable);
   toggleRow('rowChange', change > 0.001, 'tChange', change);
 
@@ -471,8 +510,9 @@ function computeTotals() {
   let ok = cart.length > 0, warn = '';
   if (cart.length === 0) { ok = false; }
   else if (!invoice) { ok = false; warn = 'Enter the invoice number (from your booklet).'; }
-  else if (receivable > 0 && !custName) { ok = false; warn = 'Receivable (credit) needs a customer name above.'; }
-  else if (remaining > 0.009) { ok = false; warn = 'Short by ' + peso(remaining) + ' — add a payment or receivable.'; }
+  else if ((receivable > 0 || chequeAmt > 0) && !custName) { ok = false; warn = 'Receivable (credit) or a cheque payment needs a customer name above.'; }
+  else if (chequeDateMissing) { ok = false; warn = 'Enter the cheque date (the date printed on the cheque).'; }
+  else if (remaining > 0.009) { ok = false; warn = 'Short by ' + peso(remaining) + ' — add a payment, cheque, or receivable.'; }
 
   const w = document.getElementById('payWarn');
   if (warn) { w.textContent = warn; w.style.display = 'block'; } else { w.style.display = 'none'; }
@@ -490,9 +530,20 @@ async function checkout() {
   btn.disabled = true; btn.textContent = 'Processing…';
   let payList;
   if (paymentMode === 'full') {
-    payList = [{ method: document.getElementById('fullMethod').value, amount: computeGrand() }];
+    const method = document.getElementById('fullMethod').value;
+    const row = { method, amount: computeGrand() };
+    if (method === 'cheque') {
+      row.cheque_date = document.getElementById('fullChequeDate').value;
+      row.bank = document.getElementById('fullChequeBank').value;
+      row.cheque_no = document.getElementById('fullChequeNo').value;
+    }
+    payList = [row];
   } else {
-    payList = payments.map(p => ({ method: p.method, amount: parseFloat(p.amount) || 0 })).filter(p => p.amount > 0);
+    payList = payments.map(p => {
+      const row = { method: p.method, amount: parseFloat(p.amount) || 0 };
+      if (p.method === 'cheque') { row.cheque_date = p.cheque_date || ''; row.bank = p.bank || ''; row.cheque_no = p.cheque_no || ''; }
+      return row;
+    }).filter(p => p.amount > 0);
   }
   let subtotal = 0; cart.forEach(l => subtotal += lineTotalOf(l));
   const payload = {

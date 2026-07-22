@@ -13,6 +13,8 @@ from .templating import templates
 
 router = APIRouter()
 
+PAGE_SIZE = 20
+
 
 def _settled_for(db: Session, sale_ids):
     if not sale_ids:
@@ -27,10 +29,17 @@ def _settled_for(db: Session, sale_ids):
 
 
 @router.get("/credits", response_class=HTMLResponse)
-def credits_search(request: Request, q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+def credits_search(
+    request: Request,
+    q: str = "",
+    page: int = 1,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     q = (q or "").strip()
+    page = max(page, 1)
     query = (
         db.query(models.Customer)
         .join(models.Sale, models.Sale.customer_id == models.Customer.id)
@@ -39,7 +48,15 @@ def credits_search(request: Request, q: str = "", db: Session = Depends(get_db),
     )
     if q:
         query = query.filter(models.Customer.name.ilike(f"%{q}%"))
-    customers = query.order_by(models.Customer.name).all()
+    total = query.count()
+    pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+    page = min(page, pages)
+    customers = (
+        query.order_by(models.Customer.name)
+        .offset((page - 1) * PAGE_SIZE)
+        .limit(PAGE_SIZE)
+        .all()
+    )
 
     # outstanding per listed customer
     outstanding = {}
@@ -51,7 +68,8 @@ def credits_search(request: Request, q: str = "", db: Session = Depends(get_db),
 
     return templates.TemplateResponse(
         "credits/search.html",
-        {"request": request, "app_name": request.app.title, "user": user, "customers": customers, "outstanding": outstanding, "q": q},
+        {"request": request, "app_name": request.app.title, "user": user, "customers": customers,
+         "outstanding": outstanding, "q": q, "page": page, "pages": pages},
     )
 
 

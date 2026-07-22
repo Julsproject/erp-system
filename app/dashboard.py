@@ -64,25 +64,64 @@ def _profit_between(db: Session, start: date, end: date) -> Decimal:
     return Decimal(str(value or 0))
 
 
+def _parse_date(s: str):
+    try:
+        return date.fromisoformat(s) if s else None
+    except ValueError:
+        return None
+
+
 @router.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, days: int = 7, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def dashboard(
+    request: Request,
+    days: int = 7,
+    date_from: str = "",
+    date_to: str = "",
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
 
-    if days not in (7, 30, 90):
-        days = 7
     today = _today()
-    period_start = today - timedelta(days=days - 1)
+
+    # A custom range (both ends given) overrides the 7/30/90 presets.
+    df, dt = _parse_date(date_from), _parse_date(date_to)
+    custom = bool(df and dt)
+    if custom:
+        if dt > today:
+            dt = today
+        if df > dt:
+            df, dt = dt, df
+        if (dt - df).days > 365:
+            df = dt - timedelta(days=365)
+        period_start, period_end = df, dt
+        days = (period_end - period_start).days + 1
+    else:
+        if days not in (7, 30, 90):
+            days = 7
+        period_start = today - timedelta(days=days - 1)
+        period_end = today
     month_start = today.replace(day=1)
 
     # ---- headline numbers ------------------------------------------------
+    period_expenses = (
+        db.query(func.coalesce(func.sum(models.Expense.amount), 0))
+        .filter(models.Expense.is_voided.is_(False), models.Expense.expense_date.between(period_start, period_end))
+        .scalar()
+    )
+    period_expenses = Decimal(str(period_expenses or 0))
+    period_profit = _profit_between(db, period_start, period_end)
+
     kpi = {
         "today": _sales_between(db, today, today),
         "month": _sales_between(db, month_start, today),
-        "period": _sales_between(db, period_start, today),
-        "profit": _profit_between(db, period_start, today),
+        "period": _sales_between(db, period_start, period_end),
+        "profit": period_profit,
+        "expenses": period_expenses,
+        "net_profit": period_profit - period_expenses,
     }
 
     inv_cost, inv_retail, sku_count = (
@@ -101,20 +140,28 @@ def dashboard(request: Request, days: int = 7, db: Session = Depends(get_db), us
     }
 
     # ---- sales trend (one bar per day, zero-filled) ----------------------
+    # Bars stay daily at any range length (so hovering still shows the exact
+    # day), but labels are thinned to ~12 max — otherwise 90 crammed labels
+    # overlap into an unreadable smear.
     rows = (
         db.query(
             _local_date(models.Sale.created_at).label("d"),
             func.coalesce(func.sum(models.Sale.total), 0),
         )
-        .filter(_local_date(models.Sale.created_at).between(period_start, today))
+        .filter(_local_date(models.Sale.created_at).between(period_start, period_end))
         .group_by("d")
         .all()
     )
     by_day = {r[0]: Decimal(str(r[1] or 0)) for r in rows}
+    label_stride = max(1, days // 12)
     trend = []
     for i in range(days):
         d = period_start + timedelta(days=i)
-        trend.append({"date": d, "label": d.strftime("%b %d"), "short": d.strftime("%a"), "total": by_day.get(d, ZERO)})
+        show_label = (i % label_stride == 0) or (i == days - 1)
+        trend.append({
+            "date": d, "label": d.strftime("%b %d"), "short": d.strftime("%a"),
+            "total": by_day.get(d, ZERO), "show_label": show_label,
+        })
     trend_max = max([t["total"] for t in trend] + [ZERO])
     for t in trend:
         t["pct"] = float(t["total"] / trend_max * 100) if trend_max > 0 else 0.0
@@ -124,7 +171,7 @@ def dashboard(request: Request, days: int = 7, db: Session = Depends(get_db), us
     pay_rows = (
         db.query(models.Payment.method, func.coalesce(func.sum(models.Payment.amount), 0))
         .join(models.Sale, models.Payment.sale_id == models.Sale.id)
-        .filter(_local_date(models.Sale.created_at).between(period_start, today))
+        .filter(_local_date(models.Sale.created_at).between(period_start, period_end))
         .group_by(models.Payment.method)
         .all()
     )
@@ -218,7 +265,7 @@ def dashboard(request: Request, days: int = 7, db: Session = Depends(get_db), us
         .join(models.Sale, models.SaleLine.sale_id == models.Sale.id)
         .filter(
             models.Sale.txn_type == "sale",
-            _local_date(models.Sale.created_at).between(period_start, today),
+            _local_date(models.Sale.created_at).between(period_start, period_end),
         )
         .group_by(models.SaleLine.product_id, models.SaleLine.product_name)
         .all()
@@ -269,6 +316,8 @@ def dashboard(request: Request, days: int = 7, db: Session = Depends(get_db), us
         {
             "request": request, "app_name": request.app.title, "user": user,
             "days": days, "today": today,
+            "custom": custom, "period_start": period_start, "period_end": period_end,
+            "date_from": date_from, "date_to": date_to,
             "kpi": kpi, "inventory": inventory,
             "trend": trend, "trend_max": trend_max,
             "payments": payments, "pay_total": pay_total,

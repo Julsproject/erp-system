@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ delivery.delivery_no }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{{ delivery.delivery_no }}</h1>
+    <p class="muted">
+      {% if delivery.status == 'pending' %}
+      <span class="txn" style="background:#fef3c7;color:#b45309;">Pending</span>
+      {% elif delivery.status == 'out_for_delivery' %}
+      <span class="txn" style="background:#dbeafe;color:#1d4ed8;">Out for Delivery</span>
+      {% elif delivery.status == 'delivered' %}
+      <span class="txn" style="background:#dcfce7;color:#15803d;">Delivered</span>
+      {% else %}
+      <span class="txn" style="background:#f1f5f9;color:#64748b;">Cancelled</span>
+      {% endif %}
+    </p>
+  </div>
+  <a class="btn-secondary" href="/deliveries">← Back to Deliveries</a>
+</div>
+
+<div class="card" style="padding:24px;max-width:640px;">
+  <div class="r-meta" style="display:flex;justify-content:space-between;font-size:13.5px;color:var(--muted);margin-bottom:16px;">
+    <span>Invoice:
+      {% if delivery.sale %}<a href="/pos/receipt/{{ delivery.sale.id }}?from=sales">{{ delivery.sale.invoice_no }}</a>{% else %}—{% endif %}
+    </span>
+    <span>Created {{ delivery.created_at.strftime('%b %d, %Y %I:%M %p') if delivery.created_at else '' }}</span>
+  </div>
+
+  <table class="grid" style="box-shadow:none;border:none;margin-bottom:18px;">
+    <tbody>
+      <tr><td class="muted" style="width:160px;">Recipient</td><td class="strong">{{ delivery.recipient_name or 'Walk-in' }}</td></tr>
+      <tr><td class="muted">Address</td><td>{{ delivery.address or '—' }}</td></tr>
+      <tr><td class="muted">Contact #</td><td>{{ delivery.contact_no or '—' }}</td></tr>
+      <tr><td class="muted">Driver</td><td>{{ delivery.driver_name or '—' }}</td></tr>
+      <tr><td class="muted">Vehicle</td><td>{{ delivery.vehicle or '—' }}</td></tr>
+      <tr><td class="muted">Scheduled Date</td><td>{{ delivery.scheduled_date.strftime('%b %d, %Y') if delivery.scheduled_date else '—' }}</td></tr>
+      {% if delivery.dispatched_at %}<tr><td class="muted">Dispatched</td><td>{{ delivery.dispatched_at.strftime('%b %d, %Y %I:%M %p') }}</td></tr>{% endif %}
+      {% if delivery.delivered_at %}<tr><td class="muted">Delivered</td><td>{{ delivery.delivered_at.strftime('%b %d, %Y %I:%M %p') }}</td></tr>{% endif %}
+      {% if delivery.cancelled_at %}<tr><td class="muted">Cancelled</td><td>{{ delivery.cancelled_at.strftime('%b %d, %Y %I:%M %p') }}</td></tr>{% endif %}
+      {% if delivery.notes %}<tr><td class="muted">Notes</td><td>{{ delivery.notes }}</td></tr>{% endif %}
+    </tbody>
+  </table>
+
+  {% if delivery.sale and delivery.sale.lines %}
+  <h3 class="ex-h">Items to deliver</h3>
+  <table class="grid" style="box-shadow:none;border:none;">
+    <thead><tr><th>Item</th><th class="num">Qty</th></tr></thead>
+    <tbody>
+      {% for l in delivery.sale.lines %}
+      <tr><td>{{ l.product_name }}<small class="muted" style="display:block;">{{ l.unit_name }}</small></td><td class="num">{{ l.qty|qty }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<div class="pos-actions" style="justify-content:flex-start;max-width:640px;">
+  {% if delivery.status == 'pending' %}
+  <form method="post" action="/deliveries/{{ delivery.id }}/dispatch"><button class="btn" type="submit">🚚 Dispatch (out for delivery)</button></form>
+  <a class="btn-secondary" href="/deliveries/{{ delivery.id }}/edit">Edit details</a>
+  <form method="post" action="/deliveries/{{ delivery.id }}/cancel" onsubmit="return confirm('Cancel this delivery?');"><button class="btn-link danger" type="submit">Cancel delivery</button></form>
+  {% elif delivery.status == 'out_for_delivery' %}
+  <form method="post" action="/deliveries/{{ delivery.id }}/complete"><button class="btn" type="submit">✓ Mark Delivered</button></form>
+  <a class="btn-secondary" href="/deliveries/{{ delivery.id }}/edit">Edit details</a>
+  <form method="post" action="/deliveries/{{ delivery.id }}/cancel" onsubmit="return confirm('Cancel this delivery?');"><button class="btn-link danger" type="submit">Cancel delivery</button></form>
+  {% endif %}
+</div>
+{% endblock %}

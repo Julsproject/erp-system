@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if expense else 'Add' }} expense · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">{{ 'Edit expense' if expense else 'Add expense' }}</h1>
+  <a class="btn-link" href="/expenses">← Back to expenses</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<form class="card form" method="post" novalidate
+      action="{{ '/expenses/' ~ expense.id if expense else '/expenses' }}">
+
+  <label>Category
+    <input name="category" list="expense-category-list" placeholder="Type or pick… e.g. Rent, Utilities"
+           value="{{ expense.category.name if expense and expense.category else '' }}">
+    <datalist id="expense-category-list">
+      {% for c in categories %}<option value="{{ c.name }}">{% endfor %}
+    </datalist>
+  </label>
+
+  <label>Amount
+    <input name="amount" type="number" step="0.01" min="0.01" required
+           value="{{ expense.amount if expense else '' }}">
+  </label>
+
+  <label>Date
+    <input name="expense_date" type="date" required
+           value="{{ expense.expense_date.isoformat() if expense and expense.expense_date else today }}">
+  </label>
+
+  <label>Payment Method
+    <select name="payment_method">
+      {% for value, label in methods %}
+      <option value="{{ value }}" {{ 'selected' if expense and expense.payment_method == value }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>Payee <span class="muted">(who was paid)</span>
+    <input name="payee" value="{{ expense.payee or '' if expense else '' }}" placeholder="e.g. Meralco, Landlord, Juan Dela Cruz">
+  </label>
+
+  <label>Reference # <span class="muted">(OR#, cheque #, transfer ref)</span>
+    <input name="reference_no" value="{{ expense.reference_no or '' if expense else '' }}">
+  </label>
+
+  <label class="full">Description
+    <input name="description" value="{{ expense.description or '' if expense else '' }}" placeholder="What was this for?">
+  </label>
+
+  <label class="full">Notes
+    <input name="notes" value="{{ expense.notes or '' if expense else '' }}">
+  </label>
+
+  <div class="form-actions full">
+    <button class="btn" type="submit">{{ 'Save changes' if expense else 'Save expense' }}</button>
+    <a class="btn-secondary" href="/expenses">Cancel</a>
+  </div>
+</form>
+
+{% if expense %}
+<form method="post" action="/expenses/{{ expense.id }}/void" style="margin-top:14px;"
+      onsubmit="return confirm('Void this expense? It will no longer count toward totals.');">
+  <button class="btn-link danger" type="submit">Void this expense</button>
+</form>
+{% endif %}
+{% endblock %}

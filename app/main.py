@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import (
-    activity, backup, credits, customers, dashboard, models, pdc, pos, products,
-    purchases, quotations, sales, suppliers, users,
+    activity, backup, banking, credits, customers, dashboard, deliveries, expenses, models, pdc, pos, products,
+    purchases, quotations, reports, sales, suppliers, users,
 )
 from .auth import verify_password
 from .config import settings
@@ -31,6 +31,10 @@ app.include_router(credits.router)
 app.include_router(suppliers.router)
 app.include_router(purchases.router)
 app.include_router(pdc.router)
+app.include_router(expenses.router)
+app.include_router(deliveries.router)
+app.include_router(reports.router)
+app.include_router(banking.router)
 app.include_router(backup.router)
 app.include_router(activity.router)
 app.include_router(users.router)

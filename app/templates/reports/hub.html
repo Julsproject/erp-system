@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Reports · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Reports</h1>
+    <p class="muted">Summaries that pull together data from across the app</p>
+  </div>
+</div>
+
+<div class="module-grid">
+  <a class="module-card next" href="/reports/profit-loss">
+    <span class="tag">Summary</span>
+    <h2>Profit &amp; Loss</h2>
+    <p>Revenue, gross profit, expenses by category, and net profit for any date range.</p>
+  </a>
+  <a class="module-card next" href="/reports/inventory-valuation">
+    <span class="tag">Snapshot</span>
+    <h2>Inventory Valuation</h2>
+    <p>What's on the shelf right now, valued at cost and at retail, by category.</p>
+  </a>
+  <a class="module-card" href="/sales">
+    <span class="tag">List + Export</span>
+    <h2>Sales</h2>
+    <p>All sales, refunds and exchanges — filter by type/date and download to Excel.</p>
+  </a>
+  <a class="module-card" href="/expenses">
+    <span class="tag">List + Filter</span>
+    <h2>Expenses</h2>
+    <p>Every recorded business cost, filterable by category and date.</p>
+  </a>
+  <a class="module-card" href="/purchases">
+    <span class="tag">List + Filter</span>
+    <h2>Purchasing</h2>
+    <p>Everything received or returned from suppliers.</p>
+  </a>
+  <a class="module-card" href="/pdc">
+    <span class="tag">List + Filter</span>
+    <h2>Post-Dated Cheques</h2>
+    <p>Cheques received and issued, pending, cleared or bounced.</p>
+  </a>
+</div>
+{% endblock %}

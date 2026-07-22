@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Profit &amp; Loss · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Profit &amp; Loss</h1>
+    <p class="muted">{{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }}</p>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;">
+    <div class="seg">
+      <a class="seg-btn {{ 'active' if days == 7 and not custom }}" href="/reports/profit-loss?days=7">7 days</a>
+      <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="/reports/profit-loss?days=30">30 days</a>
+      <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="/reports/profit-loss?days=90">90 days</a>
+    </div>
+    <details class="filter-drop" {{ 'open' if custom }}>
+      <summary>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M3 9.5h18M8 3v3M16 3v3"/></svg>
+        {% if custom %}{{ period_start.strftime('%b %d') }} – {{ period_end.strftime('%b %d, %Y') }}{% else %}Custom range{% endif %}
+      </summary>
+      <div class="filter-panel">
+        <form method="get" action="/reports/profit-loss">
+          <div class="field-row">
+            <div class="field"><label>From</label><input type="date" name="date_from" value="{{ date_from }}"></div>
+            <div class="field"><label>To</label><input type="date" name="date_to" value="{{ date_to }}"></div>
+          </div>
+          <div class="actions">
+            <a class="btn-link" href="/reports/profit-loss?days=30">Clear</a>
+            <button class="btn" type="submit">Apply</button>
+          </div>
+        </form>
+      </div>
+    </details>
+    <a class="btn-secondary" href="/reports/profit-loss/export?{{ 'date_from=' ~ date_from ~ '&date_to=' ~ date_to if custom else 'days=' ~ days }}">⬇ Download Excel</a>
+  </div>
+</div>
+
+<div class="card" style="padding:24px;max-width:640px;">
+  <table class="grid" style="box-shadow:none;border:none;">
+    <tbody>
+      <tr><td class="strong">Revenue</td><td class="num strong">{{ revenue|peso }}</td></tr>
+      <tr><td class="muted" style="padding-left:18px;">net of refunds &amp; exchanges</td><td></td></tr>
+      <tr><td class="strong" style="padding-top:14px;">Gross Profit</td><td class="num strong {{ 'neg' if gross_profit < 0 }}" style="padding-top:14px;">{{ gross_profit|peso }}</td></tr>
+      <tr><td class="muted" style="padding-left:18px;">from goods sold this period</td><td></td></tr>
+    </tbody>
+  </table>
+
+  <h3 class="ex-h" style="margin-top:22px;">Expenses by category</h3>
+  <table class="grid" style="box-shadow:none;border:none;">
+    <tbody>
+      {% for r in expenses_by_category %}
+      <tr><td>{{ r.name }}</td><td class="num">{{ r.amount|peso }}</td></tr>
+      {% else %}
+      <tr><td class="empty" colspan="2">No expenses recorded in this period.</td></tr>
+      {% endfor %}
+      <tr><td class="strong" style="border-top:1px solid var(--line);padding-top:10px;">Total Expenses</td><td class="num strong" style="border-top:1px solid var(--line);padding-top:10px;">{{ total_expenses|peso }}</td></tr>
+    </tbody>
+  </table>
+
+  <table class="grid" style="box-shadow:none;border:none;margin-top:18px;">
+    <tbody>
+      <tr>
+        <td class="strong" style="font-size:16px;border-top:2px solid var(--ink);padding-top:14px;">Net Profit</td>
+        <td class="num strong {{ 'neg' if net_profit < 0 }}" style="font-size:16px;border-top:2px solid var(--ink);padding-top:14px;">{{ net_profit|peso }}</td>
+      </tr>
+      <tr><td class="muted" style="padding-left:18px;">Gross Profit − Total Expenses</td><td></td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}

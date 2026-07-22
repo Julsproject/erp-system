@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ delivery.delivery_no }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Edit {{ delivery.delivery_no }}</h1>
+  <a class="btn-link" href="/deliveries/{{ delivery.id }}">← Back</a>
+</div>
+
+<form class="card form" method="post" action="/deliveries/{{ delivery.id }}">
+  <div class="full" style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:13.5px;">
+    Invoice <strong>{{ delivery.sale.invoice_no if delivery.sale else '—' }}</strong>
+  </div>
+
+  <label>Recipient Name
+    <input name="recipient_name" value="{{ delivery.recipient_name or '' }}">
+  </label>
+  <label>Contact Number
+    <input name="contact_no" value="{{ delivery.contact_no or '' }}" placeholder="09xx xxx xxxx">
+  </label>
+  <label class="full">Delivery Address
+    <input name="address" value="{{ delivery.address or '' }}">
+  </label>
+  <label>Driver
+    <input name="driver_name" value="{{ delivery.driver_name or '' }}">
+  </label>
+  <label>Vehicle
+    <input name="vehicle" value="{{ delivery.vehicle or '' }}" placeholder="Plate # etc.">
+  </label>
+  <label>Scheduled Date
+    <input name="scheduled_date" type="date" value="{{ delivery.scheduled_date.isoformat() if delivery.scheduled_date else '' }}">
+  </label>
+  <label class="full">Notes
+    <input name="notes" value="{{ delivery.notes or '' }}">
+  </label>
+
+  <div class="form-actions full">
+    <button class="btn" type="submit">Save changes</button>
+    <a class="btn-secondary" href="/deliveries/{{ delivery.id }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

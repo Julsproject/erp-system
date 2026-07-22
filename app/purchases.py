@@ -12,7 +12,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, Request, status as http_status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from . import models
@@ -28,6 +28,18 @@ COST_DP = Decimal("0.0001")
 
 PAYMENT_METHODS = [("cash", "Cash"), ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque"), ("gcash", "GCash"), ("other", "Other")]
 STATUS_LABELS = {"pending": "Pending", "confirmed": "Confirmed", "paid": "Paid", "cancelled": "Cancelled"}
+PAGE_SIZE = 20
+
+
+def _parse_date(s: str):
+    try:
+        return date.fromisoformat(s) if s else None
+    except ValueError:
+        return None
+
+
+def _local_date(col):
+    return func.date(func.timezone("Asia/Manila", col))
 
 
 def _dec(value, default="0") -> Decimal:
@@ -106,6 +118,10 @@ def purchase_search(q: str = "", db: Session = Depends(get_db), user=Depends(get
 def list_purchases(
     request: Request,
     status_filter: str = "",
+    q: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    page: int = 1,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -114,12 +130,33 @@ def list_purchases(
     if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
 
+    page = max(page, 1)
+    q = (q or "").strip()
+    df, dt = _parse_date(date_from), _parse_date(date_to)
+
     query = db.query(models.Purchase)
     if status_filter == "return":
         query = query.filter(models.Purchase.txn_type == "return")
     elif status_filter in STATUS_LABELS:
         query = query.filter(models.Purchase.txn_type == "receive", models.Purchase.status == status_filter)
-    purchases = query.order_by(models.Purchase.id.desc()).limit(300).all()
+    if q:
+        like = f"%{q}%"
+        query = query.outerjoin(models.Supplier, models.Purchase.supplier_id == models.Supplier.id).filter(
+            or_(models.Purchase.ref_no.ilike(like), models.Purchase.invoice_no.ilike(like), models.Supplier.name.ilike(like))
+        )
+    if df:
+        query = query.filter(_local_date(models.Purchase.created_at) >= df)
+    if dt:
+        query = query.filter(_local_date(models.Purchase.created_at) <= dt)
+    total = query.count()
+    pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+    page = min(page, pages)
+    purchases = (
+        query.order_by(models.Purchase.id.desc())
+        .offset((page - 1) * PAGE_SIZE)
+        .limit(PAGE_SIZE)
+        .all()
+    )
 
     all_purchases = db.query(models.Purchase).all()
     received = sum((p.total or Decimal("0")) for p in all_purchases if p.txn_type != "return")
@@ -131,7 +168,9 @@ def list_purchases(
         "purchases/list.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "purchases": purchases, "received": received, "returned": returned,
-         "status_filter": status_filter, "counts": counts, "labels": STATUS_LABELS},
+         "status_filter": status_filter, "counts": counts, "labels": STATUS_LABELS,
+         "q": q, "date_from": date_from, "date_to": date_to,
+         "page": page, "pages": pages, "total": total},
     )
 
 

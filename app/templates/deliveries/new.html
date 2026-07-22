@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}New Delivery · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Schedule a Delivery</h1>
+  <a class="btn-link" href="/deliveries">← Back to deliveries</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<div class="card" style="padding:24px;max-width:640px;">
+  <div id="lookupBox" style="{{ 'display:none;' if sale }}">
+    <label class="pos-customer" style="max-width:320px;">Invoice # <span class="muted">(the sale being delivered)</span>
+      <input id="dInvoice" type="text" autocomplete="off" placeholder="Type the invoice number…" autofocus>
+    </label>
+    <button type="button" class="btn-secondary" style="margin-top:8px;" onclick="dLookup()">Find sale</button>
+    <div id="dLookupError" class="alert" style="display:none;margin-top:12px;"></div>
+  </div>
+
+  <form id="dForm" class="form" method="post" action="/deliveries" style="{{ 'display:none;' if not sale }}margin-top:18px;">
+    <input type="hidden" name="sale_id" id="dSaleId" value="{{ sale.id if sale else '' }}">
+    <div class="full" id="dSaleInfo" style="{{ 'display:none;' if not sale }}background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:13.5px;">
+      Invoice <strong id="dSaleInvoice">{{ sale.invoice_no if sale else '' }}</strong> · <span id="dSaleCustomer">{{ sale.customer_name or 'Walk-in' if sale else '' }}</span>
+    </div>
+
+    <label>Recipient Name
+      <input name="recipient_name" id="dRecipient" value="{{ sale.customer_name if sale else '' }}">
+    </label>
+    <label>Contact Number
+      <input name="contact_no" placeholder="09xx xxx xxxx">
+    </label>
+    <label class="full">Delivery Address
+      <input name="address" value="{{ sale.customer.address if sale and sale.customer else '' }}">
+    </label>
+    <label>Driver <span class="muted">(optional — can fill in later)</span>
+      <input name="driver_name">
+    </label>
+    <label>Vehicle <span class="muted">(optional)</span>
+      <input name="vehicle" placeholder="Plate # etc.">
+    </label>
+    <label>Scheduled Date
+      <input name="scheduled_date" type="date">
+    </label>
+    <label class="full">Notes
+      <input name="notes">
+    </label>
+
+    <div class="form-actions full">
+      <button class="btn" type="submit">Create Delivery</button>
+      <a class="btn-secondary" href="/deliveries">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<script>
+async function dLookup() {
+  const inv = document.getElementById('dInvoice').value.trim();
+  if (!inv) return;
+  const res = await fetch('/pos/lookup?invoice=' + encodeURIComponent(inv));
+  const data = await res.json();
+  const err = document.getElementById('dLookupError');
+  if (!data.found) {
+    err.textContent = 'No sale found for invoice ' + inv + '.';
+    err.style.display = 'block';
+    return;
+  }
+  err.style.display = 'none';
+  document.getElementById('dSaleId').value = data.sale_id;
+  document.getElementById('dSaleInvoice').textContent = data.invoice_no;
+  document.getElementById('dSaleCustomer').textContent = data.customer_name || 'Walk-in';
+  document.getElementById('dRecipient').value = data.customer_name || '';
+  document.getElementById('dSaleInfo').style.display = 'block';
+  document.getElementById('dForm').style.display = 'grid';
+  document.getElementById('lookupBox').style.display = 'none';
+}
+</script>
+{% endblock %}

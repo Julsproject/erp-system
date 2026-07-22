@@ -13,6 +13,8 @@ from .templating import templates
 
 router = APIRouter()
 
+PAGE_SIZE = 20
+
 
 def get_or_create_customer(db: Session, name: str):
     name = (name or "").strip()
@@ -50,14 +52,29 @@ def search_customers(q: str = "", db: Session = Depends(get_db), user=Depends(ge
 
 
 @router.get("/customers", response_class=HTMLResponse)
-def list_customers(request: Request, q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+def list_customers(
+    request: Request,
+    q: str = "",
+    page: int = 1,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     q = (q or "").strip()
+    page = max(page, 1)
     query = db.query(models.Customer).filter(models.Customer.is_active.is_(True))
     if q:
         query = query.filter(models.Customer.name.ilike(f"%{q}%"))
-    customers = query.order_by(models.Customer.name).all()
+    total = query.count()
+    pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+    page = min(page, pages)
+    customers = (
+        query.order_by(models.Customer.name)
+        .offset((page - 1) * PAGE_SIZE)
+        .limit(PAGE_SIZE)
+        .all()
+    )
     return templates.TemplateResponse(
         "customers/list.html",
         {
@@ -66,6 +83,9 @@ def list_customers(request: Request, q: str = "", db: Session = Depends(get_db),
             "user": user,
             "customers": customers,
             "q": q,
+            "page": page,
+            "pages": pages,
+            "total": total,
         },
     )
 

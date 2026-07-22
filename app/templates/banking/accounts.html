@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Cash &amp; Banking · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Cash &amp; Banking</h1>
+    <p class="muted">Bank accounts and their deposit/withdrawal ledger</p>
+  </div>
+  <a class="btn" href="/banking/accounts/new">+ Add account</a>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ rows|length }}</span><span>Accounts</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total_balance|peso }}</span><span>Total Balance</span></div>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Account</th><th>Bank</th><th>Account #</th><th class="num">Balance</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="strong">{{ r.account.name }}</td>
+        <td>{{ r.account.bank_name or '—' }}</td>
+        <td>{{ r.account.account_no or '—' }}</td>
+        <td class="num strong {{ 'neg' if r.balance < 0 }}">{{ r.balance|peso }}</td>
+        <td class="row-actions">
+          <a class="btn-link" href="/banking/accounts/{{ r.account.id }}">Ledger</a>
+          <a class="btn-link" href="/banking/accounts/{{ r.account.id }}/edit">Edit</a>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="empty">No accounts yet. Click <strong>Add account</strong> to create one.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

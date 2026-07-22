@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if account else 'Add' }} account · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">{{ 'Edit account' if account else 'Add account' }}</h1>
+  <a class="btn-link" href="/banking">← Back to Cash &amp; Banking</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<form class="card form" method="post" novalidate
+      action="{{ '/banking/accounts/' ~ account.id if account else '/banking/accounts' }}">
+
+  <label>Account Name
+    <input name="name" value="{{ account.name if account else '' }}" placeholder="e.g. BDO Checking - 1234" required autofocus>
+  </label>
+
+  <label>Bank
+    <input name="bank_name" value="{{ account.bank_name or '' if account else '' }}" placeholder="e.g. BDO, BPI, Metrobank">
+  </label>
+
+  <label>Account #
+    <input name="account_no" value="{{ account.account_no or '' if account else '' }}">
+  </label>
+
+  <label>Opening Balance
+    <input name="opening_balance" type="number" step="0.01" value="{{ account.opening_balance if account else 0 }}">
+    <small class="hint">Balance when you started tracking this account here — deposits/withdrawals build on top of this.</small>
+  </label>
+
+  {% if account %}
+  <label>Status
+    <select name="status">
+      <option value="active" {{ 'selected' if account.is_active }}>Active</option>
+      <option value="inactive" {{ 'selected' if not account.is_active }}>Inactive</option>
+    </select>
+  </label>
+  {% endif %}
+
+  <div class="form-actions full">
+    <button class="btn" type="submit">{{ 'Save changes' if account else 'Save account' }}</button>
+    <a class="btn-secondary" href="/banking">Cancel</a>
+  </div>
+</form>
+{% endblock %}

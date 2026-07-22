@@ -96,12 +96,17 @@
 
       <div id="qcFullPay">
         <label class="pay-full-method">Method
-          <select id="qcFullMethod" onchange="qcRecompute()">
+          <select id="qcFullMethod" onchange="qcOnFullMethodChange()">
             {% for value, label in methods.items() %}
             <option value="{{ value }}">{{ label }}</option>
             {% endfor %}
           </select>
         </label>
+        <div class="cheque-fields" id="qcFullChequeFields" style="display:none;">
+          <label>Cheque date <input id="qcFullChequeDate" type="date" oninput="qcRecompute()"></label>
+          <label>Bank <input id="qcFullChequeBank" type="text" placeholder="Optional"></label>
+          <label>Cheque # <input id="qcFullChequeNo" type="text" placeholder="Optional"></label>
+        </div>
       </div>
 
       <div id="qcSplitPay" style="display:none;">
@@ -111,6 +116,7 @@
 
       <div class="totals-row"><span>Quote total</span><span>{{ quote.total|peso }}</span></div>
       <div class="totals-row"><span>Paid now</span><span id="qcPaid">₱0.00</span></div>
+      <div class="totals-row cheque" id="qcRowCheque" style="display:none;"><span>Cheque (pending clearance)</span><span id="qcCheque">₱0.00</span></div>
       <div class="totals-row receivable" id="qcRowReceivable" style="display:none;"><span>Receivable (Credit)</span><span id="qcReceivable">₱0.00</span></div>
       <div class="totals-row change" id="qcRowChange" style="display:none;"><span>Change</span><span id="qcChange">₱0.00</span></div>
       <div class="pay-warn" id="qcPayWarn" style="display:none;"></div>
@@ -144,12 +150,19 @@
       document.getElementById('qcSplitPay').style.display = m === 'split' ? 'block' : 'none';
       qcRecompute();
     }
+    function qcOnFullMethodChange() {
+      document.getElementById('qcFullChequeFields').style.display =
+        document.getElementById('qcFullMethod').value === 'cheque' ? 'flex' : 'none';
+      qcRecompute();
+    }
     function qcRenderPayments() {
       const box = document.getElementById('qcPaymentsList');
       box.innerHTML = '';
       qcPayments.forEach((p, i) => {
         const opts = Object.entries(QC_METHODS).map(([v, l]) =>
           '<option value="' + v + '"' + (p.method === v ? ' selected' : '') + '>' + l + '</option>').join('');
+        const wrap = document.createElement('div');
+        wrap.className = 'pay-line-wrap';
         const row = document.createElement('div');
         row.className = 'pay-line';
         row.innerHTML =
@@ -157,11 +170,22 @@
           '<input class="pay-amount" type="number" step="0.01" min="0" value="' + p.amount + '" placeholder="0.00" oninput="qcSetAmount(' + i + ', this.value)">' +
           '<button type="button" class="pay-exact" onclick="qcFillExact(' + i + ')" title="Fill remaining">Exact</button>' +
           (qcPayments.length > 1 ? '<button type="button" class="btn-link danger pay-remove" onclick="qcRemovePayment(' + i + ')">✕</button>' : '<span class="pay-remove"></span>');
-        box.appendChild(row);
+        wrap.appendChild(row);
+        if (p.method === 'cheque') {
+          const cf = document.createElement('div');
+          cf.className = 'cheque-fields';
+          cf.innerHTML =
+            '<label>Cheque date <input type="date" value="' + (p.cheque_date || '') + '" oninput="qcSetChequeField(' + i + ', \'cheque_date\', this.value)"></label>' +
+            '<label>Bank <input type="text" placeholder="Optional" value="' + (p.bank || '') + '" oninput="qcSetChequeField(' + i + ', \'bank\', this.value)"></label>' +
+            '<label>Cheque # <input type="text" placeholder="Optional" value="' + (p.cheque_no || '') + '" oninput="qcSetChequeField(' + i + ', \'cheque_no\', this.value)"></label>';
+          wrap.appendChild(cf);
+        }
+        box.appendChild(wrap);
       });
     }
-    function qcSetMethod(i, v) { qcPayments[i].method = v; qcRecompute(); }
+    function qcSetMethod(i, v) { qcPayments[i].method = v; qcRenderPayments(); qcRecompute(); }
     function qcSetAmount(i, v) { qcPayments[i].amount = v; qcRecompute(); }
+    function qcSetChequeField(i, key, v) { qcPayments[i][key] = v; qcRecompute(); }
     function qcAddPayment() { qcPayments.push({ method: 'cash', amount: '' }); qcRenderPayments(); qcRecompute(); }
     function qcRemovePayment(i) { qcPayments.splice(i, 1); qcRenderPayments(); qcRecompute(); }
     function qcFillExact(i) {
@@ -174,27 +198,39 @@
       if (show) document.getElementById(valId).textContent = qcPeso(val);
     }
     function qcRecompute() {
-      let paid = 0, receivable = 0;
+      // A cheque, like Receivable, isn't cash in hand yet — it doesn't count as "paid".
+      let paid = 0, receivable = 0, chequeAmt = 0, chequeDateMissing = false;
       if (qcMode === 'full') {
         const method = document.getElementById('qcFullMethod').value;
-        if (method === 'receivable') receivable = QUOTE_TOTAL; else paid = QUOTE_TOTAL;
+        if (method === 'receivable') receivable = QUOTE_TOTAL;
+        else if (method === 'cheque') {
+          chequeAmt = QUOTE_TOTAL;
+          if (!document.getElementById('qcFullChequeDate').value) chequeDateMissing = true;
+        } else paid = QUOTE_TOTAL;
       } else {
-        qcPayments.forEach(p => { const a = parseFloat(p.amount) || 0; if (p.method === 'receivable') receivable += a; else paid += a; });
+        qcPayments.forEach(p => {
+          const a = parseFloat(p.amount) || 0;
+          if (p.method === 'receivable') receivable += a;
+          else if (p.method === 'cheque') { chequeAmt += a; if (a > 0 && !p.cheque_date) chequeDateMissing = true; }
+          else paid += a;
+        });
       }
-      if (receivable > QUOTE_TOTAL) receivable = QUOTE_TOTAL;
-      const dueNow = Math.max(QUOTE_TOTAL - receivable, 0);
+      if (receivable + chequeAmt > QUOTE_TOTAL) receivable = Math.max(QUOTE_TOTAL - chequeAmt, 0);
+      const dueNow = Math.max(QUOTE_TOTAL - receivable - chequeAmt, 0);
       const change = Math.max(paid - dueNow, 0);
       const remaining = Math.max(dueNow - paid, 0);
 
       document.getElementById('qcPaid').textContent = qcPeso(paid);
+      qcToggleRow('qcRowCheque', chequeAmt > 0, 'qcCheque', chequeAmt);
       qcToggleRow('qcRowReceivable', receivable > 0, 'qcReceivable', receivable);
       qcToggleRow('qcRowChange', change > 0.001, 'qcChange', change);
 
       const invoice = document.getElementById('qcInvoice').value.trim();
       let ok = true, warn = '';
       if (!invoice) { ok = false; warn = 'Enter the invoice number (from your booklet).'; }
-      else if (receivable > 0 && !QUOTE_HAS_CUSTOMER) { ok = false; warn = 'Receivable (credit) needs a customer name on this quotation.'; }
-      else if (remaining > 0.009) { ok = false; warn = 'Short by ' + qcPeso(remaining) + ' — add a payment or receivable.'; }
+      else if ((receivable > 0 || chequeAmt > 0) && !QUOTE_HAS_CUSTOMER) { ok = false; warn = 'Receivable (credit) or a cheque payment needs a customer name on this quotation.'; }
+      else if (chequeDateMissing) { ok = false; warn = 'Enter the cheque date (the date printed on the cheque).'; }
+      else if (remaining > 0.009) { ok = false; warn = 'Short by ' + qcPeso(remaining) + ' — add a payment, cheque, or receivable.'; }
 
       const w = document.getElementById('qcPayWarn');
       if (warn) { w.textContent = warn; w.style.display = 'block'; } else { w.style.display = 'none'; }
@@ -204,9 +240,20 @@
       const btn = document.getElementById('qcCompleteBtn'); btn.disabled = true; btn.textContent = 'Processing…';
       let payList;
       if (qcMode === 'full') {
-        payList = [{ method: document.getElementById('qcFullMethod').value, amount: QUOTE_TOTAL }];
+        const method = document.getElementById('qcFullMethod').value;
+        const row = { method, amount: QUOTE_TOTAL };
+        if (method === 'cheque') {
+          row.cheque_date = document.getElementById('qcFullChequeDate').value;
+          row.bank = document.getElementById('qcFullChequeBank').value;
+          row.cheque_no = document.getElementById('qcFullChequeNo').value;
+        }
+        payList = [row];
       } else {
-        payList = qcPayments.map(p => ({ method: p.method, amount: parseFloat(p.amount) || 0 })).filter(p => p.amount > 0);
+        payList = qcPayments.map(p => {
+          const row = { method: p.method, amount: parseFloat(p.amount) || 0 };
+          if (p.method === 'cheque') { row.cheque_date = p.cheque_date || ''; row.bank = p.bank || ''; row.cheque_no = p.cheque_no || ''; }
+          return row;
+        }).filter(p => p.amount > 0);
       }
       const payload = { invoice_no: document.getElementById('qcInvoice').value, payments: payList };
       try {

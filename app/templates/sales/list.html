@@ -18,10 +18,44 @@
 
 <p class="muted" style="margin:-6px 0 16px;">Fully-paid transactions only. Sales with outstanding credit appear under <a href="/sales/receivables">Receivables</a>.</p>
 
+{% set qs = '&q=' ~ q if q else '' %}
+{% set qs = qs ~ ('&type_filter=' ~ type_filter if type_filter else '') %}
+{% set qs = qs ~ ('&date_from=' ~ date_from if date_from else '') %}
+{% set qs = qs ~ ('&date_to=' ~ date_to if date_to else '') %}
+{% set filter_count = (1 if type_filter else 0) + (1 if date_from else 0) + (1 if date_to else 0) %}
+
 <form class="toolbar" method="get" action="/sales">
   <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search invoice # or customer…">
   <button class="btn-secondary" type="submit">Search</button>
-  {% if q %}<a class="btn-link" href="/sales">Clear</a>{% endif %}
+
+  <details class="filter-drop" {{ 'open' if filter_count }}>
+    <summary>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16l-6.5 7.5V19l-3 1.5v-8z"/></svg>
+      Filters
+      {% if filter_count %}<span class="filter-count">{{ filter_count }}</span>{% endif %}
+    </summary>
+    <div class="filter-panel">
+      <div class="field">
+        <label>Type</label>
+        <select name="type_filter">
+          <option value="">All types</option>
+          {% for t, label in types.items() %}
+          <option value="{{ t }}" {{ 'selected' if type_filter == t }}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>From</label><input type="date" name="date_from" value="{{ date_from }}"></div>
+        <div class="field"><label>To</label><input type="date" name="date_to" value="{{ date_to }}"></div>
+      </div>
+      <div class="actions">
+        <a class="btn-link" href="/sales">Clear all</a>
+        <button class="btn" type="submit">Apply</button>
+      </div>
+    </div>
+  </details>
+
+  <a class="btn-secondary" style="margin-left:auto;" href="/sales/export?{{ qs[1:] }}">⬇ Download Excel</a>
 </form>
 
 <div class="table-wrap">
@@ -41,7 +75,7 @@
         <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales">Receipt</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="empty">No fully-paid sales {{ 'match that search' if q else 'yet' }}.</td></tr>
+      <tr><td colspan="7" class="empty">No fully-paid sales {{ 'match that filter' if (q or type_filter or date_from or date_to) else 'yet' }}.</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -49,9 +83,9 @@
 
 {% if pages > 1 %}
 <div class="pager">
-  {% if page > 1 %}<a class="btn-secondary" href="/sales?page={{ page - 1 }}&q={{ q }}">← Prev</a>{% endif %}
+  {% if page > 1 %}<a class="btn-secondary" href="/sales?page={{ page - 1 }}{{ qs }}">← Prev</a>{% endif %}
   <span class="muted">Page {{ page }} of {{ pages }}</span>
-  {% if page < pages %}<a class="btn-secondary" href="/sales?page={{ page + 1 }}&q={{ q }}">Next →</a>{% endif %}
+  {% if page < pages %}<a class="btn-secondary" href="/sales?page={{ page + 1 }}{{ qs }}">Next →</a>{% endif %}
 </div>
 {% endif %}
 {% endblock %}
