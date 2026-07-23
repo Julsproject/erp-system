@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import models
+from . import audit, models
 from .database import get_db
 from .deps import get_current_user
 from .templating import templates
@@ -137,6 +137,11 @@ async def create_delivery(request: Request, db: Session = Depends(get_db), user=
     db.add(delivery)
     db.flush()
     delivery.delivery_no = f"DEL-{delivery.id:06d}"
+    audit.record(
+        db, user=user, request=request, action="create", entity_type="delivery",
+        entity_id=delivery.id, entity_label=delivery.delivery_no,
+        summary=f"Scheduled delivery {delivery.delivery_no} for invoice {sale.invoice_no}",
+    )
     db.commit()
     return RedirectResponse(f"/deliveries/{delivery.id}", status_code=status.HTTP_302_FOUND)
 
@@ -187,36 +192,51 @@ async def update_delivery(delivery_id: int, request: Request, db: Session = Depe
 
 
 @router.post("/deliveries/{delivery_id:int}/dispatch")
-def dispatch_delivery(delivery_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def dispatch_delivery(delivery_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     delivery = db.get(models.Delivery, delivery_id)
     if delivery and delivery.status == "pending":
         delivery.status = "out_for_delivery"
         delivery.dispatched_at = func.now()
+        audit.record(
+            db, user=user, request=request, action="dispatch", entity_type="delivery",
+            entity_id=delivery.id, entity_label=delivery.delivery_no,
+            summary=f"Dispatched {delivery.delivery_no} (out for delivery)",
+        )
         db.commit()
     return RedirectResponse(f"/deliveries/{delivery_id}", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/deliveries/{delivery_id:int}/complete")
-def complete_delivery(delivery_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def complete_delivery(delivery_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     delivery = db.get(models.Delivery, delivery_id)
     if delivery and delivery.status in ("pending", "out_for_delivery"):
         delivery.status = "delivered"
         delivery.delivered_at = func.now()
+        audit.record(
+            db, user=user, request=request, action="complete", entity_type="delivery",
+            entity_id=delivery.id, entity_label=delivery.delivery_no,
+            summary=f"Marked {delivery.delivery_no} delivered",
+        )
         db.commit()
     return RedirectResponse(f"/deliveries/{delivery_id}", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/deliveries/{delivery_id:int}/cancel")
-def cancel_delivery(delivery_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def cancel_delivery(delivery_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     delivery = db.get(models.Delivery, delivery_id)
     if delivery and delivery.status in ("pending", "out_for_delivery"):
         delivery.status = "cancelled"
         delivery.cancelled_at = func.now()
+        audit.record(
+            db, user=user, request=request, action="cancel", entity_type="delivery",
+            entity_id=delivery.id, entity_label=delivery.delivery_no,
+            summary=f"Cancelled {delivery.delivery_no}",
+        )
         db.commit()
     return RedirectResponse(f"/deliveries/{delivery_id}", status_code=status.HTTP_302_FOUND)

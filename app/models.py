@@ -18,6 +18,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     func,
 )
 from sqlalchemy.orm import relationship
@@ -535,3 +536,82 @@ class BankTransaction(Base):
 
     account = relationship("BankAccount", back_populates="transactions")
     creator = relationship("User")
+
+
+class AppSetting(Base):
+    """A single editable configuration value, keyed by name.
+
+    Lets the owner change things (business name, receipt details, …) from an
+    in-app Settings screen instead of editing the `.env` file and rebuilding.
+    A key-value row keeps the schema open: adding a new setting is a new row,
+    never a migration. `.env` remains the source for infrastructure config
+    (database URL, secret key) — these are the user-facing display settings.
+    """
+    __tablename__ = "app_settings"
+
+    key = Column(String(60), primary_key=True)
+    value = Column(String(500))
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class AuditLog(Base):
+    """A who-did-what record of every meaningful change in the system.
+
+    The rest of the app tracks *who created* a thing (created_by / cashier_id)
+    but not who later edited, voided, cancelled or adjusted it — this table
+    closes that gap. Each row is one action: the actor, when, what entity, a
+    plain-language summary, and (for edits) a field-by-field before -> after
+    diff kept as a JSON string.
+
+    Written explicitly from each route via `audit.record(...)` rather than by a
+    magic ORM hook, so the actor and request context are always attached and
+    the log reads like the code that produced it. `username` is snapshotted so
+    a later rename/deletion of the user never rewrites history.
+    """
+    __tablename__ = "audit_log"
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # null = system / pre-auth event
+    username = Column(String(50))                    # snapshot of who acted
+    action = Column(String(30), nullable=False, index=True)   # create|update|void|cancel|adjust_stock|login|...
+    entity_type = Column(String(30), nullable=False, index=True)  # product|expense|delivery|user|auth|...
+    entity_id = Column(Integer, nullable=True)
+    entity_label = Column(String(150))               # human name: product name, invoice no, …
+    summary = Column(String(300))                    # one-line description of what happened
+    changes = Column(Text)                           # JSON: {field: [old, new], …}, for edits
+    ip = Column(String(45))                          # request client IP, when available
+
+    user = relationship("User")
+
+
+class Notification(Base):
+    """One entry in the Notifications Center — a centralized inbox for the
+    alerts that otherwise only surface as nav badges and the Dashboard's
+    "Needs your attention" widget (low/out of stock, overdue & due-soon
+    credits, cheques due, pending deliveries, stale backup, below-cost pricing).
+
+    These conditions are *derived* from live data, so a periodic sweep
+    (`notifications.sync_notifications`) reconciles them into rows:
+      - a condition that appears creates an unread row,
+      - a condition that clears marks its row resolved (kept as history),
+      - a condition that recurs after resolving creates a fresh unread row.
+    `dedupe_key` is the stable identity of the underlying condition
+    (e.g. "stock_out:12"), so the sweep never duplicates an open alert.
+    """
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True)
+    dedupe_key = Column(String(80), nullable=False, index=True)  # e.g. "credit_overdue:42"
+    category = Column(String(20), nullable=False)   # stock | pricing | credit | cheque | delivery | backup
+    severity = Column(String(10), nullable=False, server_default="info")  # info | warning | danger
+    title = Column(String(150), nullable=False)
+    body = Column(String(300))
+    link = Column(String(120))                      # where clicking the alert goes
+
+    is_read = Column(Boolean, nullable=False, server_default="false")
+    is_resolved = Column(Boolean, nullable=False, server_default="false")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    read_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)

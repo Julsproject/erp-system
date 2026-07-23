@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from . import models
+from . import audit, models
 from .database import get_db
 from .deps import get_current_user, is_admin
 from .templating import templates
@@ -114,6 +114,12 @@ async def create_account(request: Request, db: Session = Depends(get_db), user=D
         opening_balance=_dec(form.get("opening_balance")),
     )
     db.add(account)
+    db.flush()
+    audit.record(
+        db, user=user, request=request, action="create", entity_type="bank_account",
+        entity_id=account.id, entity_label=account.name,
+        summary=f"Added bank account “{account.name}” (opening {account.opening_balance})",
+    )
     db.commit()
     return RedirectResponse("/banking", status_code=status.HTTP_302_FOUND)
 
@@ -146,11 +152,21 @@ async def update_account(account_id: int, request: Request, db: Session = Depend
     clash = db.query(models.BankAccount).filter(func.lower(models.BankAccount.name) == name.lower(), models.BankAccount.id != account.id).first()
     if clash:
         return _render_account_form(request, user, account=account, error=f"An account named '{name}' already exists.")
+    before = audit.snapshot(account, ["name", "bank_name", "account_no", "opening_balance", "is_active"])
     account.name = name
     account.bank_name = (form.get("bank_name") or "").strip() or None
     account.account_no = (form.get("account_no") or "").strip() or None
     account.opening_balance = _dec(form.get("opening_balance"))
     account.is_active = (form.get("status") or "active") == "active"
+    db.flush()
+    after = audit.snapshot(account, ["name", "bank_name", "account_no", "opening_balance", "is_active"])
+    changes = audit.diff(before, after)
+    if changes:
+        audit.record(
+            db, user=user, request=request, action="update", entity_type="bank_account",
+            entity_id=account.id, entity_label=account.name,
+            summary=f"Edited bank account “{account.name}”", changes=changes,
+        )
     db.commit()
     return RedirectResponse("/banking", status_code=status.HTTP_302_FOUND)
 
@@ -269,12 +285,18 @@ async def create_transaction(account_id: int, request: Request, db: Session = De
         created_by=user.id,
     )
     db.add(txn)
+    db.flush()
+    audit.record(
+        db, user=user, request=request, action="create", entity_type="bank_transaction",
+        entity_id=txn.id, entity_label=account.name,
+        summary=f"{TXN_LABELS[txn_type]} of {amount} on “{account.name}”",
+    )
     db.commit()
     return RedirectResponse(f"/banking/accounts/{account_id}", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/banking/transactions/{txn_id:int}/void")
-def void_transaction(txn_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def void_transaction(txn_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
@@ -284,5 +306,10 @@ def void_transaction(txn_id: int, db: Session = Depends(get_db), user=Depends(ge
         return RedirectResponse("/banking", status_code=302)
     account_id = txn.account_id
     txn.is_voided = True
+    audit.record(
+        db, user=user, request=request, action="void", entity_type="bank_transaction",
+        entity_id=txn.id, entity_label=(txn.account.name if txn.account else None),
+        summary=f"Voided {TXN_LABELS.get(txn.txn_type, txn.txn_type)} of {txn.amount}",
+    )
     db.commit()
     return RedirectResponse(f"/banking/accounts/{account_id}", status_code=status.HTTP_302_FOUND)

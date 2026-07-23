@@ -46,9 +46,13 @@
 </head>
 <body>
   <div class="sheet">
+    {% set biz = business_info() %}
     <div class="r-head">
-      <div class="r-store">{{ app_name }}</div>
-      <div class="r-sub">{{ 'Refund Slip' if sale.txn_type == 'refund' else ('Exchange Slip' if sale.txn_type == 'exchange' else 'Sales Invoice') }}</div>
+      <div class="r-store">{{ biz.business_name or app_name }}</div>
+      {% if biz.receipt_address %}<div class="r-sub">{{ biz.receipt_address }}</div>{% endif %}
+      {% if biz.receipt_contact %}<div class="r-sub">{{ biz.receipt_contact }}</div>{% endif %}
+      {% if biz.receipt_tin %}<div class="r-sub">TIN: {{ biz.receipt_tin }}</div>{% endif %}
+      <div class="r-sub" style="margin-top:6px;font-weight:600;color:var(--ink);">{{ 'Refund Slip' if sale.txn_type == 'refund' else ('Exchange Slip' if sale.txn_type == 'exchange' else 'Sales Invoice') }}</div>
     </div>
 
     <div class="r-meta">
@@ -122,7 +126,7 @@
     </div>
 
     <div class="r-foot">
-      Thank you for your purchase!
+      {{ biz.receipt_footer or 'Thank you for your purchase!' }}
     </div>
   </div>
 

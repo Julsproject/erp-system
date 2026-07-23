@@ -180,6 +180,8 @@ Schema changes are versioned with **Alembic** migrations in `migrations/versions
 | 0014 | post_dated_cheques (PDC register) |
 | 0015 | expense_categories, expenses, deliveries |
 | 0016 | bank_accounts, bank_transactions (Cash & Banking) |
+| 0017 | app_settings (Settings UI), notifications (Notifications Center) |
+| 0018 | audit_log (system-wide who-did-what activity trail) |
 
 ---
 
@@ -240,14 +242,58 @@ role-based access (admin vs cashier) · pagination + filters across all list pag
   deliberately limited to balance-tracking, not statement reconciliation — confirm
   with the user before expanding that.
 
-### 🔜 Tier 3 (not started — pick up here)
-1. **Settings UI** — in-app screen for app name / admin password / etc. Right now
-   config is `.env`-file only. Low effort, low urgency (only matters if someone
-   besides the owner needs to change settings without editing files).
-2. **Notifications Center** — centralize the alerts that already exist scattered
-   around (low-stock/out-of-stock, overdue credits, cheques due, pending
-   deliveries — currently nav badges + the Dashboard "Needs your attention"
-   widget) into one inbox with history/read state.
+### ✅ Tier 3 (Settings + Notifications done)
+1. **Settings UI** (`/settings`, admin-only) — done. Edit the **business name**
+   (drives the login screen, page titles and the receipt header) plus optional
+   **receipt address / contact / TIN / footer**, and **change your own password**,
+   all without editing `.env` or rebuilding. Backed by an `app_settings` key-value
+   table (adding a new setting is a new row, never a migration); the business name
+   is loaded into `app.title` on startup and updated in place on save. `.env` still
+   owns infrastructure config (DATABASE_URL, SECRET_KEY) — intentionally not editable
+   in-app.
+2. **Notifications Center** (`/notifications`, admin-only) — done. One inbox for the
+   alerts that were previously only nav badges + the Dashboard "Needs your attention"
+   widget: out/low stock, below-cost pricing, overdue & due-soon credits, cheques
+   due/overdue, pending deliveries, stale/missing backup. Conditions are **derived**
+   from live data and reconciled into `notifications` rows by a throttled sweep
+   (`notifications.sync_notifications`): a new condition inserts an unread row, a
+   cleared one is marked resolved (kept under the **History** tab), and a recurrence
+   raises a fresh row. Sidebar badge shows the unread count; supports mark-read /
+   mark-all-read. The old badges + dashboard widget were left in place — this is an
+   addition, not a replacement.
+
+### ✅ Tracking, Logs & History (done)
+Built in response to the owner's ask — "know if the business is moving or not,
+especially tracking, logs and history." Three connected pieces:
+
+1. **Activity Log** (`/audit`, admin-only, in the Admin nav group) — a system-wide
+   who-did-what trail backed by `audit_log`. Every meaningful change records the
+   actor, timestamp, client IP, a plain-language summary and (for edits) a
+   field-by-field **before → after** diff. Instrumented across: inventory
+   (create / edit / **stock adjustment** / archive / bulk import), sign-in
+   (login / failed login / logout), users (create / edit / password reset),
+   business settings + own-password change, expenses (create / edit / void),
+   banking (account edits, transaction create / void) and deliveries (schedule /
+   dispatch / complete / cancel). Filter by user, action, area and date.
+   Written via `audit.record(...)` in the same DB transaction as the change, so
+   the log can never disagree with what happened.
+2. **Stock Card** (`/products/{id}/stock-card`, admin-only, "Stock card" link per
+   inventory row) — surfaces the per-product `StockMovement` ledger that was being
+   recorded but never shown: every in/out (sale, refund, exchange, purchase,
+   return, manual adjustment) with a running balance anchored to the current
+   on-hand total. Manual stock edits now also write a movement (they previously
+   left no trace), so the ledger reconciles going forward; the implied opening
+   balance is shown for pre-tracking history (e.g. bulk imports).
+3. **Growth comparison + Sales-by-Product** — the Dashboard's period KPIs (Sales,
+   Gross Profit, Expenses) now show a **▲/▼ % vs the previous period of equal
+   length** — the direct "are we moving or not" read. Direction is taken from the
+   raw values so recovering from a loss reads correctly, and the % is suppressed
+   when the prior base is zero/negative (shown as "new" / arrow instead). New
+   **Sales by Product** report (`/reports/sales-by-product`) lists units sold,
+   revenue and gross profit per product for any date range, with Excel export —
+   surfacing slow movers and loss-making lines.
+
+### 🔜 Tier 3 — still open
 3. **Full Accounting** (GL, P&L, Balance Sheet, VAT/BIR reports) — deliberately
    deprioritized: the owner's accountant/other software handles this externally.
    Only revisit if that changes; until then the P&L report + per-module Excel

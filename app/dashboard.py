@@ -71,6 +71,19 @@ def _parse_date(s: str):
         return None
 
 
+def _pct_change(current: Decimal, previous: Decimal):
+    """Percent change vs a previous value, but only when the base is positive.
+
+    Returns None when previous <= 0: a zero base has no meaningful %, and a
+    *negative* base (e.g. last period was a loss) makes the sign flip —
+    recovering from −40 to +60 would read as "−250%". In those cases the
+    template shows an arrow based on the raw values instead of a bogus %."""
+    prev = Decimal(str(previous or 0))
+    if prev <= 0:
+        return None
+    return float((Decimal(str(current or 0)) - prev) / prev * 100)
+
+
 @router.get("/", response_class=HTMLResponse)
 def dashboard(
     request: Request,
@@ -122,6 +135,27 @@ def dashboard(
         "profit": period_profit,
         "expenses": period_expenses,
         "net_profit": period_profit - period_expenses,
+    }
+
+    # ---- period-over-period comparison ("are we moving or not") ----------
+    # Compare this window against the immediately preceding one of equal length.
+    span = (period_end - period_start).days + 1
+    prev_end = period_start - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=span - 1)
+    prev_sales = _sales_between(db, prev_start, prev_end)
+    prev_profit = _profit_between(db, prev_start, prev_end)
+    prev_expenses = Decimal(str(
+        db.query(func.coalesce(func.sum(models.Expense.amount), 0))
+        .filter(models.Expense.is_voided.is_(False), models.Expense.expense_date.between(prev_start, prev_end))
+        .scalar() or 0
+    ))
+    compare = {
+        "prev_start": prev_start, "prev_end": prev_end,
+        "sales": {"now": kpi["period"], "prev": prev_sales, "pct": _pct_change(kpi["period"], prev_sales)},
+        "profit": {"now": period_profit, "prev": prev_profit, "pct": _pct_change(period_profit, prev_profit)},
+        "expenses": {"now": period_expenses, "prev": prev_expenses, "pct": _pct_change(period_expenses, prev_expenses)},
+        "net_profit": {"now": kpi["net_profit"], "prev": prev_profit - prev_expenses,
+                       "pct": _pct_change(kpi["net_profit"], prev_profit - prev_expenses)},
     }
 
     inv_cost, inv_retail, sku_count = (
@@ -318,7 +352,7 @@ def dashboard(
             "days": days, "today": today,
             "custom": custom, "period_start": period_start, "period_end": period_end,
             "date_from": date_from, "date_to": date_to,
-            "kpi": kpi, "inventory": inventory,
+            "kpi": kpi, "compare": compare, "inventory": inventory,
             "trend": trend, "trend_max": trend_max,
             "payments": payments, "pay_total": pay_total,
             "out_of_stock": out_of_stock, "low_stock": low_stock, "no_cost": no_cost,

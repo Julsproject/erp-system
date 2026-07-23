@@ -78,6 +78,9 @@
         <td class="num strong">{{ p.total_qty|qty }}</td>
         <td class="row-actions">
           <a class="btn-link" href="/products/{{ p.id }}/edit">Edit</a>
+          {% if (user.role or '')|lower == 'admin' %}
+          <a class="btn-link" href="/products/{{ p.id }}/stock-card">Stock card</a>
+          {% endif %}
           <form method="post" action="/products/{{ p.id }}/archive" onsubmit="return confirm('Archive {{ p.name|e }}?');">
             <button class="btn-link danger" type="submit">Archive</button>
           </form>

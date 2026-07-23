@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Settings · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Settings</h1>
+    <p class="muted">Business details shown on the login screen and printed receipts, and your password.</p>
+  </div>
+</div>
+
+{% if saved %}<div class="notice">{{ saved }}</div>{% endif %}
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<div class="card" style="margin-bottom:18px;">
+  <h2 style="margin:0 0 4px;font-size:16px;">Business details</h2>
+  <p class="muted" style="margin:0 0 18px;font-size:13px;">
+    The business name shows on the login screen, every page title and the top of each receipt.
+    The address, contact and TIN are optional and appear on receipts only.
+  </p>
+  <form class="form" method="post" action="/settings">
+    <label class="full">Business name
+      <input type="text" name="business_name" value="{{ values.business_name }}" maxlength="100" required>
+    </label>
+    <label class="full">Receipt address
+      <input type="text" name="receipt_address" value="{{ values.receipt_address }}" maxlength="255"
+             placeholder="e.g. 123 Rizal St., Barangay Poblacion, Cebu City">
+    </label>
+    <label>Receipt contact
+      <input type="text" name="receipt_contact" value="{{ values.receipt_contact }}" maxlength="120"
+             placeholder="e.g. 0917 123 4567">
+    </label>
+    <label>Receipt TIN
+      <input type="text" name="receipt_tin" value="{{ values.receipt_tin }}" maxlength="30"
+             placeholder="e.g. 000-000-000-000">
+    </label>
+    <label class="full">Receipt footer message
+      <input type="text" name="receipt_footer" value="{{ values.receipt_footer }}" maxlength="255"
+             placeholder="Thank you for your purchase!">
+    </label>
+    <div class="form-actions full">
+      <button class="btn" type="submit">Save changes</button>
+    </div>
+  </form>
+</div>
+
+<div class="card" style="max-width:560px;">
+  <h2 style="margin:0 0 4px;font-size:16px;">Change my password</h2>
+  <p class="muted" style="margin:0 0 18px;font-size:13px;">
+    Updates the password for your own account ({{ user.username }}).
+  </p>
+  {% if pw_saved %}<div class="notice">Password updated.</div>{% endif %}
+  {% if pw_error %}<div class="alert">{{ pw_error }}</div>{% endif %}
+  <form class="form" method="post" action="/settings/password" style="grid-template-columns:1fr;">
+    <label>Current password
+      <input type="password" name="current_password" autocomplete="current-password" required>
+    </label>
+    <label>New password
+      <input type="password" name="new_password" autocomplete="new-password" required>
+      <span class="hint">At least 4 characters.</span>
+    </label>
+    <label>Confirm new password
+      <input type="password" name="confirm_password" autocomplete="new-password" required>
+    </label>
+    <div class="form-actions">
+      <button class="btn" type="submit">Update password</button>
+    </div>
+  </form>
+</div>
+
+<div class="hint-box" style="margin-top:16px;max-width:820px;">
+  Database connection and the app's secret key stay in the <code>.env</code> file — those are
+  infrastructure settings changed by the developer, not from here.
+</div>
+{% endblock %}

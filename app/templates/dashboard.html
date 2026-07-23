@@ -2,6 +2,24 @@
 {% block title %}Dashboard · {{ app_name }}{% endblock %}
 {% block content %}
 
+{# Period-over-period delta badge. Direction always comes from the raw values
+   (now vs prev), so it stays correct even when the previous period was a loss.
+   The % only shows when prev was a positive base (see _pct_change). good_up=
+   false inverts colours (e.g. rising expenses are bad). #}
+{% macro delta_badge(c, good_up=true) %}
+  {% set up = c.now >= c.prev %}
+  {% set good = up if good_up else (not up) %}
+  {% if c.pct is not none %}
+    <span class="kpi-delta {{ 'up' if good else 'down' }}" title="was {{ c.prev|peso }} in the previous period of the same length">{{ '▲' if up else '▼' }} {{ '%.1f'|format(c.pct if c.pct >= 0 else -c.pct) }}% vs prev</span>
+  {% elif c.prev == 0 and c.now > 0 %}
+    <span class="kpi-delta {{ 'up' if good_up else 'down' }}" title="nothing recorded in the previous period">▲ new vs prev</span>
+  {% elif c.now != c.prev %}
+    <span class="kpi-delta {{ 'up' if good else 'down' }}" title="was {{ c.prev|peso }} in the previous period (a loss)">{{ '▲' if up else '▼' }} vs prev</span>
+  {% else %}
+    <span class="kpi-delta flat">— vs prev</span>
+  {% endif %}
+{% endmacro %}
+
 <div class="page-head">
   <div>
     <h1 class="page-title">Dashboard</h1>
@@ -13,7 +31,7 @@
       <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="/?days=30">30 days</a>
       <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="/?days=90">90 days</a>
     </div>
-    <details class="filter-drop" {{ 'open' if custom }}>
+    <details class="filter-drop filter-drop-right" {{ 'open' if custom }}>
       <summary>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M3 9.5h18M8 3v3M16 3v3"/></svg>
         {% if custom %}{{ period_start.strftime('%b %d') }} – {{ period_end.strftime('%b %d, %Y') }}{% else %}Custom range{% endif %}
@@ -67,16 +85,22 @@
     <span class="kpi-value">{{ kpi.month|peso }}</span>
   </div>
   <div class="kpi">
+    <span class="kpi-label">Sales · {{ days }}d</span>
+    <span class="kpi-value">{{ kpi.period|peso }}</span>
+    {{ delta_badge(compare.sales) }}
+  </div>
+  <div class="kpi">
     <span class="kpi-label">Gross Profit · {{ days }}d</span>
     <span class="kpi-value {{ 'pos' if kpi.profit > 0 }}">{{ kpi.profit|peso }}</span>
+    {{ delta_badge(compare.profit) }}
     <span class="kpi-sub">
-      from {{ kpi.period|peso }} sales
-      {% if kpi.expenses > 0 %}· net {{ kpi.net_profit|peso }} after expenses{% endif %}
+      {% if kpi.expenses > 0 %}net {{ kpi.net_profit|peso }} after expenses{% else %}from {{ kpi.period|peso }} sales{% endif %}
     </span>
   </div>
   <div class="kpi {{ 'kpi-warn' if kpi.expenses > 0 }}">
     <span class="kpi-label">Expenses · {{ days }}d</span>
     <span class="kpi-value">{{ kpi.expenses|peso }}</span>
+    {{ delta_badge(compare.expenses, good_up=false) }}
     <span class="kpi-sub"><a href="/expenses">View expenses →</a></span>
   </div>
   <div class="kpi">

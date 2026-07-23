@@ -90,8 +90,31 @@ def asset_version() -> str:
         return "1"
 
 
+def notif_unread_count() -> int:
+    """Unread, unresolved Notifications Center count for the sidebar badge.
+    Imported lazily to avoid a circular import (notifications imports templating).
+    """
+    try:
+        from .notifications import unread_count
+        return unread_count()
+    except Exception:  # never let a badge break a page render
+        return 0
+
+
+def business_info() -> dict:
+    """DB-saved display settings (business name + receipt details) for templates.
+    Imported lazily to keep templating import-light; never raises."""
+    try:
+        from .settings_store import business_info as _bi
+        return _bi()
+    except Exception:
+        return {}
+
+
 templates.env.filters["peso"] = peso
 templates.env.filters["qty"] = qty
 templates.env.globals["price_alert_count"] = price_alert_count
 templates.env.globals["pdc_due_count"] = pdc_due_count
 templates.env.globals["asset_version"] = asset_version
+templates.env.globals["notif_unread_count"] = notif_unread_count
+templates.env.globals["business_info"] = business_info

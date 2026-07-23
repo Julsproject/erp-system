@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Stock Card · {{ product.name }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Stock Card</h1>
+    <p class="muted">{{ product.name }}{% if product.unit_type %} · in {{ product.unit_type.name }}{% endif %} — every movement in and out, with a running balance.</p>
+  </div>
+  <div class="head-actions">
+    <a class="btn-secondary" href="/products">← Inventory</a>
+    <a class="btn-secondary" href="/products/{{ product.id }}/edit">Edit product</a>
+  </div>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ current_total|qty }}</span><span>On hand now</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total_in|qty }}</span><span>Total in</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total_out|qty }}</span><span>Total out</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ count }}</span><span>Movements</span></div>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>When</th><th>Movement</th><th>Reference</th><th class="num">In</th><th class="num">Out</th><th class="num">Balance</th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      {% set m = r.movement %}
+      <tr>
+        <td style="white-space:nowrap;">{{ m.created_at.strftime('%b %d, %Y') if m.created_at else '—' }}
+          <span class="muted" style="font-size:12px;">{{ m.created_at.strftime('%I:%M %p') if m.created_at else '' }}</span></td>
+        <td><span class="mv-reason mv-{{ 'in' if r.in_qty else 'out' }}">{{ r.label }}</span></td>
+        <td class="muted">{{ m.ref or '—' }}</td>
+        <td class="num" style="color:var(--ok);font-weight:600;">{{ ('+' ~ r.in_qty|qty) if r.in_qty else '' }}</td>
+        <td class="num" style="color:var(--danger);font-weight:600;">{{ ('−' ~ r.out_qty|qty) if r.out_qty else '' }}</td>
+        <td class="num strong">{{ r.balance|qty }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No stock movements recorded yet for this product.</td></tr>
+      {% endfor %}
+      {% if rows %}
+      <tr style="background:var(--surface-2);">
+        <td class="muted" colspan="5" style="font-style:italic;">Opening balance (implied — before the earliest movement)</td>
+        <td class="num strong">{{ opening|qty }}</td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+
+<div class="hint-box" style="margin-top:16px;max-width:820px;">
+  Movements come from sales, refunds, exchanges, purchases and manual stock edits. The balance is anchored to the
+  current on-hand total and worked backwards, so the newest row always equals the real stock on hand.
+  {% if opening != product.beginning_stock %}
+  The implied opening ({{ opening|qty }}) differs from the recorded beginning stock ({{ product.beginning_stock|qty }}) —
+  that gap is from stock set directly (e.g. a bulk import) before it was tracked here.
+  {% endif %}
+</div>
+{% endblock %}

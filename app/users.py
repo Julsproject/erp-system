@@ -4,7 +4,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from . import models
+from . import audit, models
 from .auth import hash_password
 from .database import get_db
 from .deps import get_current_user, is_admin
@@ -74,13 +74,21 @@ async def create_user(request: Request, db: Session = Depends(get_db), user=Depe
     if db.query(models.User).filter(func.lower(models.User.username) == username).first():
         return _render_form(request, user, error=f"Username '{username}' is already taken.")
 
-    db.add(models.User(
+    role = (form.get("role") or "cashier").strip().lower()
+    new_user = models.User(
         username=username,
         full_name=(form.get("full_name") or "").strip() or None,
         password_hash=hash_password(password),
-        role=(form.get("role") or "cashier").strip().lower(),
+        role=role,
         is_active=(form.get("status") or "active") == "active",
-    ))
+    )
+    db.add(new_user)
+    db.flush()
+    audit.record(
+        db, user=user, request=request, action="create", entity_type="user",
+        entity_id=new_user.id, entity_label=username,
+        summary=f"Created {role} account “{username}”",
+    )
     db.commit()
     return RedirectResponse("/users", status_code=status.HTTP_302_FOUND)
 
@@ -96,6 +104,8 @@ async def update_user(user_id: int, request: Request, db: Session = Depends(get_
         return RedirectResponse("/users", status_code=302)
 
     form = await request.form()
+    before = {"full_name": target.full_name, "role": target.role,
+              "status": "active" if target.is_active else "disabled"}
     target.full_name = (form.get("full_name") or "").strip() or None
     new_role = (form.get("role") or "cashier").strip().lower()
     active = (form.get("status") or "active") == "active"
@@ -113,11 +123,26 @@ async def update_user(user_id: int, request: Request, db: Session = Depends(get_
     target.role = new_role
     target.is_active = active
 
+    pw_changed = False
     password = form.get("password") or ""
     if password:
         if len(password) < 4:
             return _render_form(request, user, target=target, error="Password must be at least 4 characters.")
         target.password_hash = hash_password(password)
+        pw_changed = True
 
+    after = {"full_name": target.full_name, "role": target.role,
+             "status": "active" if target.is_active else "disabled"}
+    changes = audit.diff(before, after)
+    if pw_changed:
+        changes["password"] = ["••••", "changed"]
+    if changes:
+        audit.record(
+            db, user=user, request=request, action="update", entity_type="user",
+            entity_id=target.id, entity_label=target.username,
+            summary=f"Edited account “{target.username}”"
+                    + (" (password reset)" if pw_changed else ""),
+            changes=changes,
+        )
     db.commit()
     return RedirectResponse("/users", status_code=status.HTTP_302_FOUND)

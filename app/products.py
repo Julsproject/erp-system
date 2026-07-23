@@ -15,14 +15,25 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from . import models
+from . import audit, models
 from .database import get_db
-from .deps import get_current_user
+from .deps import get_current_user, is_admin
 from .templating import templates
 
 router = APIRouter()
 
 PAGE_SIZE = 20
+
+# Fields whose before/after we log on a product edit. Stock and price changes
+# are the theft/accountability-sensitive ones the owner most wants visible.
+AUDIT_FIELDS = ["name", "cost_price", "selling_price", "beginning_stock", "stock_qty", "reorder_level", "is_vat"]
+
+
+def _product_snapshot(p: models.Product) -> dict:
+    d = audit.snapshot(p, AUDIT_FIELDS)
+    d["category"] = p.category.name if p.category else None
+    d["unit_type"] = p.unit_type.name if p.unit_type else None
+    return d
 
 # Columns used for the import template and the upload parser.
 TEMPLATE_HEADERS = [
@@ -214,6 +225,12 @@ async def create_product(request: Request, db: Session = Depends(get_db), user=D
     product = models.Product()
     _save_from_form(product, db, form)
     db.add(product)
+    db.flush()  # assign product.id so the audit row can reference it
+    audit.record(
+        db, user=user, request=request, action="create", entity_type="product",
+        entity_id=product.id, entity_label=product.name,
+        summary=f"Created product “{product.name}”",
+    )
     db.commit()
     return RedirectResponse("/products", status_code=status.HTTP_302_FOUND)
 
@@ -228,20 +245,116 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
     form = await request.form()
     if not (form.get("name") or "").strip():
         return _render_form(request, db, user, product=product, error="Product name is required.")
+    before = _product_snapshot(product)
+    old_total = Decimal(str(product.total_qty or 0))
     _save_from_form(product, db, form)
+    db.flush()
+    after = _product_snapshot(product)
+    new_total = Decimal(str(product.total_qty or 0))
+    changes = audit.diff(before, after)
+    if changes:
+        # Flag a stock correction distinctly — it's the theft-sensitive edit.
+        stock_touched = "stock_qty" in changes or "beginning_stock" in changes
+        audit.record(
+            db, user=user, request=request,
+            action="adjust_stock" if stock_touched else "update",
+            entity_type="product", entity_id=product.id, entity_label=product.name,
+            summary=(f"Adjusted stock for “{product.name}”" if stock_touched else f"Edited “{product.name}”"),
+            changes=changes,
+        )
+        # Record the net stock change as a movement too, so the Stock Card
+        # ledger reconciles — manual edits used to leave no trace here.
+        delta = new_total - old_total
+        if delta != 0:
+            db.add(models.StockMovement(
+                product_id=product.id, qty_base=delta, reason="adjustment", ref="manual edit",
+            ))
     db.commit()
     return RedirectResponse("/products", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/products/{product_id:int}/archive")
-def archive_product(product_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def archive_product(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     product = db.get(models.Product, product_id)
     if product:
         product.is_active = False
+        audit.record(
+            db, user=user, request=request, action="archive", entity_type="product",
+            entity_id=product.id, entity_label=product.name,
+            summary=f"Archived “{product.name}”",
+        )
         db.commit()
     return RedirectResponse("/products", status_code=status.HTTP_302_FOUND)
+
+
+# Human labels + in/out direction for the stock-movement reasons written across
+# POS (sale/refund/exchange), Purchasing (purchase/return) and manual edits.
+MOVEMENT_LABELS = {
+    "sale": "Sale", "refund": "Refund (returned)",
+    "exchange-return": "Exchange — returned in", "exchange-sale": "Exchange — sold out",
+    "purchase": "Purchase received", "purchase-return": "Purchase return",
+    "adjustment": "Manual adjustment",
+}
+
+
+@router.get("/products/{product_id:int}/stock-card", response_class=HTMLResponse)
+def stock_card(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Per-product stock ledger: every in/out movement with a running balance.
+
+    The balance is anchored to the product's *current* on-hand total and worked
+    backwards through the movements, so the newest row always shows the true
+    current stock even if older movements pre-date movement tracking (e.g. a
+    bulk import). The implied opening balance is shown for reconciliation.
+    """
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+    product = db.get(models.Product, product_id)
+    if not product:
+        return RedirectResponse("/products", status_code=302)
+
+    movements = (
+        db.query(models.StockMovement)
+        .filter(models.StockMovement.product_id == product_id)
+        .order_by(models.StockMovement.created_at.asc(), models.StockMovement.id.asc())
+        .all()
+    )
+
+    current_total = Decimal(str(product.total_qty or 0))
+    total_delta = sum((Decimal(str(m.qty_base or 0)) for m in movements), Decimal("0"))
+    opening = current_total - total_delta
+
+    running = opening
+    total_in = total_out = Decimal("0")
+    rows = []
+    for m in movements:
+        delta = Decimal(str(m.qty_base or 0))
+        running += delta
+        if delta >= 0:
+            total_in += delta
+        else:
+            total_out += -delta
+        rows.append({
+            "movement": m,
+            "label": MOVEMENT_LABELS.get(m.reason, (m.reason or "").replace("-", " ").title()),
+            "in_qty": delta if delta > 0 else None,
+            "out_qty": -delta if delta < 0 else None,
+            "balance": running,
+        })
+    rows.reverse()  # newest first for display
+
+    return templates.TemplateResponse(
+        "products/stock_card.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "product": product, "rows": rows, "opening": opening,
+            "current_total": current_total, "total_in": total_in, "total_out": total_out,
+            "count": len(movements),
+        },
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -356,6 +469,12 @@ async def import_upload(
                     created += 1
             except Exception as exc:  # noqa: BLE001
                 errors.append({"row": line_no, "name": name, "message": str(exc)})
+        if created or updated:
+            audit.record(
+                db, user=user, request=request, action="update", entity_type="product",
+                entity_label=file.filename,
+                summary=f"Bulk import from “{file.filename}”: {created} created, {updated} updated, {skipped} skipped",
+            )
         db.commit()
         result = {
             "created": created,

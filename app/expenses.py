@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import models
+from . import audit, models
 from .database import get_db
 from .deps import get_current_user, is_admin
 from .templating import templates
@@ -168,6 +168,11 @@ async def create_expense(request: Request, db: Session = Depends(get_db), user=D
     db.add(expense)
     db.flush()
     expense.ref_no = f"EXP-{expense.id:06d}"
+    audit.record(
+        db, user=user, request=request, action="create", entity_type="expense",
+        entity_id=expense.id, entity_label=expense.ref_no,
+        summary=f"Recorded expense {expense.ref_no} — {expense.amount} to {expense.payee or 'payee'}",
+    )
     db.commit()
     return RedirectResponse("/expenses", status_code=status.HTTP_302_FOUND)
 
@@ -184,13 +189,23 @@ async def update_expense(expense_id: int, request: Request, db: Session = Depend
     form = await request.form()
     if _dec(form.get("amount")) <= 0:
         return _render_form(request, db, user, expense=expense, error="Enter an amount greater than zero.")
+    before = audit.snapshot(expense, ["amount", "payee", "description", "expense_date", "payment_method", "reference_no"])
     _apply_form(expense, db, form)
+    db.flush()
+    after = audit.snapshot(expense, ["amount", "payee", "description", "expense_date", "payment_method", "reference_no"])
+    changes = audit.diff(before, after)
+    if changes:
+        audit.record(
+            db, user=user, request=request, action="update", entity_type="expense",
+            entity_id=expense.id, entity_label=expense.ref_no,
+            summary=f"Edited expense {expense.ref_no}", changes=changes,
+        )
     db.commit()
     return RedirectResponse("/expenses", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/expenses/{expense_id:int}/void")
-def void_expense(expense_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def void_expense(expense_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
@@ -198,5 +213,10 @@ def void_expense(expense_id: int, db: Session = Depends(get_db), user=Depends(ge
     expense = db.get(models.Expense, expense_id)
     if expense:
         expense.is_voided = True
+        audit.record(
+            db, user=user, request=request, action="void", entity_type="expense",
+            entity_id=expense.id, entity_label=expense.ref_no,
+            summary=f"Voided expense {expense.ref_no} ({expense.amount})",
+        )
         db.commit()
     return RedirectResponse("/expenses", status_code=status.HTTP_302_FOUND)

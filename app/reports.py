@@ -227,6 +227,111 @@ def _valuation_rows(db: Session):
     return rows
 
 
+def _sales_by_product(db: Session, period_start: date, period_end: date):
+    """Per-product sales in the window: units sold, revenue and gross profit.
+    Uses 'sale' lines only (same basis as the Dashboard's top-sellers), so a
+    product's movement here reads as gross demand, not net-of-returns."""
+    cogs_expr = models.SaleLine.qty * models.SaleLine.unit_factor * models.SaleLine.unit_cost
+    rows = (
+        db.query(
+            models.SaleLine.product_name,
+            func.coalesce(func.sum(models.SaleLine.qty), 0).label("qty"),
+            func.coalesce(func.sum(models.SaleLine.line_total), 0).label("revenue"),
+            func.coalesce(func.sum(models.SaleLine.line_total - cogs_expr), 0).label("profit"),
+        )
+        .join(models.Sale, models.SaleLine.sale_id == models.Sale.id)
+        .filter(models.Sale.txn_type == "sale", _local_date(models.Sale.created_at).between(period_start, period_end))
+        .group_by(models.SaleLine.product_name)
+        .all()
+    )
+    out = [
+        {
+            "name": r.product_name,
+            "qty": Decimal(str(r.qty or 0)),
+            "revenue": Decimal(str(r.revenue or 0)),
+            "profit": Decimal(str(r.profit or 0)),
+        }
+        for r in rows
+    ]
+    out.sort(key=lambda r: r["revenue"], reverse=True)
+    return out
+
+
+@router.get("/reports/sales-by-product", response_class=HTMLResponse)
+def sales_by_product(
+    request: Request,
+    days: int = 30,
+    date_from: str = "",
+    date_to: str = "",
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    period_start, period_end, custom = _resolve_period(days, date_from, date_to)
+    rows = _sales_by_product(db, period_start, period_end)
+    totals = {
+        "qty": sum((r["qty"] for r in rows), ZERO),
+        "revenue": sum((r["revenue"] for r in rows), ZERO),
+        "profit": sum((r["profit"] for r in rows), ZERO),
+    }
+    return templates.TemplateResponse(
+        "reports/sales_by_product.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "days": days, "date_from": date_from, "date_to": date_to,
+            "period_start": period_start, "period_end": period_end, "custom": custom,
+            "rows": rows, "totals": totals,
+        },
+    )
+
+
+@router.get("/reports/sales-by-product/export")
+def export_sales_by_product(
+    days: int = 30,
+    date_from: str = "",
+    date_to: str = "",
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    period_start, period_end, _ = _resolve_period(days, date_from, date_to)
+    rows = _sales_by_product(db, period_start, period_end)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sales by Product"
+    headers = ["Product", "Units Sold", "Revenue", "Gross Profit"]
+    ws.append(headers)
+    header_fill = PatternFill("solid", fgColor="1F6FEB")
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+    for r in rows:
+        ws.append([r["name"], float(r["qty"]), float(r["revenue"]), float(r["profit"])])
+    widths = [32, 14, 16, 16]
+    for i, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"sales_by_product_{period_start.isoformat()}_{period_end.isoformat()}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/reports/inventory-valuation", response_class=HTMLResponse)
 def inventory_valuation(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:

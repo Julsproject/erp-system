@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Notifications · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Notifications</h1>
+    <p class="muted">Everything that needs your attention, in one place — {{ active_count }} active, {{ unread }} unread.</p>
+  </div>
+  {% if view == 'active' and unread %}
+  <form method="post" action="/notifications/read-all" style="margin:0;">
+    <button class="btn-secondary" type="submit">Mark all read</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="tabs">
+  <a class="tab {{ 'active' if view == 'active' }}" href="/notifications">Active{% if active_count %} ({{ active_count }}){% endif %}</a>
+  <a class="tab {{ 'active' if view == 'history' }}" href="/notifications?view=history">History</a>
+</div>
+
+<div class="notif-list">
+  {% for n in notifications %}
+  <div class="notif {{ 'unread' if not n.is_read and not n.is_resolved }} sev-{{ n.severity }}">
+    <span class="notif-dot"></span>
+    <div class="notif-body">
+      <div class="notif-top">
+        <span class="notif-tag tag-{{ n.category }}">{{ category_labels.get(n.category, n.category|title) }}</span>
+        <span class="notif-title">{{ n.title }}</span>
+        {% if not n.is_read and not n.is_resolved %}<span class="notif-new">NEW</span>{% endif %}
+      </div>
+      {% if n.body %}<div class="notif-text">{{ n.body }}</div>{% endif %}
+      <div class="notif-meta">
+        {% if n.is_resolved %}
+          <span>Resolved {{ n.resolved_at.strftime('%b %d, %Y %I:%M %p') if n.resolved_at else '' }}</span>
+        {% else %}
+          <span>Raised {{ n.created_at.strftime('%b %d, %Y %I:%M %p') if n.created_at else '' }}</span>
+        {% endif %}
+        {% if n.link and not n.is_resolved %}<a class="btn-link" href="{{ n.link }}">View →</a>{% endif %}
+      </div>
+    </div>
+    {% if not n.is_read and not n.is_resolved %}
+    <form method="post" action="/notifications/{{ n.id }}/read" style="margin:0;">
+      <button class="notif-read" type="submit" title="Mark as read">Mark read</button>
+    </form>
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="card" style="text-align:center;color:var(--muted);padding:40px 16px;">
+    {% if view == 'history' %}
+      No resolved notifications yet.
+    {% else %}
+      🎉 All clear — nothing needs your attention right now.
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}
