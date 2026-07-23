@@ -855,6 +855,38 @@ table.grid tr:last-child td { border-bottom: none; }
 .mv-in { background: var(--ok-tint); color: var(--ok); }
 .mv-out { background: var(--danger-tint); color: var(--danger); }
 
+/* ---- Three selling prices (fixed / markup % / margin %) ------------------- */
+.price-set { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 4px; }
+.ps-title { margin: 0 0 12px; font-size: 15.5px; }
+.ps-title .muted { font-weight: 400; font-size: 13px; }
+.price-table th, .price-table td { padding: 10px 12px; vertical-align: middle; }
+.price-table input {
+  width: 100%; max-width: 150px; padding: 8px 10px; border: 1px solid var(--line-2);
+  border-radius: 8px; font-size: 14px; font-weight: 600; text-align: right;
+  background: var(--surface); color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.price-table input.pct-in { max-width: 90px; }
+.price-table input.readonly { background: var(--surface-2); color: var(--ink); cursor: default; }
+.price-table input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
+.pm-result { font-size: 12.5px; font-weight: 600; color: var(--ok); margin: 8px 0 0; }
+.pm-result.warn { color: var(--warn); font-weight: 500; }
+
+/* compact variant inside the purchase form's quick-create panel */
+.np-prices { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
+.np-prices-title { margin: 0 0 10px; font-size: 13px; }
+.np-prices-title .muted { font-weight: 400; font-size: 11.5px; }
+.np-price-row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+.npp-label { flex: none; width: 58px; font-size: 12.5px; font-weight: 600; color: var(--ink-soft); }
+.np-price-row input, .np-price-row .npp-pct {
+  padding: 7px 9px; border: 1px solid var(--line-2); border-radius: 7px; font-size: 13px;
+  text-align: right; background: var(--surface); color: var(--ink); min-width: 0;
+}
+.np-price-row .npp-pct { flex: none; width: 62px; }
+.np-price-row span.npp-pct { border: none; background: none; text-align: center; }
+.np-price-row input:not(.npp-pct) { flex: 1; font-weight: 600; }
+.np-price-row input.readonly { background: var(--surface-2); cursor: default; }
+.np-price-row input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
+
 /* ---- Cash on Delivery ---------------------------------------------------- */
 .cod-pill { background: var(--warn-tint); color: var(--warn); margin-left: 4px; }
 .cod-box {

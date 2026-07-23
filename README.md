@@ -12,6 +12,27 @@ An in-house **POS + Inventory + Sales** system for a hardware store. Runs on one
 
 **Inventory**
 - Products with **Category** and **Unit Type** (create-your-own — just type a new one)
+- **Three selling prices on every item**, set on the product form and on the
+  purchase screen's quick "create product" panel:
+  - **Fixed** — typed in directly (the default POS price).
+  - **Markup %** — `cost × (1 + pct/100)`, a % *on top of cost*.
+  - **Margin %** — `cost ÷ (1 − pct/100)`, a % *of the selling price*.
+
+  You enter the two percentages; their prices are calculated from cost and
+  refresh whenever the cost changes. Each row shows its profit and **true
+  margin**, because markup and margin are not interchangeable: on a ₱300 cost,
+  30% markup gives ₱390 (only a 23.1% margin) while 30% margin gives ₱428.57.
+  Since the Gross Profit reports measure profit as a share of revenue, a
+  markup-priced sale always reports a lower % than the number typed.
+  Shared maths lives in `app/pricing.py` so the form, the purchase panel and
+  the server can't drift apart.
+- **Choosing a price at POS** — the per-line *unit* dropdown lists all three
+  (`piece`, `piece · Markup`, `piece · Margin`) with their prices, so the
+  cashier picks one from the control they already use; different lines can use
+  different prices. The extra options only appear once a markup/margin % is
+  set, so items priced the old way look unchanged. `sale_lines.price_tier`
+  records which price was charged (shown on the receipt), so two sales of the
+  same item at different prices can be told apart later.
 - Columns: Product Name, Category, Unit Type, Cost of Sales, Selling Price, Actual Beginning Stocks, Stocks Qty, **Total Qty** (auto)
 - Search + pagination (fast with a large catalog)
 - **Bulk import** from Excel/CSV (download a template, fill it, upload)
@@ -183,6 +204,8 @@ Schema changes are versioned with **Alembic** migrations in `migrations/versions
 | 0017 | app_settings (Settings UI), notifications (Notifications Center) |
 | 0018 | audit_log (system-wide who-did-what activity trail) |
 | 0019 | Cash on Delivery fields on deliveries (COD flag, amount, collection) |
+| 0020 | three selling prices per product (fixed + markup % + margin %) |
+| 0021 | sale_lines.price_tier — which of the three prices was charged |
 
 ---
 

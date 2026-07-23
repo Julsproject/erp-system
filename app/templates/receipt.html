@@ -85,7 +85,7 @@
         {% for l in sale.lines %}
         <tr>
           <td class="r-item">{{ l.product_name }}
-            <small>{{ l.qty|qty }} {{ l.unit_name }} × {{ l.unit_price|peso }}{% if l.discount and l.discount > 0 %} − {{ l.discount|peso }}{% endif %}</small>
+            <small>{{ l.qty|qty }} {{ l.unit_name }}{% if l.price_tier in ('markup', 'margin') %} ({{ l.price_tier|title }}){% endif %} × {{ l.unit_price|peso }}{% if l.discount and l.discount > 0 %} − {{ l.discount|peso }}{% endif %}</small>
           </td>
           <td class="num">{{ l.qty|qty }}</td>
           <td class="num">{{ l.line_total|peso }}</td>

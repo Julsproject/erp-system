@@ -108,9 +108,23 @@ def pos_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_curr
     out = []
     for p in products:
         base_unit = p.unit_type.name if p.unit_type else "Unit"
-        units = [{"name": base_unit, "factor": 1.0, "price": float(p.selling_price or 0)}]
+        # The base unit is offered at each of the product's three prices, so the
+        # cashier picks the price from the same dropdown they already use to pick
+        # the unit. Markup/margin only appear once they've actually been set, so
+        # products priced the old way look exactly as before.
+        # `name` stays the plain unit (what's stored on the sale line); `label`
+        # is what the dropdown shows; `tier` is recorded against the line.
+        units = [{"name": base_unit, "label": base_unit, "factor": 1.0,
+                  "price": float(p.selling_price or 0), "tier": "fixed"}]
+        if (p.markup_price or 0) > 0:
+            units.append({"name": base_unit, "label": f"{base_unit} · Markup", "factor": 1.0,
+                          "price": float(p.markup_price), "tier": "markup"})
+        if (p.margin_price or 0) > 0:
+            units.append({"name": base_unit, "label": f"{base_unit} · Margin", "factor": 1.0,
+                          "price": float(p.margin_price), "tier": "margin"})
         for u in p.units:
-            units.append({"name": u.name, "factor": float(u.factor_to_base or 1), "price": float(u.price or 0)})
+            units.append({"name": u.name, "label": u.name, "factor": float(u.factor_to_base or 1),
+                          "price": float(u.price or 0), "tier": ""})
         c = p.container
         container = None if not c else {
             "pack_name": c["pack_name"],
@@ -179,6 +193,7 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
             discount=discount,
             line_total=_money(line_total),
             is_vat=is_vat,
+            price_tier=(ln.get("tier") or "fixed"),
             # Freeze today's cost so profit reporting stays accurate later.
             unit_cost=_money(product.cost_price or 0),
         ))
@@ -484,6 +499,7 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
             product_id=product.id if product else None, product_name=ln.get("name") or "Item",
             unit_name=ln.get("unit_name"), unit_factor=factor, qty=qty, unit_price=unit_price,
             discount=discount, line_total=_money(lt), is_vat=is_vat,
+            price_tier=(ln.get("tier") or "fixed"),
         ))
 
     # Both sides are already VAT-inclusive, so the difference is a straight

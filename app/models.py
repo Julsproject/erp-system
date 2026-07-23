@@ -73,6 +73,20 @@ class Product(Base):
     # Low-stock alert threshold in base units. 0 = no alert for this product.
     reorder_level = Column(Numeric(14, 3), nullable=False, server_default="0")
 
+    # Every product carries THREE selling prices at once, so the shop can quote
+    # a different one per customer type without re-pricing the item:
+    #   selling_price  the fixed price, typed in directly (the default POS price)
+    #   markup_price   cost * (1 + markup_pct/100)   -- % ON TOP OF COST
+    #   margin_price   cost / (1 - margin_pct/100)   -- % OF THE SELLING PRICE
+    # The two percentages are what the user sets; the prices are derived from
+    # cost on save so they stay consistent. Markup and margin are NOT the same:
+    # on a 300 cost, 30% markup gives 390 (only a 23.1% margin) while 30% margin
+    # gives 428.57.
+    markup_pct = Column(Numeric(6, 2), nullable=False, server_default="0")
+    markup_price = Column(Numeric(12, 2), nullable=False, server_default="0")
+    margin_pct = Column(Numeric(6, 2), nullable=False, server_default="0")
+    margin_price = Column(Numeric(12, 2), nullable=False, server_default="0")
+
     is_vat = Column(Boolean, nullable=False, server_default="false")  # VAT toggle per product
     is_active = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -198,6 +212,11 @@ class SaleLine(Base):
     # Cost per BASE unit captured at the moment of sale, so profit stays correct
     # even after a supplier price change. Cost of goods = qty * unit_factor * unit_cost.
     unit_cost = Column(Numeric(12, 2), nullable=False, server_default="0")
+
+    # Which of the product's three prices was charged: fixed | markup | margin
+    # (blank for a ladder unit, which carries its own single price). Recorded so
+    # two sales of the same item at different prices can be told apart later.
+    price_tier = Column(String(10), server_default="fixed")
 
     sale = relationship("Sale", back_populates="lines")
 

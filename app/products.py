@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from . import audit, models
+from . import audit, models, pricing
 from .database import get_db
 from .deps import get_current_user, is_admin
 from .templating import templates
@@ -26,7 +26,8 @@ PAGE_SIZE = 20
 
 # Fields whose before/after we log on a product edit. Stock and price changes
 # are the theft/accountability-sensitive ones the owner most wants visible.
-AUDIT_FIELDS = ["name", "cost_price", "selling_price", "beginning_stock", "stock_qty", "reorder_level", "is_vat"]
+AUDIT_FIELDS = ["name", "cost_price", "selling_price", "beginning_stock", "stock_qty",
+                "reorder_level", "is_vat", "markup_pct", "markup_price", "margin_pct", "margin_price"]
 
 
 def _product_snapshot(p: models.Product) -> dict:
@@ -189,7 +190,10 @@ def _save_from_form(product: models.Product, db: Session, form):
     product.category = _get_or_create_category(db, form.get("category"))
     product.unit_type = _get_or_create_unit_type(db, form.get("unit_type"))
     product.cost_price = _to_decimal(form.get("cost_price"))
-    product.selling_price = _to_decimal(form.get("selling_price"))
+    product.selling_price = _to_decimal(form.get("selling_price"))   # the fixed price
+    # The other two prices are derived from cost, so they refresh whenever the
+    # cost or either percentage is edited.
+    pricing.apply_to(product, product.cost_price, form.get("markup_pct"), form.get("margin_pct"))
     product.beginning_stock = _to_decimal(form.get("beginning_stock"))
     product.stock_qty = _to_decimal(form.get("stock_qty"))
     product.reorder_level = _to_decimal(form.get("reorder_level"))

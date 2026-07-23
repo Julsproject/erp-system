@@ -30,15 +30,36 @@
       <label>Unit type
         <input id="npUnit" type="text" list="np-units" placeholder="Piece" autocomplete="off">
       </label>
-      <label>Selling price (₱)
-        <input id="npPrice" type="number" step="0.01" min="0" placeholder="0.00">
+      <label>Unit cost (₱) <span class="muted">— what you pay the supplier</span>
+        <input id="npCost" type="number" step="0.01" min="0" placeholder="0.00" oninput="npRecalc()">
       </label>
+
+      <div class="np-prices">
+        <h4 class="np-prices-title">Selling prices <span class="muted">· all three are saved</span></h4>
+        <div class="np-price-row">
+          <span class="npp-label">Fixed</span>
+          <span class="npp-pct muted">—</span>
+          <input id="npPrice" type="number" step="0.01" min="0" placeholder="0.00" oninput="npRecalc()">
+        </div>
+        <div class="np-price-row">
+          <span class="npp-label">Markup</span>
+          <input id="npMarkupPct" class="npp-pct" type="number" step="0.01" min="0" placeholder="%" oninput="npRecalc()">
+          <input id="npMarkupPrice" type="number" class="readonly" readonly tabindex="-1" placeholder="0.00">
+        </div>
+        <div class="np-price-row">
+          <span class="npp-label">Margin</span>
+          <input id="npMarginPct" class="npp-pct" type="number" step="0.01" min="0" max="99.99" placeholder="%" oninput="npRecalc()">
+          <input id="npMarginPrice" type="number" class="readonly" readonly tabindex="-1" placeholder="0.00">
+        </div>
+        <p class="pm-result" id="npResult"></p>
+      </div>
+
       <div class="np-actions">
         <button type="button" class="btn" onclick="createProduct()">Create &amp; add</button>
         <button type="button" class="btn-secondary" onclick="hideNewProduct()">Cancel</button>
       </div>
       <div id="npError" class="alert" style="display:none;margin:10px 0 0;"></div>
-      <p class="hint np-hint">The cost is filled in from this purchase. You can refine the details later in Inventory.</p>
+      <p class="hint np-hint">The unit cost also pre-fills this purchase line. You can refine the details later in Inventory.</p>
     </div>
 
     <datalist id="np-cats">{% for c in categories %}<option value="{{ c.name }}">{% endfor %}</datalist>
@@ -342,9 +363,36 @@ function showNewProduct() {
 }
 function hideNewProduct() {
   document.getElementById('npPanel').style.display = 'none';
-  ['npName', 'npCategory', 'npUnit', 'npPrice'].forEach(id => document.getElementById(id).value = '');
+  ['npName', 'npCategory', 'npUnit', 'npPrice', 'npCost',
+   'npMarkupPct', 'npMarkupPrice', 'npMarginPct', 'npMarginPrice'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('npResult').textContent = '';
   document.getElementById('npError').style.display = 'none';
 }
+
+/* ---- the three selling prices (mirrors app/pricing.py) ---- */
+function npRecalc() {
+  const cost = parseFloat(document.getElementById('npCost').value) || 0;
+  const out = document.getElementById('npResult');
+  let mPct = parseFloat(document.getElementById('npMarkupPct').value) || 0;
+  let gPct = parseFloat(document.getElementById('npMarginPct').value) || 0;
+  if (gPct > 99.99) { gPct = 99.99; document.getElementById('npMarginPct').value = gPct; }
+
+  if (cost <= 0) {
+    document.getElementById('npMarkupPrice').value = '';
+    document.getElementById('npMarginPrice').value = '';
+    out.className = 'pm-result warn';
+    out.textContent = 'Enter a unit cost — markup and margin are calculated from it.';
+    return;
+  }
+  const markup = Math.round(cost * (1 + mPct / 100) * 100) / 100;
+  const margin = Math.round(cost / (1 - gPct / 100) * 100) / 100;
+  document.getElementById('npMarkupPrice').value = markup.toFixed(2);
+  document.getElementById('npMarginPrice').value = margin.toFixed(2);
+  out.className = 'pm-result';
+  out.textContent = 'Markup ₱' + markup.toFixed(2) + ' (true margin ' + ((markup - cost) / markup * 100).toFixed(1) +
+    '%)  ·  Margin ₱' + margin.toFixed(2) + ' (true margin ' + ((margin - cost) / margin * 100).toFixed(1) + '%)';
+}
+
 async function createProduct() {
   const err = document.getElementById('npError');
   err.style.display = 'none';
@@ -354,7 +402,10 @@ async function createProduct() {
     name: name,
     category: document.getElementById('npCategory').value,
     unit_type: document.getElementById('npUnit').value,
-    selling_price: document.getElementById('npPrice').value
+    selling_price: document.getElementById('npPrice').value,
+    cost_price: document.getElementById('npCost').value,
+    markup_pct: document.getElementById('npMarkupPct').value,
+    margin_pct: document.getElementById('npMarginPct').value
   };
   try {
     const res = await fetch('/purchases/quick-product', {

@@ -370,7 +370,7 @@ function renderCart() {
     const over = needed[line.product.id] > line.product.on_hand + 1e-9;
     const opts = line.product.units.map((u, ui) =>
       '<option value="' + ui + '"' + (ui === line.unitIndex ? ' selected' : '') + '>' +
-      escapeHtml(u.name) + ' (' + peso(u.price) + ')</option>').join('');
+      escapeHtml(u.label || u.name) + ' (' + peso(u.price) + ')</option>').join('');
     const tr = document.createElement('tr');
     tr.innerHTML =
       '<td class="strong">' + escapeHtml(line.product.name) +
@@ -555,7 +555,8 @@ async function checkout() {
     lines: cart.map(line => {
       const unit = line.product.units[line.unitIndex];
       return { product_id: line.product.id, unit_name: unit.name, factor: unit.factor,
-               qty: line.qty, unit_price: unit.price, discount: lineDiscAmt(line) };
+               qty: line.qty, unit_price: unit.price, discount: lineDiscAmt(line),
+               tier: unit.tier || '' };
     })
   };
   try {
@@ -689,7 +690,7 @@ function exRenderCart() {
   body.innerHTML = '';
   exCart.forEach((line, i) => {
     const unit = line.product.units[line.unitIndex];
-    const opts = line.product.units.map((u, ui) => '<option value="' + ui + '"' + (ui === line.unitIndex ? ' selected' : '') + '>' + escapeHtml(u.name) + ' (' + peso(u.price) + ')</option>').join('');
+    const opts = line.product.units.map((u, ui) => '<option value="' + ui + '"' + (ui === line.unitIndex ? ' selected' : '') + '>' + escapeHtml(u.label || u.name) + ' (' + peso(u.price) + ')</option>').join('');
     const tr = document.createElement('tr');
     tr.innerHTML =
       '<td class="strong">' + escapeHtml(line.product.name) + '</td>' +
@@ -757,7 +758,7 @@ async function doExchange() {
     const qty = parseFloat(tr.querySelector('.ex-rqty').value) || 0;
     if (qty > 0) returned.push({ product_id: l.product_id, name: l.name, unit_name: l.unit_name, factor: l.factor, qty: qty, unit_price: l.unit_price, is_vat: l.is_vat });
   });
-  const new_lines = exCart.map(l => { const u = l.product.units[l.unitIndex]; return { product_id: l.product.id, name: l.product.name, unit_name: u.name, factor: u.factor, qty: l.qty, unit_price: u.price, discount: 0, is_vat: l.product.is_vat }; });
+  const new_lines = exCart.map(l => { const u = l.product.units[l.unitIndex]; return { product_id: l.product.id, name: l.product.name, unit_name: u.name, factor: u.factor, qty: l.qty, unit_price: u.price, discount: 0, is_vat: l.product.is_vat, tier: u.tier || '' }; });
   if (!returned.length && !new_lines.length) return;
   const btn = document.getElementById('exBtn'); btn.disabled = true; btn.textContent = 'Processing…';
   const payload = { sale_id: exSale ? exSale.sale_id : null, returned_items: returned, new_lines: new_lines,
@@ -819,7 +820,7 @@ function quoRenderCart() {
     const unit = line.product.units[line.unitIndex];
     const opts = line.product.units.map((u, ui) =>
       '<option value="' + ui + '"' + (ui === line.unitIndex ? ' selected' : '') + '>' +
-      escapeHtml(u.name) + ' (' + peso(u.price) + ')</option>').join('');
+      escapeHtml(u.label || u.name) + ' (' + peso(u.price) + ')</option>').join('');
     const tr = document.createElement('tr');
     tr.innerHTML =
       '<td class="strong">' + escapeHtml(line.product.name) + '</td>' +

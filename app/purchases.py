@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import models
+from . import models, pricing
 from .database import get_db
 from .deps import get_current_user, is_admin
 from .products import _get_or_create_category, _get_or_create_unit_type
@@ -236,14 +236,19 @@ async def quick_product(request: Request, db: Session = Depends(get_db), user=De
         # Already there — just hand it back so the cashier can carry on.
         return {"ok": True, "existed": True, "product": _product_payload(existing)}
 
+    # Cost may be typed here so the markup/margin prices can be worked out up
+    # front; it also pre-fills this purchase line. Confirming the purchase still
+    # sets the authoritative cost from what's actually received.
+    cost = _money(data.get("cost_price") or 0)
     product = models.Product(
         name=name,
-        cost_price=Decimal("0"),
+        cost_price=cost,
         selling_price=_money(data.get("selling_price") or 0),
         beginning_stock=Decimal("0"),
         stock_qty=Decimal("0"),
         is_active=True,
     )
+    pricing.apply_to(product, cost, data.get("markup_pct"), data.get("margin_pct"))
     product.category = _get_or_create_category(db, data.get("category"))
     product.unit_type = _get_or_create_unit_type(db, data.get("unit_type") or "Piece")
     db.add(product)

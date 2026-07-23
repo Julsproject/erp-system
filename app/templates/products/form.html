@@ -40,10 +40,43 @@
     <small class="hint">Optional. Purchasing fills this in automatically when you receive stock from a supplier.</small>
   </label>
 
-  <label>Selling Price (₱)
-    <input name="selling_price" type="number" step="1" min="0" inputmode="decimal"
-           value="{{ '%.2f'|format(product.selling_price) if product else '0.00' }}">
-  </label>
+  <div class="full price-set">
+    <h3 class="ps-title">Selling Prices <span class="muted">· every item carries all three</span></h3>
+    <div class="table-wrap">
+      <table class="grid price-table">
+        <thead>
+          <tr><th>Price</th><th class="num">%</th><th class="num">Selling price (₱)</th><th class="num">Profit</th><th class="num">True margin</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Fixed</strong><small class="muted" style="display:block;">typed in — POS uses this</small></td>
+            <td class="num muted">—</td>
+            <td class="num"><input id="fixedPrice" name="selling_price" type="number" step="0.01" min="0" inputmode="decimal"
+                   value="{{ '%.2f'|format(product.selling_price) if product else '0.00' }}" oninput="recalcPrices()"></td>
+            <td class="num" id="fixedProfit">—</td>
+            <td class="num" id="fixedMargin">—</td>
+          </tr>
+          <tr>
+            <td><strong>Markup</strong><small class="muted" style="display:block;">% on top of cost</small></td>
+            <td class="num"><input id="markupPct" name="markup_pct" type="number" step="0.01" min="0" class="pct-in"
+                   value="{{ '%.2f'|format(product.markup_pct) if product else '0.00' }}" oninput="recalcPrices()"></td>
+            <td class="num"><input id="markupPrice" type="number" class="readonly" readonly tabindex="-1"></td>
+            <td class="num" id="markupProfit">—</td>
+            <td class="num" id="markupMargin">—</td>
+          </tr>
+          <tr>
+            <td><strong>Margin</strong><small class="muted" style="display:block;">% of the selling price</small></td>
+            <td class="num"><input id="marginPct" name="margin_pct" type="number" step="0.01" min="0" max="99.99" class="pct-in"
+                   value="{{ '%.2f'|format(product.margin_pct) if product else '0.00' }}" oninput="recalcPrices()"></td>
+            <td class="num"><input id="marginPrice" type="number" class="readonly" readonly tabindex="-1"></td>
+            <td class="num" id="marginProfit">—</td>
+            <td class="num" id="marginMargin">—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="hint" id="priceHint">Markup and margin are calculated from the Cost of Sales above — enter a cost for them to work.</p>
+  </div>
 
   <label>Actual Beginning Stocks
     <input id="beginning" name="beginning_stock" type="number" step="1" min="0" inputmode="decimal"
@@ -138,7 +171,57 @@
     tr.querySelector('input').focus();
   }
 
+  /* ---- The three selling prices --------------------------------------------
+     markup: price = cost * (1 + pct/100)   -> pct is ON TOP OF cost
+     margin: price = cost / (1 - pct/100)   -> pct is a SHARE OF the price
+     Mirrors app/pricing.py; the server recomputes on save, this just shows the
+     numbers (and each one's TRUE margin) before you commit to them. */
+  function costValue() {
+    return parseFloat(document.querySelector('input[name="cost_price"]').value) || 0;
+  }
+  function showRow(price, cost, priceEl, profitEl, marginEl) {
+    if (priceEl) priceEl.value = price > 0 ? price.toFixed(2) : '';
+    var profit = price - cost;
+    if (price > 0 && cost > 0) {
+      profitEl.textContent = '₱' + profit.toFixed(2);
+      profitEl.className = 'num ' + (profit < 0 ? 'neg' : '');
+      marginEl.textContent = (profit / price * 100).toFixed(1) + '%';
+      marginEl.className = 'num ' + (profit < 0 ? 'neg' : '');
+    } else {
+      profitEl.textContent = '—'; profitEl.className = 'num muted';
+      marginEl.textContent = '—'; marginEl.className = 'num muted';
+    }
+  }
+
+  function recalcPrices() {
+    var cost = costValue();
+    var hint = document.getElementById('priceHint');
+
+    // Fixed — typed in; we only report what it earns.
+    var fixed = parseFloat(document.getElementById('fixedPrice').value) || 0;
+    showRow(fixed, cost, null, document.getElementById('fixedProfit'), document.getElementById('fixedMargin'));
+
+    var mPct = parseFloat(document.getElementById('markupPct').value) || 0;
+    var gPct = parseFloat(document.getElementById('marginPct').value) || 0;
+    if (gPct > 99.99) { gPct = 99.99; document.getElementById('marginPct').value = gPct; }
+
+    var markup = cost > 0 ? Math.round(cost * (1 + mPct / 100) * 100) / 100 : 0;
+    var margin = cost > 0 ? Math.round(cost / (1 - gPct / 100) * 100) / 100 : 0;
+
+    showRow(markup, cost, document.getElementById('markupPrice'),
+            document.getElementById('markupProfit'), document.getElementById('markupMargin'));
+    showRow(margin, cost, document.getElementById('marginPrice'),
+            document.getElementById('marginProfit'), document.getElementById('marginMargin'));
+
+    hint.textContent = (cost > 0)
+      ? 'Markup and margin are calculated from the Cost of Sales above. Note they differ: the same % gives a different price.'
+      : 'Markup and margin are calculated from the Cost of Sales above — enter a cost for them to work.';
+  }
+
+  document.querySelector('input[name="cost_price"]').addEventListener('input', recalcPrices);
+
   calcTotal();
   updateBaseLabels();
+  recalcPrices();
 </script>
 {% endblock %}
