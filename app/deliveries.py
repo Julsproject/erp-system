@@ -26,6 +26,13 @@ router = APIRouter()
 PAGE_SIZE = 20
 STATUS_LABELS = {"pending": "Pending", "out_for_delivery": "Out for Delivery", "delivered": "Delivered", "cancelled": "Cancelled"}
 
+# How a driver can collect a COD balance. Cheque is deliberately excluded: a
+# post-dated cheque doesn't settle anything on the spot, and handing the goods
+# over against one is a decision for the office, not the driver.
+COD_METHODS = [("cash", "Cash"), ("gcash", "GCash"), ("card", "Card"), ("bank_transfer", "Bank Transfer")]
+
+ZERO = Decimal("0")
+
 
 def _parse_date(s: str):
     try:
@@ -36,6 +43,41 @@ def _parse_date(s: str):
 
 def _local_date(col):
     return func.date(func.timezone("Asia/Manila", col))
+
+
+def _dec(value, default="0") -> Decimal:
+    try:
+        return Decimal(str(value).strip().replace(",", "") or default)
+    except Exception:
+        return Decimal(default)
+
+
+def _outstanding(db: Session, sale) -> Decimal:
+    """What's still owed on a sale — its receivable minus everything settled."""
+    if not sale:
+        return ZERO
+    paid = (
+        db.query(func.coalesce(func.sum(models.ReceivableSettlement.amount), 0))
+        .filter(models.ReceivableSettlement.sale_id == sale.id)
+        .scalar()
+    )
+    return Decimal(str(sale.receivable_amount or 0)) - Decimal(str(paid or 0))
+
+
+def cod_pending_sale_ids(db: Session) -> set:
+    """Sale ids whose balance is waiting on a COD delivery that hasn't been
+    delivered or cancelled yet. Used to tell "awaiting delivery" apart from
+    ordinary overdue credit in the Receivables list and in notifications."""
+    rows = (
+        db.query(models.Delivery.sale_id)
+        .filter(
+            models.Delivery.is_cod.is_(True),
+            models.Delivery.status.in_(("pending", "out_for_delivery")),
+        )
+        .distinct()
+        .all()
+    )
+    return {r[0] for r in rows if r[0]}
 
 
 @router.get("/deliveries", response_class=HTMLResponse)
@@ -109,7 +151,8 @@ def new_delivery(
         error = error or "That invoice can't be delivered."
     return templates.TemplateResponse(
         "deliveries/new.html",
-        {"request": request, "app_name": request.app.title, "user": user, "sale": sale, "error": error},
+        {"request": request, "app_name": request.app.title, "user": user, "sale": sale, "error": error,
+         "outstanding": _outstanding(db, sale)},
     )
 
 
@@ -123,6 +166,10 @@ async def create_delivery(request: Request, db: Session = Depends(get_db), user=
     if not sale or sale.txn_type == "refund":
         return RedirectResponse("/deliveries/new?error=Pick+a+valid+invoice+first.", status_code=302)
 
+    # COD is only meaningful when the sale still has a balance to collect.
+    outstanding = _outstanding(db, sale)
+    is_cod = bool(form.get("is_cod")) and outstanding > 0
+
     delivery = models.Delivery(
         sale_id=sale.id,
         recipient_name=(form.get("recipient_name") or sale.customer_name or "").strip() or None,
@@ -132,6 +179,8 @@ async def create_delivery(request: Request, db: Session = Depends(get_db), user=
         vehicle=(form.get("vehicle") or "").strip() or None,
         scheduled_date=_parse_date((form.get("scheduled_date") or "").strip()),
         notes=(form.get("notes") or "").strip() or None,
+        is_cod=is_cod,
+        cod_amount=outstanding if is_cod else ZERO,
         created_by=user.id,
     )
     db.add(delivery)
@@ -140,14 +189,22 @@ async def create_delivery(request: Request, db: Session = Depends(get_db), user=
     audit.record(
         db, user=user, request=request, action="create", entity_type="delivery",
         entity_id=delivery.id, entity_label=delivery.delivery_no,
-        summary=f"Scheduled delivery {delivery.delivery_no} for invoice {sale.invoice_no}",
+        summary=(f"Scheduled COD delivery {delivery.delivery_no} for invoice {sale.invoice_no}"
+                 f" — {outstanding} to collect" if is_cod else
+                 f"Scheduled delivery {delivery.delivery_no} for invoice {sale.invoice_no}"),
     )
     db.commit()
     return RedirectResponse(f"/deliveries/{delivery.id}", status_code=status.HTTP_302_FOUND)
 
 
 @router.get("/deliveries/{delivery_id:int}", response_class=HTMLResponse)
-def view_delivery(delivery_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def view_delivery(
+    delivery_id: int,
+    request: Request,
+    error: str = "",
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     delivery = db.get(models.Delivery, delivery_id)
@@ -155,7 +212,9 @@ def view_delivery(delivery_id: int, request: Request, db: Session = Depends(get_
         return RedirectResponse("/deliveries", status_code=302)
     return templates.TemplateResponse(
         "deliveries/view.html",
-        {"request": request, "app_name": request.app.title, "user": user, "delivery": delivery, "labels": STATUS_LABELS},
+        {"request": request, "app_name": request.app.title, "user": user, "delivery": delivery,
+         "labels": STATUS_LABELS, "cod_methods": COD_METHODS, "error": error,
+         "outstanding": _outstanding(db, delivery.sale)},
     )
 
 
@@ -209,19 +268,53 @@ def dispatch_delivery(delivery_id: int, request: Request, db: Session = Depends(
 
 
 @router.post("/deliveries/{delivery_id:int}/complete")
-def complete_delivery(delivery_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+async def complete_delivery(delivery_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Mark a delivery delivered. For a COD delivery this is also the moment the
+    driver's collection is recorded — it creates the ReceivableSettlement that
+    finally pays down the sale, so handover and payment can't drift apart."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     delivery = db.get(models.Delivery, delivery_id)
-    if delivery and delivery.status in ("pending", "out_for_delivery"):
-        delivery.status = "delivered"
-        delivery.delivered_at = func.now()
-        audit.record(
-            db, user=user, request=request, action="complete", entity_type="delivery",
-            entity_id=delivery.id, entity_label=delivery.delivery_no,
-            summary=f"Marked {delivery.delivery_no} delivered",
+    if not delivery or delivery.status not in ("pending", "out_for_delivery"):
+        return RedirectResponse(f"/deliveries/{delivery_id}", status_code=status.HTTP_302_FOUND)
+
+    form = await request.form()
+    outstanding = _outstanding(db, delivery.sale)
+    collected = ZERO
+
+    if delivery.is_cod and outstanding > 0:
+        method = (form.get("collect_method") or "cash").strip().lower()
+        if method not in dict(COD_METHODS):
+            method = "cash"
+        collected = _dec(form.get("collect_amount"))
+        if collected <= 0:
+            return RedirectResponse(
+                f"/deliveries/{delivery_id}?error=Enter+the+amount+the+driver+collected.",
+                status_code=status.HTTP_302_FOUND,
+            )
+        if collected > outstanding:
+            collected = outstanding  # never collect more than is owed
+
+        settlement = models.ReceivableSettlement(
+            sale_id=delivery.sale_id, method=method, amount=collected, cashier_id=user.id,
         )
-        db.commit()
+        db.add(settlement)
+        db.flush()
+        delivery.settlement_id = settlement.id
+        delivery.collected_amount = collected
+        delivery.collected_method = method
+        delivery.collected_at = func.now()
+
+    delivery.status = "delivered"
+    delivery.delivered_at = func.now()
+    audit.record(
+        db, user=user, request=request, action="complete", entity_type="delivery",
+        entity_id=delivery.id, entity_label=delivery.delivery_no,
+        summary=(f"Delivered {delivery.delivery_no} and collected {collected} "
+                 f"({delivery.collected_method}) on COD" if collected > 0
+                 else f"Marked {delivery.delivery_no} delivered"),
+    )
+    db.commit()
     return RedirectResponse(f"/deliveries/{delivery_id}", status_code=status.HTTP_302_FOUND)
 
 

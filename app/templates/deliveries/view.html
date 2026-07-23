@@ -14,10 +14,29 @@
       {% else %}
       <span class="txn" style="background:#f1f5f9;color:#64748b;">Cancelled</span>
       {% endif %}
+      {% if delivery.is_cod %}<span class="txn cod-pill">COD</span>{% endif %}
     </p>
   </div>
   <a class="btn-secondary" href="/deliveries">← Back to Deliveries</a>
 </div>
+
+{% if error %}<div class="alert" style="max-width:640px;">{{ error }}</div>{% endif %}
+
+{% if delivery.is_cod %}
+  {% if delivery.collected_at %}
+  <div class="notice" style="max-width:640px;background:var(--ok-tint);color:var(--ok);border-color:transparent;">
+    <strong>COD collected:</strong> {{ delivery.collected_amount|peso }}
+    via {{ dict(cod_methods).get(delivery.collected_method, delivery.collected_method) }}
+    on {{ delivery.collected_at.strftime('%b %d, %Y %I:%M %p') }}.
+    {% if outstanding > 0 %}Still owed on this invoice: <strong>{{ outstanding|peso }}</strong>.{% else %}Invoice fully paid.{% endif %}
+  </div>
+  {% elif delivery.status in ('pending', 'out_for_delivery') %}
+  <div class="notice" style="max-width:640px;background:var(--warn-tint);color:var(--warn);border-color:transparent;">
+    <strong>Cash on Delivery</strong> — collect <strong>{{ outstanding|peso }}</strong> from the customer on handover.
+    Recording the collection happens when you mark this delivered below.
+  </div>
+  {% endif %}
+{% endif %}
 
 <div class="card" style="padding:24px;max-width:640px;">
   <div class="r-meta" style="display:flex;justify-content:space-between;font-size:13.5px;color:var(--muted);margin-bottom:16px;">
@@ -38,6 +57,12 @@
       {% if delivery.dispatched_at %}<tr><td class="muted">Dispatched</td><td>{{ delivery.dispatched_at.strftime('%b %d, %Y %I:%M %p') }}</td></tr>{% endif %}
       {% if delivery.delivered_at %}<tr><td class="muted">Delivered</td><td>{{ delivery.delivered_at.strftime('%b %d, %Y %I:%M %p') }}</td></tr>{% endif %}
       {% if delivery.cancelled_at %}<tr><td class="muted">Cancelled</td><td>{{ delivery.cancelled_at.strftime('%b %d, %Y %I:%M %p') }}</td></tr>{% endif %}
+      {% if delivery.is_cod %}
+      <tr><td class="muted">Payment</td><td class="strong">Cash on Delivery · {{ delivery.cod_amount|peso }} expected</td></tr>
+      {% if delivery.collected_at %}
+      <tr><td class="muted">Collected</td><td class="strong">{{ delivery.collected_amount|peso }} ({{ dict(cod_methods).get(delivery.collected_method, delivery.collected_method) }})</td></tr>
+      {% endif %}
+      {% endif %}
       {% if delivery.notes %}<tr><td class="muted">Notes</td><td>{{ delivery.notes }}</td></tr>{% endif %}
     </tbody>
   </table>
@@ -55,13 +80,38 @@
   {% endif %}
 </div>
 
+{% set needs_collection = delivery.is_cod and outstanding > 0 %}
+
+{% if delivery.status in ('pending', 'out_for_delivery') and needs_collection %}
+<div class="card collect-card" style="max-width:640px;margin-bottom:16px;">
+  <h3 class="ex-h">Complete delivery &amp; collect payment</h3>
+  <p class="muted" style="margin:0 0 14px;font-size:13px;">
+    Record what the driver actually collected. This settles the invoice — so if the customer
+    paid only part of it, enter the real amount and the rest stays outstanding.
+  </p>
+  <form method="post" action="/deliveries/{{ delivery.id }}/complete" class="collect-form">
+    <label>Collected via
+      <select name="collect_method">
+        {% for code, label in cod_methods %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Amount collected
+      <input name="collect_amount" type="number" step="0.01" min="0" value="{{ '%.2f'|format(outstanding) }}">
+    </label>
+    <button class="btn" type="submit">✓ Mark Delivered &amp; Collect</button>
+  </form>
+</div>
+{% endif %}
+
 <div class="pos-actions" style="justify-content:flex-start;max-width:640px;">
   {% if delivery.status == 'pending' %}
   <form method="post" action="/deliveries/{{ delivery.id }}/dispatch"><button class="btn" type="submit">🚚 Dispatch (out for delivery)</button></form>
   <a class="btn-secondary" href="/deliveries/{{ delivery.id }}/edit">Edit details</a>
   <form method="post" action="/deliveries/{{ delivery.id }}/cancel" onsubmit="return confirm('Cancel this delivery?');"><button class="btn-link danger" type="submit">Cancel delivery</button></form>
   {% elif delivery.status == 'out_for_delivery' %}
+  {% if not needs_collection %}
   <form method="post" action="/deliveries/{{ delivery.id }}/complete"><button class="btn" type="submit">✓ Mark Delivered</button></form>
+  {% endif %}
   <a class="btn-secondary" href="/deliveries/{{ delivery.id }}/edit">Edit details</a>
   <form method="post" action="/deliveries/{{ delivery.id }}/cancel" onsubmit="return confirm('Cancel this delivery?');"><button class="btn-link danger" type="submit">Cancel delivery</button></form>
   {% endif %}

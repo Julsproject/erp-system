@@ -30,7 +30,7 @@
       <input name="contact_no" placeholder="09xx xxx xxxx">
     </label>
     <label class="full">Delivery Address
-      <input name="address" value="{{ sale.customer.address if sale and sale.customer else '' }}">
+      <input name="address" value="{{ (sale.customer.address or '') if sale and sale.customer else '' }}">
     </label>
     <label>Driver <span class="muted">(optional — can fill in later)</span>
       <input name="driver_name">
@@ -44,6 +44,17 @@
     <label class="full">Notes
       <input name="notes">
     </label>
+
+    <div class="full cod-box" id="dCodBox" style="{{ 'display:none;' if not (outstanding and outstanding > 0) }}">
+      <label class="checkbox" style="margin:0;">
+        <input type="checkbox" name="is_cod" id="dIsCod">
+        <span><strong>Cash on Delivery (COD)</strong> — the driver collects the balance when the goods are handed over</span>
+      </label>
+      <p class="cod-hint">
+        Balance to collect: <strong id="dCodAmount">{{ outstanding|peso if outstanding else '₱0.00' }}</strong>.
+        The sale stays unpaid until you mark this delivery <em>Delivered</em>, which is where you record what the driver collected.
+      </p>
+    </div>
 
     <div class="form-actions full">
       <button class="btn" type="submit">Create Delivery</button>
@@ -72,6 +83,18 @@ async function dLookup() {
   document.getElementById('dSaleInfo').style.display = 'block';
   document.getElementById('dForm').style.display = 'grid';
   document.getElementById('lookupBox').style.display = 'none';
+
+  // Offer COD only when this sale still has a balance to collect.
+  const box = document.getElementById('dCodBox');
+  const owed = Number(data.outstanding || 0);
+  if (owed > 0) {
+    document.getElementById('dCodAmount').textContent =
+      '₱' + owed.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    box.style.display = 'block';
+  } else {
+    box.style.display = 'none';
+    document.getElementById('dIsCod').checked = false;
+  }
 }
 </script>
 {% endblock %}

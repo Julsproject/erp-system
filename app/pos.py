@@ -326,12 +326,21 @@ def pos_lookup(invoice: str = "", db: Session = Depends(get_db), user=Depends(ge
         "unit_price": float(l.unit_price or 0),
         "is_vat": bool(l.is_vat),
     } for l in sale.lines]
+    # What's still owed on this sale — lets the delivery screen offer COD only
+    # when there is actually a balance for the driver to collect.
+    paid = (
+        db.query(func.coalesce(func.sum(models.ReceivableSettlement.amount), 0))
+        .filter(models.ReceivableSettlement.sale_id == sale.id)
+        .scalar()
+    )
+    outstanding = Decimal(str(sale.receivable_amount or 0)) - Decimal(str(paid or 0))
     return {
         "found": True,
         "sale_id": sale.id,
         "invoice_no": sale.invoice_no,
         "customer_name": sale.customer_name or "",
         "date": sale.created_at.strftime("%b %d, %Y %I:%M %p") if sale.created_at else "",
+        "outstanding": float(outstanding if outstanding > 0 else 0),
         "lines": lines,
     }
 

@@ -485,6 +485,19 @@ class Delivery(Base):
     scheduled_date = Column(Date, nullable=True)
     notes = Column(String(255))
 
+    # --- Cash on Delivery -------------------------------------------------
+    # COD lives on the delivery, not on the Sale: a walk-in POS sale is paid
+    # at the counter, so "collect on handover" only makes sense once there is
+    # something to hand over. The sale itself is rung up as a Receivable; this
+    # flag marks that the balance is meant to be collected by the driver on
+    # delivery rather than chased as ordinary credit.
+    is_cod = Column(Boolean, nullable=False, server_default="false")
+    cod_amount = Column(Numeric(12, 2), nullable=False, server_default="0")   # expected at scheduling
+    collected_amount = Column(Numeric(12, 2), nullable=False, server_default="0")
+    collected_method = Column(String(20))          # cash | gcash | card | bank_transfer
+    collected_at = Column(DateTime(timezone=True), nullable=True)
+    settlement_id = Column(Integer, ForeignKey("receivable_settlements.id"), nullable=True)
+
     dispatched_at = Column(DateTime(timezone=True), nullable=True)
     delivered_at = Column(DateTime(timezone=True), nullable=True)
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
@@ -494,6 +507,7 @@ class Delivery(Base):
 
     sale = relationship("Sale")
     creator = relationship("User")
+    settlement = relationship("ReceivableSettlement")
 
 
 class BankAccount(Base):

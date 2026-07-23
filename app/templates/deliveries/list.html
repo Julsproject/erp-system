@@ -54,7 +54,13 @@
     <tbody>
       {% for d in deliveries %}
       <tr>
-        <td class="strong">{{ d.delivery_no }}</td>
+        <td class="strong">{{ d.delivery_no }}
+          {% if d.is_cod %}
+          <span class="txn cod-pill" title="Cash on Delivery — {{ d.cod_amount|peso }} to collect">
+            COD{% if d.collected_at %} ✓{% endif %}
+          </span>
+          {% endif %}
+        </td>
         <td>{{ d.sale.invoice_no if d.sale else '—' }}</td>
         <td>{{ d.recipient_name or 'Walk-in' }}</td>
         <td>{{ d.driver_name or '—' }}</td>

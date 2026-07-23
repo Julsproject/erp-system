@@ -32,7 +32,11 @@
     <tbody>
       {% for s, outstanding in rows %}
       <tr>
-        <td class="strong">{{ s.invoice_no }}</td>
+        <td class="strong">{{ s.invoice_no }}
+          {% if cod_ids and s.id in cod_ids %}
+          <span class="txn cod-pill" title="Awaiting a Cash-on-Delivery handover — the driver collects this, it isn't overdue credit">COD</span>
+          {% endif %}
+        </td>
         <td>{{ s.created_at.strftime('%b %d, %Y %I:%M %p') if s.created_at else '' }}</td>
         <td>{{ s.customer_name or 'Walk-in' }}</td>
         <td>{{ s.payment_method or '—' }}</td>
@@ -40,7 +44,11 @@
         <td class="num owed">{{ outstanding|peso }}</td>
         <td class="row-actions">
           <a class="btn-link" href="/pos/receipt/{{ s.id }}">Receipt</a>
+          {% if cod_ids and s.id in cod_ids %}
+          <span class="muted" style="font-size:12px;">on delivery</span>
+          {% else %}
           <a class="btn-pay" href="/sales/receivables/{{ s.id }}/pay">Pay</a>
+          {% endif %}
         </td>
       </tr>
       {% else %}

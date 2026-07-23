@@ -133,9 +133,13 @@ def _current_alerts(db: Session) -> dict:
         .all()
     )
     horizon = today + timedelta(days=DUE_SOON_DAYS)
+    # A balance waiting on a COD delivery isn't late credit — the driver collects
+    # it on handover — so it must not raise an "overdue credit" alert.
+    from .deliveries import cod_pending_sale_ids
+    cod_ids = cod_pending_sale_ids(db)
     for sale, paid in credit_rows:
         outstanding = Decimal(str(sale.receivable_amount or 0)) - Decimal(str(paid or 0))
-        if outstanding <= 0 or not sale.due_date:
+        if outstanding <= 0 or not sale.due_date or sale.id in cod_ids:
             continue
         who = sale.customer_name or "a customer"
         if sale.due_date < today:

@@ -249,10 +249,16 @@ def receivables(
         .all()
     )
     rows = [(s, Decimal(str(out))) for s, out in page_rows]
+    # Balances waiting on a COD delivery are still owed, so they stay in this
+    # list and in the total — but they're tagged, because they're awaiting a
+    # handover, not a customer who is late paying their credit.
+    from .deliveries import cod_pending_sale_ids
+    cod_ids = cod_pending_sale_ids(db)
     return templates.TemplateResponse(
         "sales/receivables.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "rows": rows, "total_credit": Decimal(str(total_credit or 0)), "tab": "receivables", "q": q,
+         "cod_ids": cod_ids,
          "page": page, "pages": pages, "total": total_count},
     )
 

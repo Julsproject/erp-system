@@ -182,6 +182,7 @@ Schema changes are versioned with **Alembic** migrations in `migrations/versions
 | 0016 | bank_accounts, bank_transactions (Cash & Banking) |
 | 0017 | app_settings (Settings UI), notifications (Notifications Center) |
 | 0018 | audit_log (system-wide who-did-what activity trail) |
+| 0019 | Cash on Delivery fields on deliveries (COD flag, amount, collection) |
 
 ---
 
@@ -230,6 +231,17 @@ role-based access (admin vs cashier) · pagination + filters across all list pag
 - **Delivery Management** (`/deliveries`) — schedule from a receipt or by invoice #
   lookup, pending → out for delivery → delivered/cancelled. Open to cashiers too
   (operational, not back-office).
+- **Cash on Delivery (COD)** — lives on the *delivery*, deliberately not as a POS
+  payment method: a walk-in sale is paid at the counter, so "collect on handover"
+  only makes sense once there is something to hand over. The sale is rung up as a
+  Receivable; ticking **COD** when scheduling the delivery (offered only when the
+  invoice still has a balance) marks that balance as the driver's to collect.
+  Marking the delivery **Delivered** is what records the collection — it creates
+  the `ReceivableSettlement` in the same step, so handover and payment can't drift
+  apart. Partial collections are supported (the remainder stays outstanding).
+  While a COD delivery is open, the invoice is tagged **COD / "on delivery"** in
+  Receivables and is excluded from overdue-credit notifications — it is awaiting a
+  handover, not a customer who is late paying.
 - Dashboard: Expenses KPI tile + net-profit sub-line, custom date-range picker,
   fixed the 90-day chart's overlapping labels (bars stay daily, labels thin to ~12).
 
