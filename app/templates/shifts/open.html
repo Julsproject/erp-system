@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Open Cash Drawer · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="drawer-gate">
+  <div class="card drawer-card">
+    <div class="drawer-icon">🗄️</div>
+    <h1 class="drawer-title">Open the Cash Drawer</h1>
+    <p class="muted">Count what's in the drawer right now and enter it below — this is your starting float for this session.</p>
+
+    {% if error %}<div class="alert" style="text-align:left;">{{ error }}</div>{% endif %}
+
+    <form method="post" action="/shifts/open">
+      <input type="hidden" name="next" value="{{ next }}">
+      <label class="drawer-field">Opening cash amount
+        <input name="opening_amount" type="number" step="0.01" min="0" inputmode="decimal" placeholder="0.00" autofocus required>
+      </label>
+      <button class="btn drawer-btn" type="submit">Start Shift</button>
+    </form>
+    <p class="muted drawer-foot">
+      You'll count the drawer again when you end this shift, and any difference from what the
+      system expects will be shown to you and the admin.
+    </p>
+  </div>
+</div>
+{% endblock %}

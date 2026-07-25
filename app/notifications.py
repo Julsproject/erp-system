@@ -38,9 +38,11 @@ BACKUP_STALE_DAYS = 2
 SWEEP_INTERVAL = timedelta(minutes=2)   # don't recompute more often than this
 ZERO = Decimal("0")
 
+NO_INVOICE_WINDOW_DAYS = 30   # how long a no-invoice return stays in the Active list
+
 CATEGORY_LABELS = {
     "stock": "Inventory", "pricing": "Pricing", "credit": "Credits",
-    "cheque": "Cheques", "delivery": "Deliveries", "backup": "Backup",
+    "cheque": "Cheques", "delivery": "Deliveries", "backup": "Backup", "pos": "Point of Sale",
 }
 
 
@@ -194,6 +196,31 @@ def _current_alerts(db: Session) -> dict:
                     f"{' — scheduled ' + d.scheduled_date.strftime('%b %d, %Y') if d.scheduled_date else ''}."
                     " Not yet dispatched.",
             "link": f"/deliveries/{d.id}",
+        }
+
+    # ---- no-invoice refunds/exchanges -------------------------------------
+    # A refund/exchange where the cashier couldn't match an invoice means the
+    # returned item's price came from what was typed in, not a verified sale
+    # line — worth a quick spot-check. Windowed to NO_INVOICE_WINDOW_DAYS so
+    # these age out of the Active list on their own rather than accumulating
+    # forever; they remain visible under History once resolved.
+    no_invoice_sales = (
+        db.query(models.Sale)
+        .filter(
+            models.Sale.no_invoice_return.is_(True),
+            models.Sale.created_at >= _now() - timedelta(days=NO_INVOICE_WINDOW_DAYS),
+        )
+        .all()
+    )
+    for s in no_invoice_sales:
+        kind = "Refund" if s.txn_type == "refund" else "Exchange"
+        amount = s.change_amount if s.txn_type == "refund" else abs(s.total or 0)
+        alerts[f"no_invoice_return:{s.id}"] = {
+            "category": "pos", "severity": "warning",
+            "title": f"No-invoice {kind.lower()}: {s.invoice_no}",
+            "body": f"{kind} of {_peso(amount)} for {s.customer_name or 'a walk-in customer'} was processed "
+                    "without matching an original invoice — the item and price came from the cashier, worth a spot-check.",
+            "link": f"/pos/receipt/{s.id}?from=sales",
         }
 
     # ---- backup health (singleton) --------------------------------------

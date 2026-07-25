@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Cash Drawer History · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Cash Drawer History</h1>
+    <p class="muted">Every closed shift's opening float, expected cash, actual count and variance.</p>
+  </div>
+</div>
+
+{% if open_shifts %}
+<div class="notice" style="max-width:none;">
+  <strong>{{ open_shifts|length }} drawer{{ '' if open_shifts|length == 1 else 's' }} currently open:</strong>
+  {% for s in open_shifts %}{{ s.cashier.username if s.cashier else '—' }} (since {{ s.opened_at.strftime('%I:%M %p') if s.opened_at else '' }}){% if not loop.last %}, {% endif %}{% endfor %}
+</div>
+{% endif %}
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>Closed shifts</span></div>
+  <div class="mini-stat {{ 'owed' if variance_total < 0 }}"><span class="mini-num">{{ variance_total|peso }}</span><span>Total variance</span></div>
+</div>
+
+<form class="toolbar" method="get" action="/shifts">
+  <select name="cashier_id" onchange="this.form.submit()" class="search" style="max-width:220px;">
+    <option value="0">All cashiers</option>
+    {% for u in users %}
+    <option value="{{ u.id }}" {{ 'selected' if cashier_id == u.id }}>{{ u.username }}</option>
+    {% endfor %}
+  </select>
+  <input type="date" name="date_from" value="{{ date_from }}" onchange="this.form.submit()">
+  <input type="date" name="date_to" value="{{ date_to }}" onchange="this.form.submit()">
+  {% if cashier_id or date_from or date_to %}<a class="btn-link" href="/shifts">Clear</a>{% endif %}
+</form>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Cashier</th><th>Opened</th><th>Closed</th><th class="num">Opening</th><th class="num">Expected</th><th class="num">Counted</th><th class="num">Variance</th><th>Deposit</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+      {% for s in shifts %}
+      <tr>
+        <td class="strong">{{ s.cashier.username if s.cashier else '—' }}</td>
+        <td>{{ s.opened_at.strftime('%b %d, %I:%M %p') if s.opened_at else '—' }}</td>
+        <td>{{ s.closed_at.strftime('%b %d, %I:%M %p') if s.closed_at else '—' }}</td>
+        <td class="num">{{ s.opening_amount|peso }}</td>
+        <td class="num">{{ s.expected_cash|peso }}</td>
+        <td class="num">{{ s.counted_cash|peso }}</td>
+        <td class="num {{ 'owed' if s.variance and s.variance < 0 else ('' if not s.variance else 'strong') }}">
+          {{ s.variance|peso }}{% if s.variance and s.variance < 0 %} short{% elif s.variance and s.variance > 0 %} over{% endif %}
+        </td>
+        <td>{% if s.deposited_amount and s.deposited_amount > 0 %}{{ s.deposited_amount|peso }} → {{ s.bank_account.name if s.bank_account else '—' }}{% else %}—{% endif %}</td>
+        <td class="muted">{{ s.notes or '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="9" class="empty">No closed shifts {{ 'match that filter' if cashier_id or date_from or date_to else 'yet' }}.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% set qs = '&cashier_id=' ~ cashier_id ~ '&date_from=' ~ date_from ~ '&date_to=' ~ date_to %}
+  {% if page > 1 %}<a class="btn-secondary" href="/shifts?page={{ page - 1 }}{{ qs }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-secondary" href="/shifts?page={{ page + 1 }}{{ qs }}">Next →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

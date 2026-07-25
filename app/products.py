@@ -105,6 +105,7 @@ def list_products(
     q: str = "",
     page: int = 1,
     alert: int = 0,
+    category_id: int = 0,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -123,6 +124,8 @@ def list_products(
             models.Product.cost_price > 0,
             models.Product.selling_price <= models.Product.cost_price,
         )
+    if category_id:
+        query = query.filter(models.Product.category_id == category_id)
 
     total = query.count()
     pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
@@ -134,6 +137,30 @@ def list_products(
         .limit(PAGE_SIZE)
         .all()
     )
+
+    # Quick-filter pills: only categories actually in use, with a live count
+    # each, computed against the current search/alert filter (not the
+    # category filter itself) so switching pills reflects what's really there.
+    base_for_counts = db.query(models.Product).filter(models.Product.is_active.is_(True))
+    if q:
+        base_for_counts = base_for_counts.filter(models.Product.name.ilike(f"%{q}%"))
+    if alert:
+        base_for_counts = base_for_counts.filter(
+            models.Product.cost_price > 0,
+            models.Product.selling_price <= models.Product.cost_price,
+        )
+    cat_counts = dict(
+        base_for_counts.filter(models.Product.category_id.isnot(None))
+        .with_entities(models.Product.category_id, func.count(models.Product.id))
+        .group_by(models.Product.category_id)
+        .all()
+    )
+    categories = (
+        db.query(models.Category)
+        .filter(models.Category.id.in_(cat_counts.keys()))
+        .order_by(models.Category.name)
+        .all()
+    ) if cat_counts else []
 
     return templates.TemplateResponse(
         "products/list.html",
@@ -147,6 +174,9 @@ def list_products(
             "pages": pages,
             "total": total,
             "alert": alert,
+            "category_id": category_id,
+            "categories": categories,
+            "cat_counts": cat_counts,
         },
     )
 

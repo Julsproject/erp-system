@@ -40,31 +40,56 @@
     <span>{{ quote.quote_no }}</span>
   </div>
 
-  <table class="grid" style="box-shadow:none;border:none;">
-    <thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Total</th></tr></thead>
-    <tbody>
-      {% for l in quote.lines %}
-      <tr>
-        <td class="strong">{{ l.product_name }}<small class="muted" style="display:block;">{{ l.unit_name }}{% if l.discount and l.discount > 0 %} · − {{ l.discount|peso }}{% endif %}</small></td>
-        <td class="num">{{ l.qty|qty }}</td>
-        <td class="num">{{ l.unit_price|peso }}</td>
-        <td class="num strong">{{ l.line_total|peso }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div id="quoViewTable">
+    <table class="grid" style="box-shadow:none;border:none;">
+      <thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Total</th></tr></thead>
+      <tbody>
+        {% for l in quote.lines %}
+        <tr>
+          <td class="strong">{{ l.product_name }}<small class="muted" style="display:block;">{{ l.unit_name }}{% if l.discount and l.discount > 0 %} · − {{ l.discount|peso }}{% endif %}</small></td>
+          <td class="num">{{ l.qty|qty }}</td>
+          <td class="num">{{ l.unit_price|peso }}</td>
+          <td class="num strong">{{ l.line_total|peso }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
 
-  <div class="r-tot" style="border-top:1px dashed var(--line);margin-top:10px;padding-top:10px;">
-    <div class="row" style="display:flex;justify-content:space-between;padding:3px 0;"><span>Subtotal</span><b>{{ quote.subtotal|peso }}</b></div>
-    {% if quote.discount_total and quote.discount_total > 0 %}
-    <div class="row" style="display:flex;justify-content:space-between;padding:3px 0;"><span>Discount</span><b>− {{ quote.discount_total|peso }}</b></div>
+    <div class="r-tot" style="border-top:1px dashed var(--line);margin-top:10px;padding-top:10px;">
+      <div class="row" style="display:flex;justify-content:space-between;padding:3px 0;"><span>Subtotal</span><b>{{ quote.subtotal|peso }}</b></div>
+      {% if quote.discount_total and quote.discount_total > 0 %}
+      <div class="row" style="display:flex;justify-content:space-between;padding:3px 0;"><span>Discount</span><b>− {{ quote.discount_total|peso }}</b></div>
+      {% endif %}
+      {% if quote.vat_amount and quote.vat_amount > 0 %}
+      <div class="row" style="display:flex;justify-content:space-between;padding:3px 0;"><span>Net of VAT</span><b>{{ (quote.total - quote.vat_amount)|peso }}</b></div>
+      <div class="row" style="display:flex;justify-content:space-between;padding:3px 0;"><span>VAT (12%) · included</span><b>{{ quote.vat_amount|peso }}</b></div>
+      {% endif %}
+      <div class="row grand" style="display:flex;justify-content:space-between;font-size:18px;font-weight:800;padding-top:8px;"><span>TOTAL</span><span>{{ quote.total|peso }}</span></div>
+    </div>
+
+    {% if quote.status == 'pending' %}
+    <button type="button" class="btn-link no-print" style="margin-top:12px;" onclick="quoEditStart()">✎ Add more items or remove one</button>
     {% endif %}
-    {% if quote.vat_amount and quote.vat_amount > 0 %}
-    <div class="row" style="display:flex;justify-content:space-between;padding:3px 0;"><span>Net of VAT</span><b>{{ (quote.total - quote.vat_amount)|peso }}</b></div>
-    <div class="row" style="display:flex;justify-content:space-between;padding:3px 0;"><span>VAT (12%) · included</span><b>{{ quote.vat_amount|peso }}</b></div>
-    {% endif %}
-    <div class="row grand" style="display:flex;justify-content:space-between;font-size:18px;font-weight:800;padding-top:8px;"><span>TOTAL</span><span>{{ quote.total|peso }}</span></div>
   </div>
+
+  {% if quote.status == 'pending' %}
+  <div id="quoEditBox" class="no-print" style="display:none;">
+    <div class="table-wrap">
+      <table class="grid cart-table">
+        <thead><tr><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Total</th><th></th></tr></thead>
+        <tbody id="quoEditBody"></tbody>
+      </table>
+    </div>
+    <input id="quoEditSearch" class="search pos-search" type="search" placeholder="Search product to add…" autocomplete="off" style="margin-top:12px;">
+    <div id="quoEditResults" class="pos-results" style="max-height:22vh;"></div>
+    <div class="totals-row grand" style="margin-top:12px;"><span>New total</span><span id="quoEditTotal">₱0.00</span></div>
+    <div class="pos-actions" style="justify-content:flex-start;margin-top:14px;">
+      <button class="btn" id="quoEditSaveBtn" onclick="quoEditSave()" disabled>Save changes</button>
+      <button class="btn-secondary" onclick="quoEditCancel()">Cancel</button>
+    </div>
+    <div id="quoEditError" class="alert" style="display:none;margin-top:12px;"></div>
+  </div>
+  {% endif %}
 </div>
 
 <div class="no-print" style="margin-top:18px;">
@@ -73,6 +98,143 @@
     <form method="post" action="/quotations/{{ quote.id }}/confirm"><button class="btn" type="submit">✓ Customer confirmed — proceed</button></form>
     <form method="post" action="/quotations/{{ quote.id }}/cancel" onsubmit="return confirm('Cancel this quotation?');"><button class="btn-secondary" type="submit">Cancel quotation</button></form>
   </div>
+
+  <script>
+    const QUOTE_EDIT_ID = {{ quote.id }};
+    const QUOTE_VAT_APPLIED = {{ 'true' if quote.vat_applied else 'false' }};
+    const QUOTE_DISCOUNT_TOTAL = {{ quote.discount_total or 0 }};
+    // Seed the editor from what's already on the quotation — kept lines have no
+    // `unit` array (their unit/price is locked in as originally quoted), only
+    // newly searched-in lines carry one for the tier dropdown.
+    let quoEditCart = [
+      {% for l in quote.lines %}
+      { product_id: {{ l.product_id or 'null' }}, name: {{ l.product_name|tojson }}, unit_name: {{ l.unit_name|tojson }},
+        factor: {{ l.unit_factor }}, qty: {{ l.qty }}, unit_price: {{ l.unit_price }}, discount: {{ l.discount or 0 }},
+        is_vat: false, units: null, unitIndex: 0 },
+      {% endfor %}
+    ];
+    let quoEditTimer = null;
+    const qePeso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+    async function quoEditStart() {
+      document.getElementById('quoViewTable').style.display = 'none';
+      document.getElementById('quoEditBox').style.display = 'block';
+      // Existing lines only carry the unit/price they were originally quoted
+      // at — fetch each product's current units/tiers so the unit (and
+      // Fixed/Markup/Margin) dropdown works on old lines too, not just ones
+      // added fresh in this session.
+      await Promise.all(quoEditCart.map(async (l) => {
+        if (!l.product_id || l.units) return;
+        try {
+          const res = await fetch('/pos/product/' + l.product_id);
+          const data = await res.json();
+          if (!data.found) return;   // product archived/deleted since quoting — leave it locked
+          l.units = data.product.units;
+          // Default to whichever tier matches what was originally quoted (by
+          // unit name), so opening the editor doesn't silently reprice the
+          // line — it only becomes possible to change it.
+          let idx = l.units.findIndex(u => u.name === l.unit_name && Math.abs(u.price - l.unit_price) < 0.005);
+          if (idx < 0) idx = l.units.findIndex(u => u.name === l.unit_name);
+          l.unitIndex = idx >= 0 ? idx : 0;
+        } catch (e) { /* offline or product lookup failed — leave line as fixed/locked */ }
+      }));
+      quoEditRender();
+    }
+    function quoEditCancel() { window.location.reload(); }
+
+    function quoEditLineTotal(l) {
+      const price = l.units ? l.units[l.unitIndex].price : l.unit_price;
+      return Math.max(l.qty * price - (l.discount || 0), 0);
+    }
+    function quoEditRender() {
+      const body = document.getElementById('quoEditBody');
+      if (!quoEditCart.length) { body.innerHTML = '<tr><td colspan="6" class="empty">No items — add at least one below, or cancel the quotation instead.</td></tr>'; quoEditRecompute(); return; }
+      body.innerHTML = '';
+      quoEditCart.forEach((l, i) => {
+        const tr = document.createElement('tr');
+        const unitCell = l.units
+          ? '<select class="cart-unit" onchange="quoEditSetUnit(' + i + ', this.value)">' +
+              l.units.map((u, ui) => '<option value="' + ui + '"' + (ui === l.unitIndex ? ' selected' : '') + '>' + escapeHtmlQE(u.label || u.name) + ' (' + qePeso(u.price) + ')</option>').join('') +
+            '</select>'
+          : escapeHtmlQE(l.unit_name || '');
+        const price = l.units ? l.units[l.unitIndex].price : l.unit_price;
+        tr.innerHTML =
+          '<td class="strong">' + escapeHtmlQE(l.name) + '</td>' +
+          '<td>' + unitCell + '</td>' +
+          '<td class="num"><input class="cart-qty" type="number" step="0.001" min="0" value="' + l.qty + '" oninput="quoEditSetQty(' + i + ', this.value)"></td>' +
+          '<td class="num">' + qePeso(price) + '</td>' +
+          '<td class="num strong">' + qePeso(quoEditLineTotal(l)) + '</td>' +
+          '<td><button type="button" class="btn-link danger" onclick="quoEditRemove(' + i + ')">✕</button></td>';
+        body.appendChild(tr);
+      });
+      quoEditRecompute();
+    }
+    function quoEditSetUnit(i, v) { quoEditCart[i].unitIndex = parseInt(v); quoEditRender(); }
+    function quoEditSetQty(i, v) { quoEditCart[i].qty = parseFloat(v) || 0; quoEditRender(); }
+    function quoEditRemove(i) { quoEditCart.splice(i, 1); quoEditRender(); }
+    function quoEditRecompute() {
+      let total = 0;
+      quoEditCart.forEach(l => total += quoEditLineTotal(l));
+      document.getElementById('quoEditTotal').textContent = qePeso(Math.max(total - QUOTE_DISCOUNT_TOTAL, 0));
+      document.getElementById('quoEditSaveBtn').disabled = quoEditCart.length === 0;
+    }
+    function escapeHtmlQE(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+
+    document.getElementById('quoEditSearch').addEventListener('input', () => {
+      clearTimeout(quoEditTimer); quoEditTimer = setTimeout(quoEditSearch, 180);
+    });
+    async function quoEditSearch() {
+      const q = document.getElementById('quoEditSearch').value.trim();
+      const box = document.getElementById('quoEditResults');
+      if (!q) { box.innerHTML = ''; return; }
+      const res = await fetch('/pos/search?q=' + encodeURIComponent(q));
+      const data = await res.json();
+      const products = data.products || [];
+      if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
+      box.innerHTML = '';
+      products.forEach(p => {
+        const el = document.createElement('button');
+        el.type = 'button'; el.className = 'pos-item'; el.onclick = () => quoEditAdd(p);
+        el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtmlQE(p.name) + '</span></div>' +
+          '<div class="pos-item-sub">' + qePeso(p.units[0].price) + ' / ' + escapeHtmlQE(p.base_unit) + '</div>';
+        box.appendChild(el);
+      });
+    }
+    function quoEditAdd(p) {
+      quoEditCart.push({ product_id: p.id, name: p.name, unit_name: p.units[0].name, factor: p.units[0].factor,
+                          qty: 1, unit_price: p.units[0].price, discount: 0, is_vat: p.is_vat, units: p.units, unitIndex: 0 });
+      quoEditRender();
+      document.getElementById('quoEditSearch').value = '';
+      document.getElementById('quoEditResults').innerHTML = '<p class="pos-hint">' + escapeHtmlQE(p.name) + ' added — search again to add another.</p>';
+    }
+    async function quoEditSave() {
+      if (!quoEditCart.length) return;
+      const btn = document.getElementById('quoEditSaveBtn'); btn.disabled = true; btn.textContent = 'Saving…';
+      const lines = quoEditCart.map(l => {
+        const unit = l.units ? l.units[l.unitIndex] : null;
+        return {
+          product_id: l.product_id, name: l.name,
+          unit_name: unit ? unit.name : l.unit_name, factor: unit ? unit.factor : l.factor,
+          qty: l.qty, unit_price: unit ? unit.price : l.unit_price, discount: l.discount || 0,
+        };
+      });
+      const payload = { lines: lines, discount_total: QUOTE_DISCOUNT_TOTAL, vat_applied: QUOTE_VAT_APPLIED };
+      try {
+        const res = await fetch('/quotations/' + QUOTE_EDIT_ID + '/update', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (data.ok) { window.location.reload(); }
+        else {
+          const e = document.getElementById('quoEditError'); e.textContent = data.error || 'Could not save changes.'; e.style.display = 'block';
+          btn.disabled = false; btn.textContent = 'Save changes';
+        }
+      } catch (e) {
+        const err = document.getElementById('quoEditError'); err.textContent = 'Network error. Please try again.'; err.style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Save changes';
+      }
+    }
+  </script>
   {% elif quote.status == 'confirmed' %}
   <section class="card" style="padding:20px;">
     <h3 class="card-title">Convert to Sale</h3>

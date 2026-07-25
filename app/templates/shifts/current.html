@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Cash Drawer · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Cash Drawer</h1>
+    <p class="muted">Opened {{ shift.opened_at.strftime('%b %d, %Y %I:%M %p') if shift.opened_at else '' }} with {{ shift.opening_amount|peso }}.</p>
+  </div>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ shift.opening_amount|peso }}</span><span>Opening float</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ running|peso }}</span><span>Expected in drawer now</span></div>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<div class="card" style="max-width:640px;">
+  <h2 style="margin:0 0 4px;font-size:16px;">Close shift &amp; count drawer</h2>
+  <p class="muted" style="margin:0 0 18px;font-size:13px;">
+    Count the physical cash in the drawer and enter it below. Any difference from the expected
+    amount above is recorded as a shortage or overage — nothing is hidden either way.
+  </p>
+  <form class="form" method="post" action="/shifts/close">
+    <label class="full">Counted cash (₱)
+      <input name="counted_cash" type="number" step="0.01" min="0" inputmode="decimal" placeholder="0.00" required>
+      <span class="hint">What you physically counted in the drawer, before any deposit.</span>
+    </label>
+
+    {% if accounts %}
+    <label>Deposit to bank <span class="muted">(optional)</span>
+      <select name="bank_account_id">
+        <option value="">— no deposit —</option>
+        {% for a in accounts %}
+        <option value="{{ a.id }}">{{ a.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Deposit amount (₱)
+      <input name="deposit_amount" type="number" step="0.01" min="0" placeholder="0.00">
+      <span class="hint">Recorded as a deposit on that account — doesn't change the variance above.</span>
+    </label>
+    {% endif %}
+
+    <label class="full">Notes <span class="muted">(optional — e.g. explain a shortage)</span>
+      <input name="notes" type="text">
+    </label>
+
+    <div class="form-actions full">
+      <button class="btn" type="submit" onclick="return confirm('Close this shift? Make sure you\'ve counted the drawer.');">Close Shift &amp; Submit Count</button>
+    </div>
+  </form>
+</div>
+
+<div class="hint-box" style="margin-top:16px;max-width:640px;">
+  "Expected in drawer now" = opening float + cash sales + cash collected on credit/COD − change given back,
+  computed live from what's been recorded since you opened this shift.
+</div>
+{% endblock %}

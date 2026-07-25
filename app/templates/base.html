@@ -38,7 +38,7 @@
     {% set price_alerts = price_alert_count() %}
     {% set pdc_due = pdc_due_count() %}
     {% set is_admin = (user.role or '')|lower == 'admin' %}
-    {% set finance_active = path.startswith('/pdc') or path.startswith('/expenses') or path.startswith('/banking') or path.startswith('/reports') %}
+    {% set finance_active = path.startswith('/pdc') or path.startswith('/expenses') or path.startswith('/banking') or path.startswith('/reports') or path == '/shifts' %}
     {% set admin_active = path.startswith('/backup') or path.startswith('/users') or path.startswith('/settings') or path.startswith('/audit') %}
     {% set notif_unread = notif_unread_count() if is_admin else 0 %}
     <input type="checkbox" id="navToggle" class="nav-toggle-input">
@@ -68,6 +68,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M2 8h11v8H2z"/><path d="M13 11h4l3 3v2h-7z"/><circle cx="6.5" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/></svg>
         <span>Deliveries</span>
       </a>
+      <a class="nav-item {{ 'active' if path.startswith('/shifts/current') or path.startswith('/shifts/open') or path.startswith('/shifts/close') }}" href="/shifts/current">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M3 11h18"/><path d="M8 4v5M16 4v5"/><path d="M12 15v2M11 16h2"/></svg>
+        <span>Cash Drawer</span>
+      </a>
       {% if is_admin %}
       <a class="nav-item {{ 'active' if path.startswith('/sales') or path.startswith('/quotations') }}" href="/sales">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 4h16v4H4z"/><path d="M4 8v12h16V8"/><path d="M9 12h6"/><path d="M9 16h6"/></svg>
@@ -92,6 +96,7 @@
           <a class="nav-item nav-sub {{ 'active' if path.startswith('/expenses') }}" href="/expenses"><span>Expenses</span></a>
           <a class="nav-item nav-sub {{ 'active' if path.startswith('/banking') }}" href="/banking"><span>Cash &amp; Banking</span></a>
           <a class="nav-item nav-sub {{ 'active' if path.startswith('/reports') }}" href="/reports"><span>Reports</span></a>
+          <a class="nav-item nav-sub {{ 'active' if path == '/shifts' }}" href="/shifts"><span>Shift History</span></a>
         </div>
       </details>
       {% endif %}

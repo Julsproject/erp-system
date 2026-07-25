@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import models
+from . import audit, models
 from .customers import get_or_create_customer
 from .database import get_db
 from .deps import get_current_user, is_admin
@@ -43,21 +43,12 @@ def _local_date(col):
     return func.date(func.timezone("Asia/Manila", col))
 
 
-@router.post("/quotations")
-async def create_quotation(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    if not user:
-        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-
-    data = await request.json()
-    lines = data.get("lines") or []
-    if not lines:
-        return JSONResponse({"ok": False, "error": "Add at least one item."}, status_code=400)
-
-    customer_name = (data.get("customer_name") or "").strip()
-    vat_applied = bool(data.get("vat_applied"))
-    quote = models.Quotation(customer_name=customer_name or None, vat_applied=vat_applied, created_by=user.id)
-    db.add(quote)
-
+def _apply_lines(quote: models.Quotation, db: Session, lines: list, discount_total_raw, vat_applied: bool) -> bool:
+    """(Re)build a quotation's line items and totals from a lines payload —
+    shared by create and the pending-quotation editor so the math can't drift
+    between the two. Returns False (leaving `quote` untouched) if nothing
+    valid was given."""
+    new_lines = []
     subtotal = Decimal("0")
     for ln in lines:
         product = db.get(models.Product, int(ln["product_id"])) if ln.get("product_id") else None
@@ -71,7 +62,7 @@ async def create_quotation(request: Request, db: Session = Depends(get_db), user
         if line_total < 0:
             line_total = Decimal("0")
         subtotal += line_total
-        quote.lines.append(models.QuotationLine(
+        new_lines.append(models.QuotationLine(
             product_id=product.id if product else None,
             product_name=(product.name if product else ln.get("name")) or "Item",
             unit_name=ln.get("unit_name"),
@@ -82,19 +73,41 @@ async def create_quotation(request: Request, db: Session = Depends(get_db), user
             line_total=_money(line_total),
         ))
 
-    if not quote.lines:
-        return JSONResponse({"ok": False, "error": "No valid items."}, status_code=400)
+    if not new_lines:
+        return False
 
-    discount_total = _dec(data.get("discount_total"))
+    discount_total = _dec(discount_total_raw)
     total = subtotal - discount_total
     if total < 0:
         total = Decimal("0")
     vat_amount = _vat_of(total) if vat_applied else Decimal("0")
 
+    quote.lines.clear()
+    quote.lines.extend(new_lines)
+    quote.vat_applied = vat_applied
     quote.subtotal = _money(subtotal)
     quote.discount_total = _money(discount_total)
     quote.vat_amount = vat_amount
     quote.total = _money(total)
+    return True
+
+
+@router.post("/quotations")
+async def create_quotation(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+    data = await request.json()
+    lines = data.get("lines") or []
+    if not lines:
+        return JSONResponse({"ok": False, "error": "Add at least one item."}, status_code=400)
+
+    customer_name = (data.get("customer_name") or "").strip()
+    quote = models.Quotation(customer_name=customer_name or None, created_by=user.id)
+    db.add(quote)
+
+    if not _apply_lines(quote, db, lines, data.get("discount_total"), bool(data.get("vat_applied"))):
+        return JSONResponse({"ok": False, "error": "No valid items."}, status_code=400)
 
     if customer_name:
         customer = get_or_create_customer(db, customer_name)
@@ -105,6 +118,50 @@ async def create_quotation(request: Request, db: Session = Depends(get_db), user
     quote.quote_no = f"QUO-{quote.id:06d}"
     db.commit()
     return {"ok": True, "quotation_id": quote.id, "quote_no": quote.quote_no}
+
+
+@router.post("/quotations/{quote_id:int}/update")
+async def update_quotation_items(
+    quote_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)
+):
+    """Add/remove items on a quotation the customer hasn't confirmed yet.
+
+    Once a customer has confirmed a price (status='confirmed') or it's already
+    been converted/cancelled, the items are locked — the whole point of
+    'Confirmed' is that the customer agreed to that exact quote.
+    """
+    if not user:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    quote = db.get(models.Quotation, quote_id)
+    if not quote:
+        return JSONResponse({"ok": False, "error": "Quotation not found."}, status_code=404)
+    if quote.status != "pending":
+        return JSONResponse({"ok": False, "error": "Only a pending quotation can be edited."}, status_code=400)
+
+    data = await request.json()
+    lines = data.get("lines") or []
+    if not lines:
+        return JSONResponse({"ok": False, "error": "A quotation needs at least one item — cancel it instead if none are wanted."}, status_code=400)
+
+    before_total, before_count = quote.total, len(quote.lines)
+    if not _apply_lines(quote, db, lines, data.get("discount_total"), bool(data.get("vat_applied"))):
+        return JSONResponse({"ok": False, "error": "No valid items."}, status_code=400)
+
+    customer_name = (data.get("customer_name") or "").strip()
+    if customer_name and customer_name != (quote.customer_name or ""):
+        quote.customer_name = customer_name
+        customer = get_or_create_customer(db, customer_name)
+        if customer:
+            quote.customer_id = customer.id
+
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="quotation",
+        entity_id=quote.id, entity_label=quote.quote_no,
+        summary=f"Edited items on {quote.quote_no}: {before_count} → {len(quote.lines)} line(s)",
+        changes={"total": [str(before_total), str(quote.total)], "line_count": [before_count, len(quote.lines)]},
+    )
+    db.commit()
+    return {"ok": True, "quotation_id": quote.id}
 
 
 @router.get("/quotations", response_class=HTMLResponse)

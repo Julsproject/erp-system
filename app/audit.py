@@ -40,7 +40,7 @@ ENTITY_LABELS = {
     "customer": "Customer", "supplier": "Supplier", "user": "User",
     "bank_account": "Bank account", "bank_transaction": "Bank transaction",
     "purchase": "Purchase", "quotation": "Quotation", "pdc": "Cheque",
-    "setting": "Settings", "auth": "Sign-in",
+    "setting": "Settings", "auth": "Sign-in", "shift": "Cash Drawer",
 }
 
 

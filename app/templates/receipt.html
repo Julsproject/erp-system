@@ -69,6 +69,10 @@
       {{ '↩ Refund of' if sale.txn_type == 'refund' else '⇄ Exchange from' }} Invoice
       <a href="/pos/receipt/{{ original.id }}?from=sales">{{ original.invoice_no }}</a>
     </div>
+    {% elif sale.no_invoice_return %}
+    <div class="r-link refund" style="background:#fffbeb;border-color:#fcd34d;color:#92400e;">
+      ⚠ No original invoice — item(s) and price confirmed by the cashier, not pulled from a recorded sale.
+    </div>
     {% endif %}
     {% for lt in linked %}
     <div class="r-link {{ 'refund' if lt.txn_type == 'refund' else 'exchange' }}">

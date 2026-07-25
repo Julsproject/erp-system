@@ -86,13 +86,57 @@ def _linked_ref(db: Session, prefix: str, orig) -> str | None:
 
 
 @router.get("/pos", response_class=HTMLResponse)
-def pos_page(request: Request, user=Depends(get_current_user)):
+def pos_page(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    # Operating the register requires a declared opening cash float — gated
+    # here (not by role) so an admin acting as cashier is covered the same way.
+    from .shifts import get_open_shift
+    if not get_open_shift(db, user.id):
+        return RedirectResponse("/shifts/open?next=/pos", status_code=302)
     return templates.TemplateResponse(
         "pos.html",
         {"request": request, "app_name": request.app.title, "user": user},
     )
+
+
+def _product_payload_for_pos(p: models.Product) -> dict:
+    """Shape a product for any POS-style picker (search results, quotation
+    editor, …): base unit at each of its three prices, plus its ladder units."""
+    base_unit = p.unit_type.name if p.unit_type else "Unit"
+    # The base unit is offered at each of the product's three prices, so the
+    # cashier picks the price from the same dropdown they already use to pick
+    # the unit. Markup/margin only appear once they've actually been set, so
+    # products priced the old way look exactly as before.
+    # `name` stays the plain unit (what's stored on the sale line); `label`
+    # is what the dropdown shows; `tier` is recorded against the line.
+    units = [{"name": base_unit, "label": base_unit, "factor": 1.0,
+              "price": float(p.selling_price or 0), "tier": "fixed"}]
+    if (p.markup_price or 0) > 0:
+        units.append({"name": base_unit, "label": f"{base_unit} · Markup", "factor": 1.0,
+                      "price": float(p.markup_price), "tier": "markup"})
+    if (p.margin_price or 0) > 0:
+        units.append({"name": base_unit, "label": f"{base_unit} · Margin", "factor": 1.0,
+                      "price": float(p.margin_price), "tier": "margin"})
+    for u in p.units:
+        units.append({"name": u.name, "label": u.name, "factor": float(u.factor_to_base or 1),
+                      "price": float(u.price or 0), "tier": ""})
+    c = p.container
+    container = None if not c else {
+        "pack_name": c["pack_name"],
+        "loose_name": c["loose_name"],
+        "sealed": c["sealed"],
+        "open": float(c["open"]),
+    }
+    return {
+        "id": p.id,
+        "name": p.name,
+        "is_vat": bool(p.is_vat),
+        "base_unit": base_unit,
+        "on_hand": float((p.beginning_stock or 0) + (p.stock_qty or 0)),
+        "units": units,
+        "container": container,
+    }
 
 
 @router.get("/pos/search")
@@ -104,44 +148,20 @@ def pos_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_curr
     if q:
         query = query.filter(models.Product.name.ilike(f"%{q}%"))
     products = query.order_by(models.Product.name).limit(30).all()
+    return {"products": [_product_payload_for_pos(p) for p in products]}
 
-    out = []
-    for p in products:
-        base_unit = p.unit_type.name if p.unit_type else "Unit"
-        # The base unit is offered at each of the product's three prices, so the
-        # cashier picks the price from the same dropdown they already use to pick
-        # the unit. Markup/margin only appear once they've actually been set, so
-        # products priced the old way look exactly as before.
-        # `name` stays the plain unit (what's stored on the sale line); `label`
-        # is what the dropdown shows; `tier` is recorded against the line.
-        units = [{"name": base_unit, "label": base_unit, "factor": 1.0,
-                  "price": float(p.selling_price or 0), "tier": "fixed"}]
-        if (p.markup_price or 0) > 0:
-            units.append({"name": base_unit, "label": f"{base_unit} · Markup", "factor": 1.0,
-                          "price": float(p.markup_price), "tier": "markup"})
-        if (p.margin_price or 0) > 0:
-            units.append({"name": base_unit, "label": f"{base_unit} · Margin", "factor": 1.0,
-                          "price": float(p.margin_price), "tier": "margin"})
-        for u in p.units:
-            units.append({"name": u.name, "label": u.name, "factor": float(u.factor_to_base or 1),
-                          "price": float(u.price or 0), "tier": ""})
-        c = p.container
-        container = None if not c else {
-            "pack_name": c["pack_name"],
-            "loose_name": c["loose_name"],
-            "sealed": c["sealed"],
-            "open": float(c["open"]),
-        }
-        out.append({
-            "id": p.id,
-            "name": p.name,
-            "is_vat": bool(p.is_vat),
-            "base_unit": base_unit,
-            "on_hand": float((p.beginning_stock or 0) + (p.stock_qty or 0)),
-            "units": units,
-            "container": container,
-        })
-    return {"products": out}
+
+@router.get("/pos/product/{product_id:int}")
+def pos_product(product_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """A single product's current units/prices — used to let an editor (e.g.
+    the pending-quotation editor) offer unit/price-tier switching on a line
+    that was added before this lookup existed on the page."""
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    p = db.get(models.Product, product_id)
+    if not p or not p.is_active:
+        return {"found": False}
+    return {"found": True, "product": _product_payload_for_pos(p)}
 
 
 def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied, discount_total, lines, payments):
@@ -373,9 +393,13 @@ async def pos_refund(request: Request, db: Session = Depends(get_db), user=Depen
     refund = models.Sale(
         txn_type="refund",
         original_sale_id=orig.id if orig else None,
-        customer_name=(orig.customer_name if orig else None),
+        customer_name=(orig.customer_name if orig else (data.get("customer_name") or None)),
         customer_id=(orig.customer_id if orig else None),
         cashier_id=user.id,
+        # No matched invoice means these items — and their prices — came from
+        # an inventory search the cashier typed in, not a verified original
+        # sale line. Flagged so it surfaces in Notifications for a spot-check.
+        no_invoice_return=(orig is None),
     )
     db.add(refund)
 
@@ -448,6 +472,10 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
         customer_name=(orig.customer_name if orig else (data.get("customer_name") or None)),
         customer_id=(orig.customer_id if orig else None),
         cashier_id=user.id,
+        # See pos_refund: no matched invoice means the returned item(s) and
+        # their price(s) came from an inventory search, not a verified sale
+        # line — flagged for a Notifications spot-check.
+        no_invoice_return=(orig is None and bool(returned)),
     )
     db.add(ex)
 
@@ -516,9 +544,19 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
         method = (data.get("payment_method") or "cash").strip().lower()
         if method not in METHOD_LABELS or method in ("receivable", "cheque"):
             method = "cash"
-        ex.payments.append(models.Payment(method=method, amount=_money(diff)))
-        ex.amount_tendered = _money(diff)
-        ex.change_amount = Decimal("0")
+        # Cash is the only method where "handed over more than owed, give
+        # change back" is a real physical thing — GCash/Card/Bank Transfer are
+        # exact-amount transfers, so those still just charge the difference.
+        if method == "cash":
+            tendered = _dec(data.get("amount_tendered"))
+            if tendered < diff:
+                return JSONResponse({"ok": False, "error": "Amount tendered can't be less than the amount owed."}, status_code=400)
+        else:
+            tendered = diff
+        change = _money(tendered - diff)
+        ex.payments.append(models.Payment(method=method, amount=_money(tendered)))
+        ex.amount_tendered = _money(tendered)
+        ex.change_amount = change
         ex.payment_method = METHOD_LABELS[method]
     elif diff < 0:
         ex.amount_tendered = Decimal("0")

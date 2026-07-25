@@ -211,10 +211,20 @@ def dashboard(
     )
     labels = {"cash": "Cash", "gcash": "GCash", "card": "Card", "bank_transfer": "Bank Transfer", "receivable": "Receivable"}
     colors = {"cash": "#16a34a", "gcash": "#2563eb", "card": "#7c3aed", "bank_transfer": "#0891b2", "receivable": "#d97706"}
-    pay_total = sum((Decimal(str(a or 0)) for _, a in pay_rows), ZERO)
+    pay_totals = {m: Decimal(str(a or 0)) for m, a in pay_rows}
+    # Change is always handed back in physical cash regardless of which method
+    # funded the original payment (see pos.py) — net it out of the cash
+    # bucket, or a day with any overpaid split/exchange would overstate cash.
+    change_given = Decimal(str(
+        db.query(func.coalesce(func.sum(models.Sale.change_amount), 0))
+        .filter(_local_date(models.Sale.created_at).between(period_start, period_end))
+        .scalar() or 0
+    ))
+    if "cash" in pay_totals or change_given > 0:
+        pay_totals["cash"] = pay_totals.get("cash", ZERO) - change_given
+    pay_total = sum(pay_totals.values(), ZERO)
     payments = []
-    for method, amount in sorted(pay_rows, key=lambda r: float(r[1] or 0), reverse=True):
-        amt = Decimal(str(amount or 0))
+    for method, amt in sorted(pay_totals.items(), key=lambda r: float(r[1] or 0), reverse=True):
         payments.append({
             "label": labels.get(method, method.title()),
             "color": colors.get(method, "#64748b"),

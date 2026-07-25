@@ -62,16 +62,26 @@ def _day_summary(db: Session, cashier_id: int, day: date) -> dict:
         )
         .scalar()
     )
-    by_method = [
-        {"label": METHOD_LABELS.get(m, (m or "").title()), "amount": Decimal(str(a or 0))}
-        for m, a in sorted(pay_rows, key=lambda r: float(r[1] or 0), reverse=True)
+    by_method = {
+        m: Decimal(str(a or 0)) for m, a in pay_rows
+    }
+    # Change is always handed back in physical cash (see pos.py: a refund's or
+    # an overpaid exchange's/sale's change is cash out regardless of which
+    # method funded the original payment) — net it out of the cash bucket, or
+    # this would overstate cash on hand by whatever change was given that day.
+    change_given = sum((s.change_amount or Decimal("0") for s in sales), Decimal("0"))
+    if "cash" in by_method or change_given > 0:
+        by_method["cash"] = by_method.get("cash", Decimal("0")) - change_given
+    by_method_list = [
+        {"label": METHOD_LABELS.get(m, (m or "").title()), "amount": a}
+        for m, a in sorted(by_method.items(), key=lambda r: float(r[1] or 0), reverse=True)
     ]
     net_total = sum((s.total or Decimal("0") for s in sales), Decimal("0"))
     return {
         "sales": sales,
         "count": len(sales),
         "net_total": net_total,
-        "by_method": by_method,
+        "by_method": by_method_list,
         "collections": Decimal(str(collections or 0)),
     }
 

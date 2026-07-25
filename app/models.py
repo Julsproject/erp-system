@@ -185,6 +185,14 @@ class Sale(Base):
     receivable_amount = Column(Numeric(12, 2), nullable=False, server_default="0")  # credit on this sale
     due_date = Column(Date, nullable=True)  # when the credit falls due (sale date + customer terms)
 
+    # True for a refund/exchange where the cashier couldn't find (or the
+    # customer didn't have) the original invoice number, so the returned
+    # item(s) were picked from an inventory search instead of pulled off a
+    # recorded sale line. That means the price came from what the cashier
+    # typed, not from a verified original price — worth a quick admin
+    # spot-check, which is why these are surfaced in Notifications.
+    no_invoice_return = Column(Boolean, nullable=False, server_default="false")
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     lines = relationship("SaleLine", back_populates="sale", cascade="all, delete-orphan")
@@ -617,6 +625,51 @@ class AuditLog(Base):
     ip = Column(String(45))                          # request client IP, when available
 
     user = relationship("User")
+
+
+class CashierShift(Base):
+    """One cash-drawer session: a cashier declares how much cash they're
+    starting with, and — separately, whenever they stop — counts what's
+    actually in the drawer so a shortage or overage is caught the same day
+    rather than discovered weeks later.
+
+    This is deliberately NOT a replacement for the automatic Cashier Activity
+    history (which already derives what happened from Sales/Payments) — it's
+    the physical-cash side of the same day: Activity says what *should* be
+    true, this records what *actually counted out* true.
+
+    A shift's window is [opened_at, closed_at or now()); `expected_cash` is
+    computed from that window (see shifts.expected_cash_for) and frozen onto
+    the row at close time so the reviewed number never silently drifts if
+    something is edited/voided afterward.
+    """
+    __tablename__ = "cashier_shifts"
+
+    id = Column(Integer, primary_key=True)
+    cashier_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    status = Column(String(10), nullable=False, server_default="open")  # open | closed
+
+    opening_amount = Column(Numeric(12, 2), nullable=False, server_default="0")
+    opened_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Filled in at close time.
+    expected_cash = Column(Numeric(12, 2), nullable=True)   # opening + net cash movement, computed
+    counted_cash = Column(Numeric(12, 2), nullable=True)    # physically counted by the cashier
+    variance = Column(Numeric(12, 2), nullable=True)        # counted - expected (negative = short)
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Optional: cash physically moved to the bank at close. Documents where the
+    # counted cash went; does not affect the variance above (that's measured
+    # before any deposit is taken out).
+    deposited_amount = Column(Numeric(12, 2), nullable=False, server_default="0")
+    bank_account_id = Column(Integer, ForeignKey("bank_accounts.id"), nullable=True)
+    bank_transaction_id = Column(Integer, ForeignKey("bank_transactions.id"), nullable=True)
+
+    notes = Column(String(255))
+
+    cashier = relationship("User")
+    bank_account = relationship("BankAccount")
+    bank_transaction = relationship("BankTransaction")
 
 
 class Notification(Base):

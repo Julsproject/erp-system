@@ -112,14 +112,29 @@
 <!-- REFUND -->
 <div id="refundView" style="display:none;">
   <div class="card">
-    <div class="lookup-bar">
-      <input id="refundInvoice" type="text" placeholder="Enter invoice # to refund…" autocomplete="off">
-      <button type="button" class="btn" onclick="lookupRefund()">Find sale</button>
+    <div id="refundInvoiceBox">
+      <div class="lookup-bar">
+        <input id="refundInvoice" type="text" placeholder="Enter invoice # to refund…" autocomplete="off">
+        <button type="button" class="btn" onclick="lookupRefund()">Find sale</button>
+      </div>
+      <button type="button" class="btn-link no-invoice-link" onclick="toggleRefundManual(true)">Can't find the invoice? Search inventory instead →</button>
+    </div>
+    <div id="refundManualBox" style="display:none;">
+      <div class="notice no-invoice-notice">
+        <strong>No invoice</strong> — pick the item(s) being returned and confirm the price the customer paid.
+        This is flagged for the owner to review.
+        <button type="button" class="btn-link" onclick="toggleRefundManual(false)">← Back to invoice lookup</button>
+      </div>
+      <label class="pos-customer" style="max-width:320px;margin-bottom:10px;">Customer name <span class="muted">(optional)</span>
+        <input id="refundManualCustomer" type="text" autocomplete="off">
+      </label>
+      <input id="refundManualSearch" class="search pos-search" type="search" placeholder="Search product to return…" autocomplete="off">
+      <div id="refundManualResults" class="pos-results" style="max-height:22vh;"><p class="pos-hint">Type a product name to begin.</p></div>
     </div>
     <div id="refundInfo" class="lookup-info"></div>
     <div class="table-wrap" id="refundItemsWrap" style="display:none; margin-top:14px;">
       <table class="grid">
-        <thead><tr><th></th><th>Item</th><th>Unit</th><th class="num">Sold Qty</th><th class="num">Refund Qty</th><th class="num">Price</th><th class="num">Amount</th></tr></thead>
+        <thead><tr><th></th><th>Item</th><th>Unit</th><th class="num">Sold Qty</th><th class="num">Refund Qty</th><th class="num">Price</th><th class="num">Amount</th><th></th></tr></thead>
         <tbody id="refundItems"></tbody>
       </table>
     </div>
@@ -136,14 +151,26 @@
   <div class="pos-grid">
     <section class="card">
       <h3 class="ex-h">Returned items</h3>
-      <div class="lookup-bar">
-        <input id="exInvoice" type="text" placeholder="Invoice # to exchange from…" autocomplete="off">
-        <button type="button" class="btn-secondary" onclick="lookupExchange()">Find</button>
+      <div id="exInvoiceBox">
+        <div class="lookup-bar">
+          <input id="exInvoice" type="text" placeholder="Invoice # to exchange from…" autocomplete="off">
+          <button type="button" class="btn-secondary" onclick="lookupExchange()">Find</button>
+        </div>
+        <button type="button" class="btn-link no-invoice-link" onclick="toggleExManual(true)">Can't find the invoice? Search inventory instead →</button>
+      </div>
+      <div id="exManualBox" style="display:none;">
+        <div class="notice no-invoice-notice">
+          <strong>No invoice</strong> — pick the item(s) being returned and confirm the price the customer paid.
+          This is flagged for the owner to review.
+          <button type="button" class="btn-link" onclick="toggleExManual(false)">← Back to invoice lookup</button>
+        </div>
+        <input id="exManualSearch" class="search pos-search" type="search" placeholder="Search product to return…" autocomplete="off">
+        <div id="exManualResults" class="pos-results" style="max-height:20vh;"><p class="pos-hint">Type a product name to begin.</p></div>
       </div>
       <div id="exInfo" class="lookup-info"></div>
       <div class="table-wrap" id="exReturnWrap" style="display:none; margin:12px 0;">
         <table class="grid">
-          <thead><tr><th></th><th>Item</th><th class="num">Sold</th><th class="num">Return Qty</th><th class="num">Amount</th></tr></thead>
+          <thead><tr><th></th><th>Item</th><th class="num">Sold</th><th class="num">Return Qty</th><th class="num">Price</th><th class="num">Amount</th><th></th></tr></thead>
           <tbody id="exReturnItems"></tbody>
         </table>
       </div>
@@ -167,11 +194,15 @@
         </div>
         <div class="totals-row grand"><span id="exDiffLabel">Customer pays</span><span id="exDiff">₱0.00</span></div>
         <label class="pay-full-method" id="exPayWrap" style="display:none;">Payment method
-          <select id="exMethod">
+          <select id="exMethod" onchange="exOnMethodChange()">
             <option value="cash">Cash</option><option value="gcash">GCash</option>
             <option value="card">Card</option><option value="bank_transfer">Bank Transfer</option>
           </select>
         </label>
+        <label class="pay-full-method" id="exTenderedWrap" style="display:none;">Cash tendered
+          <input id="exTendered" type="number" step="0.01" min="0" oninput="exCompute()">
+        </label>
+        <div class="totals-row change" id="exChangeRow" style="display:none;"><span>Change</span><span id="exChange">₱0.00</span></div>
         <button class="btn pos-complete" id="exBtn" onclick="doExchange()" disabled>Complete Exchange</button>
         <div id="exError" class="alert" style="display:none;margin-top:12px;"></div>
       </div>
@@ -449,7 +480,23 @@ function renderPayments() {
   });
 }
 function setPayMethod(i, v) { payments[i].method = v; renderPayments(); computeTotals(); }
-function setPayAmount(i, v) { payments[i].amount = v; computeTotals(); }
+function setPayAmount(i, v) {
+  payments[i].amount = v;
+  // With exactly two methods, the second is implied by the first — typing 150
+  // of a 300 total auto-fills the other line with 150, no "Exact" click needed.
+  // Only kicks in at exactly two lines: with three+ the remainder is ambiguous
+  // (which of the other lines should absorb it), so those still use "Exact".
+  if (payments.length === 2) {
+    const j = i === 0 ? 1 : 0;
+    const grand = computeGrand();
+    const mine = parseFloat(v) || 0;
+    const remainder = Math.max(Math.round((grand - mine) * 100) / 100, 0);
+    payments[j].amount = remainder;
+    const inputs = document.querySelectorAll('#paymentsList .pay-amount');
+    if (inputs[j]) inputs[j].value = remainder.toFixed(2);
+  }
+  computeTotals();
+}
 function setPayChequeField(i, key, v) { payments[i][key] = v; computeTotals(); }
 function addPayment() { payments.push({ method: 'cash', amount: '' }); renderPayments(); computeTotals(); }
 function removePayment(i) { payments.splice(i, 1); renderPayments(); computeTotals(); }
@@ -574,8 +621,55 @@ function fmtQty(n) { return (Math.round((Number(n) || 0) * 1000) / 1000).toStrin
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function tick() { document.getElementById('clock').textContent = new Date().toLocaleString('en-PH', {dateStyle:'medium', timeStyle:'short'}); }
 
-/* ===== REFUND ===== */
+/* ===== REFUND =====
+   refundLines is the single source of truth for the returned-items table,
+   populated either from a matched invoice (price fixed, read-only) or from a
+   manual product search when there's no invoice (price editable, defaults to
+   the product's current price — see toggleRefundManual). */
 let refundSale = null;
+let refundManualMode = false;
+let refundLines = [];   // {product_id, name, unit_name, factor, qty (sold, null if manual), unit_price, is_vat, editable}
+let refundManualTimer = null;
+
+function toggleRefundManual(on) {
+  refundManualMode = on;
+  refundSale = null;
+  refundLines = [];
+  document.getElementById('refundInvoiceBox').style.display = on ? 'none' : 'block';
+  document.getElementById('refundManualBox').style.display = on ? 'block' : 'none';
+  document.getElementById('refundInfo').innerHTML = '';
+  document.getElementById('refundInvoice').value = '';
+  renderRefundLines();
+}
+document.getElementById('refundManualSearch').addEventListener('input', () => {
+  clearTimeout(refundManualTimer); refundManualTimer = setTimeout(refundManualSearch, 180);
+});
+async function refundManualSearch() {
+  const q = document.getElementById('refundManualSearch').value.trim();
+  const box = document.getElementById('refundManualResults');
+  if (!q) { box.innerHTML = '<p class="pos-hint">Type a product name to begin.</p>'; return; }
+  const res = await fetch('/pos/search?q=' + encodeURIComponent(q));
+  const data = await res.json();
+  const products = data.products || [];
+  if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
+  box.innerHTML = '';
+  products.forEach(p => {
+    const el = document.createElement('button');
+    el.type = 'button'; el.className = 'pos-item'; el.onclick = () => refundManualAdd(p);
+    el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span></div>' +
+      '<div class="pos-item-sub">' + peso(p.units[0].price) + ' / ' + escapeHtml(p.base_unit) + '</div>';
+    box.appendChild(el);
+  });
+}
+function refundManualAdd(p) {
+  refundLines.push({
+    product_id: p.id, name: p.name, unit_name: p.base_unit, factor: 1,
+    qty: null, unit_price: p.units[0].price, is_vat: p.is_vat, editable: true,
+  });
+  renderRefundLines();
+  document.getElementById('refundManualSearch').value = '';
+  document.getElementById('refundManualResults').innerHTML = '<p class="pos-hint">' + escapeHtml(p.name) + ' added — search again to add another.</p>';
+}
 async function lookupRefund() {
   const inv = document.getElementById('refundInvoice').value.trim();
   if (!inv) return;
@@ -583,40 +677,56 @@ async function lookupRefund() {
   const data = await res.json();
   const info = document.getElementById('refundInfo');
   if (!data.found) {
-    refundSale = null; info.innerHTML = '<div class="alert">No sale found for invoice ' + escapeHtml(inv) + '.</div>';
-    document.getElementById('refundItemsWrap').style.display = 'none'; document.getElementById('refundFoot').style.display = 'none'; return;
+    refundSale = null; refundLines = []; info.innerHTML = '<div class="alert">No sale found for invoice ' + escapeHtml(inv) + '.</div>';
+    renderRefundLines(); return;
   }
   refundSale = data;
   info.innerHTML = '<div class="lookup-meta"><span><b>' + escapeHtml(data.invoice_no) + '</b></span><span>' + escapeHtml(data.customer_name || 'Walk-in') + '</span><span>' + escapeHtml(data.date) + '</span></div>';
-  const body = document.getElementById('refundItems'); body.innerHTML = '';
-  data.lines.forEach((l, i) => {
+  refundLines = data.lines.map(l => ({
+    product_id: l.product_id, name: l.name, unit_name: l.unit_name, factor: l.factor,
+    qty: l.qty, unit_price: l.unit_price, is_vat: l.is_vat, editable: false,
+  }));
+  renderRefundLines();
+}
+function renderRefundLines() {
+  const body = document.getElementById('refundItems');
+  body.innerHTML = '';
+  refundLines.forEach((l, i) => {
     const tr = document.createElement('tr');
+    const maxAttr = l.qty !== null ? ' max="' + l.qty + '"' : '';
+    const startQty = l.qty !== null ? fmtQty(l.qty) : '1';
     tr.innerHTML =
-      '<td><input type="checkbox" data-i="' + i + '" onchange="calcRefund()"></td>' +
+      '<td><input type="checkbox" data-i="' + i + '" checked onchange="calcRefund()"></td>' +
       '<td class="strong">' + escapeHtml(l.name) + '</td>' +
       '<td>' + escapeHtml(l.unit_name || '') + '</td>' +
-      '<td class="num">' + fmtQty(l.qty) + '</td>' +
-      '<td class="num"><input class="cart-qty rf-qty" type="number" step="0.001" min="0" max="' + l.qty + '" value="' + fmtQty(l.qty) + '" data-i="' + i + '" oninput="calcRefund()"></td>' +
-      '<td class="num">' + peso(l.unit_price) + '</td>' +
-      '<td class="num rf-amt">' + peso(l.qty * l.unit_price) + '</td>';
+      '<td class="num">' + (l.qty !== null ? fmtQty(l.qty) : '—') + '</td>' +
+      '<td class="num"><input class="cart-qty rf-qty" type="number" step="0.001" min="0"' + maxAttr + ' value="' + startQty + '" data-i="' + i + '" oninput="calcRefund()"></td>' +
+      '<td class="num">' + (l.editable
+        ? '<input class="cart-disc rf-price" type="number" step="0.01" min="0" value="' + l.unit_price.toFixed(2) + '" data-i="' + i + '" oninput="calcRefund()">'
+        : peso(l.unit_price)) + '</td>' +
+      '<td class="num rf-amt">' + peso((l.qty !== null ? l.qty : 1) * l.unit_price) + '</td>' +
+      '<td>' + (l.editable ? '<button type="button" class="btn-link danger" onclick="refundRemoveLine(' + i + ')">✕</button>' : '') + '</td>';
     body.appendChild(tr);
   });
-  document.getElementById('refundItemsWrap').style.display = 'block';
-  document.getElementById('refundFoot').style.display = 'block';
+  document.getElementById('refundItemsWrap').style.display = refundLines.length ? 'block' : 'none';
+  document.getElementById('refundFoot').style.display = refundLines.length ? 'block' : 'none';
   calcRefund();
 }
+function refundRemoveLine(i) { refundLines.splice(i, 1); renderRefundLines(); }
 function calcRefund() {
-  if (!refundSale) return;
   let net = 0, vatBase = 0, any = false;
   document.querySelectorAll('#refundItems tr').forEach(tr => {
     const cb = tr.querySelector('input[type=checkbox]');
+    const i = parseInt(cb.dataset.i);
+    const l = refundLines[i];
     const qtyInput = tr.querySelector('.rf-qty');
-    const l = refundSale.lines[parseInt(cb.dataset.i)];
     let qty = parseFloat(qtyInput.value) || 0;
-    if (qty > l.qty) { qty = l.qty; qtyInput.value = fmtQty(l.qty); }
-    const val = qty * l.unit_price;
+    if (l.qty !== null && qty > l.qty) { qty = l.qty; qtyInput.value = fmtQty(l.qty); }
+    const priceInput = tr.querySelector('.rf-price');
+    const price = priceInput ? (parseFloat(priceInput.value) || 0) : l.unit_price;
+    const val = qty * price;
     tr.querySelector('.rf-amt').textContent = peso(val);
-    if (cb.checked) { net += val; if (l.is_vat) vatBase += val; any = true; }
+    if (cb.checked && qty > 0) { net += val; if (l.is_vat) vatBase += val; any = true; }
   });
   // Prices already include VAT, so refund exactly what was paid and show the
   // VAT portion contained in it.
@@ -627,49 +737,116 @@ function calcRefund() {
   document.getElementById('refundBtn').disabled = !any || total <= 0;
 }
 async function doRefund() {
-  if (!refundSale) return;
+  if (!refundLines.length) return;
   const items = [];
   document.querySelectorAll('#refundItems tr').forEach(tr => {
     const cb = tr.querySelector('input[type=checkbox]');
     if (!cb.checked) return;
-    const l = refundSale.lines[parseInt(cb.dataset.i)];
+    const i = parseInt(cb.dataset.i);
+    const l = refundLines[i];
     const qty = parseFloat(tr.querySelector('.rf-qty').value) || 0;
-    if (qty > 0) items.push({ product_id: l.product_id, name: l.name, unit_name: l.unit_name, factor: l.factor, qty: qty, unit_price: l.unit_price, is_vat: l.is_vat });
+    const priceInput = tr.querySelector('.rf-price');
+    const price = priceInput ? (parseFloat(priceInput.value) || 0) : l.unit_price;
+    if (qty > 0) items.push({ product_id: l.product_id, name: l.name, unit_name: l.unit_name, factor: l.factor, qty: qty, unit_price: price, is_vat: l.is_vat });
   });
   if (!items.length) return;
   const btn = document.getElementById('refundBtn'); btn.disabled = true; btn.textContent = 'Processing…';
-  const res = await fetch('/pos/refund', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sale_id: refundSale.sale_id, items }) });
+  const payload = { items: items };
+  if (refundManualMode) { payload.customer_name = document.getElementById('refundManualCustomer').value; }
+  else { payload.sale_id = refundSale.sale_id; }
+  const res = await fetch('/pos/refund', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
   const data = await res.json();
   if (data.ok) { window.location = '/pos/receipt/' + data.sale_id; }
   else { const e = document.getElementById('refundError'); e.textContent = data.error || 'Refund failed.'; e.style.display = 'block'; btn.disabled = false; btn.textContent = 'Complete Refund'; }
 }
 
-/* ===== EXCHANGE ===== */
+/* ===== EXCHANGE =====
+   exReturnLines mirrors refundLines: populated either from a matched invoice
+   (price fixed) or a manual product search when there's no invoice (price
+   editable — see toggleExManual). */
 let exSale = null, exCart = [], exTimer = null;
+let exManualMode = false;
+let exReturnLines = [];   // {product_id, name, unit_name, factor, qty (sold, null if manual), unit_price, is_vat, editable}
+let exManualTimer = null;
 document.getElementById('exSearch').addEventListener('input', () => { clearTimeout(exTimer); exTimer = setTimeout(exRunSearch, 180); });
+
+function toggleExManual(on) {
+  exManualMode = on;
+  exSale = null;
+  exReturnLines = [];
+  document.getElementById('exInvoiceBox').style.display = on ? 'none' : 'block';
+  document.getElementById('exManualBox').style.display = on ? 'block' : 'none';
+  document.getElementById('exInfo').innerHTML = '';
+  document.getElementById('exInvoice').value = '';
+  renderExReturnLines();
+}
+document.getElementById('exManualSearch').addEventListener('input', () => {
+  clearTimeout(exManualTimer); exManualTimer = setTimeout(exManualSearch, 180);
+});
+async function exManualSearch() {
+  const q = document.getElementById('exManualSearch').value.trim();
+  const box = document.getElementById('exManualResults');
+  if (!q) { box.innerHTML = '<p class="pos-hint">Type a product name to begin.</p>'; return; }
+  const res = await fetch('/pos/search?q=' + encodeURIComponent(q));
+  const data = await res.json();
+  const products = data.products || [];
+  if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
+  box.innerHTML = '';
+  products.forEach(p => {
+    const el = document.createElement('button');
+    el.type = 'button'; el.className = 'pos-item'; el.onclick = () => exManualAdd(p);
+    el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span></div>' +
+      '<div class="pos-item-sub">' + peso(p.units[0].price) + ' / ' + escapeHtml(p.base_unit) + '</div>';
+    box.appendChild(el);
+  });
+}
+function exManualAdd(p) {
+  exReturnLines.push({
+    product_id: p.id, name: p.name, unit_name: p.base_unit, factor: 1,
+    qty: null, unit_price: p.units[0].price, is_vat: p.is_vat, editable: true,
+  });
+  renderExReturnLines();
+  document.getElementById('exManualSearch').value = '';
+  document.getElementById('exManualResults').innerHTML = '<p class="pos-hint">' + escapeHtml(p.name) + ' added — search again to add another.</p>';
+}
 async function lookupExchange() {
   const inv = document.getElementById('exInvoice').value.trim();
   if (!inv) return;
   const res = await fetch('/pos/lookup?invoice=' + encodeURIComponent(inv));
   const data = await res.json();
   const info = document.getElementById('exInfo');
-  if (!data.found) { exSale = null; info.innerHTML = '<div class="alert">No sale found.</div>'; document.getElementById('exReturnWrap').style.display = 'none'; exCompute(); return; }
+  if (!data.found) { exSale = null; exReturnLines = []; info.innerHTML = '<div class="alert">No sale found.</div>'; renderExReturnLines(); return; }
   exSale = data;
   info.innerHTML = '<div class="lookup-meta"><span><b>' + escapeHtml(data.invoice_no) + '</b></span><span>' + escapeHtml(data.customer_name || 'Walk-in') + '</span></div>';
-  const body = document.getElementById('exReturnItems'); body.innerHTML = '';
-  data.lines.forEach((l, i) => {
+  exReturnLines = data.lines.map(l => ({
+    product_id: l.product_id, name: l.name, unit_name: l.unit_name, factor: l.factor,
+    qty: l.qty, unit_price: l.unit_price, is_vat: l.is_vat, editable: false,
+  }));
+  renderExReturnLines();
+}
+function renderExReturnLines() {
+  const body = document.getElementById('exReturnItems');
+  body.innerHTML = '';
+  exReturnLines.forEach((l, i) => {
     const tr = document.createElement('tr');
+    const maxAttr = l.qty !== null ? ' max="' + l.qty + '"' : '';
+    const startQty = l.qty !== null ? fmtQty(l.qty) : '1';
     tr.innerHTML =
-      '<td><input type="checkbox" data-i="' + i + '" onchange="exCompute()"></td>' +
+      '<td><input type="checkbox" data-i="' + i + '" checked onchange="exCompute()"></td>' +
       '<td class="strong">' + escapeHtml(l.name) + '</td>' +
-      '<td class="num">' + fmtQty(l.qty) + '</td>' +
-      '<td class="num"><input class="cart-qty ex-rqty" type="number" step="0.001" min="0" max="' + l.qty + '" value="' + fmtQty(l.qty) + '" data-i="' + i + '" oninput="exCompute()"></td>' +
-      '<td class="num ex-ramt">' + peso(l.qty * l.unit_price) + '</td>';
+      '<td class="num">' + (l.qty !== null ? fmtQty(l.qty) : '—') + '</td>' +
+      '<td class="num"><input class="cart-qty ex-rqty" type="number" step="0.001" min="0"' + maxAttr + ' value="' + startQty + '" data-i="' + i + '" oninput="exCompute()"></td>' +
+      '<td class="num">' + (l.editable
+        ? '<input class="cart-disc ex-rprice" type="number" step="0.01" min="0" value="' + l.unit_price.toFixed(2) + '" data-i="' + i + '" oninput="exCompute()">'
+        : peso(l.unit_price)) + '</td>' +
+      '<td class="num ex-ramt">' + peso((l.qty !== null ? l.qty : 1) * l.unit_price) + '</td>' +
+      '<td>' + (l.editable ? '<button type="button" class="btn-link danger" onclick="exReturnRemove(' + i + ')">✕</button>' : '') + '</td>';
     body.appendChild(tr);
   });
-  document.getElementById('exReturnWrap').style.display = 'block';
+  document.getElementById('exReturnWrap').style.display = exReturnLines.length ? 'block' : 'none';
   exCompute();
 }
+function exReturnRemove(i) { exReturnLines.splice(i, 1); renderExReturnLines(); }
 async function exRunSearch() {
   const q = document.getElementById('exSearch').value.trim();
   const res = await fetch('/pos/search?q=' + encodeURIComponent(q));
@@ -721,18 +898,22 @@ function exRefreshComputed() {
 // Returned side: net value plus the part of it that carried VAT when sold.
 function exReturnedTotals() {
   let net = 0, vatBase = 0;
-  if (exSale) document.querySelectorAll('#exReturnItems tr').forEach(tr => {
+  document.querySelectorAll('#exReturnItems tr').forEach(tr => {
     const cb = tr.querySelector('input[type=checkbox]');
-    const l = exSale.lines[parseInt(cb.dataset.i)];
+    const i = parseInt(cb.dataset.i);
+    const l = exReturnLines[i];
     let qty = parseFloat(tr.querySelector('.ex-rqty').value) || 0;
-    if (qty > l.qty) qty = l.qty;
-    const val = qty * l.unit_price;
+    if (l.qty !== null && qty > l.qty) qty = l.qty;
+    const priceInput = tr.querySelector('.ex-rprice');
+    const price = priceInput ? (parseFloat(priceInput.value) || 0) : l.unit_price;
+    const val = qty * price;
     tr.querySelector('.ex-ramt').textContent = peso(val);
-    if (cb.checked) { net += val; if (l.is_vat) vatBase += val; }
+    if (cb.checked && qty > 0) { net += val; if (l.is_vat) vatBase += val; }
   });
   return { net: net, vatBase: vatBase };
 }
 function exNewTotal() { let t = 0; exCart.forEach(l => t += l.qty * l.product.units[l.unitIndex].price); return t; }
+function exOnMethodChange() { exCompute(); }
 function exCompute() {
   const r = exReturnedTotals();
   const nt = exNewTotal();
@@ -745,25 +926,56 @@ function exCompute() {
   document.getElementById('exNewTotal').textContent = peso(nt);
   document.getElementById('exVat').textContent = peso(newVat);
   const label = document.getElementById('exDiffLabel'), diffEl = document.getElementById('exDiff');
-  if (diff >= 0) { label.textContent = 'Customer pays'; diffEl.textContent = peso(diff); document.getElementById('exPayWrap').style.display = diff > 0 ? 'flex' : 'none'; }
-  else { label.textContent = 'Refund to customer (cash)'; diffEl.textContent = peso(-diff); document.getElementById('exPayWrap').style.display = 'none'; }
-  document.getElementById('exBtn').disabled = !(r.net > 0 || nt > 0);
+  const tenderedWrap = document.getElementById('exTenderedWrap');
+  const changeRow = document.getElementById('exChangeRow');
+  let ok = (r.net > 0 || nt > 0);
+
+  if (diff >= 0) {
+    label.textContent = 'Customer pays'; diffEl.textContent = peso(diff);
+    document.getElementById('exPayWrap').style.display = diff > 0 ? 'flex' : 'none';
+    // Only cash has a real "hand over more, get change back" scenario — GCash/
+    // Card/Bank Transfer are exact-amount transfers.
+    const isCash = document.getElementById('exMethod').value === 'cash';
+    if (diff > 0 && isCash) {
+      tenderedWrap.style.display = 'flex';
+      const tenderedInput = document.getElementById('exTendered');
+      if (!tenderedInput.value || parseFloat(tenderedInput.value) < diff) tenderedInput.value = diff.toFixed(2);
+      const tendered = parseFloat(tenderedInput.value) || 0;
+      const change = Math.max(tendered - diff, 0);
+      document.getElementById('exChange').textContent = peso(change);
+      changeRow.style.display = change > 0.001 ? 'flex' : 'none';
+      if (tendered < diff - 0.001) ok = false;
+    } else {
+      tenderedWrap.style.display = 'none';
+      changeRow.style.display = 'none';
+    }
+  } else {
+    label.textContent = 'Refund to customer (cash)'; diffEl.textContent = peso(-diff);
+    document.getElementById('exPayWrap').style.display = 'none';
+    tenderedWrap.style.display = 'none';
+    changeRow.style.display = 'none';
+  }
+  document.getElementById('exBtn').disabled = !ok;
 }
 async function doExchange() {
   const returned = [];
-  if (exSale) document.querySelectorAll('#exReturnItems tr').forEach(tr => {
+  document.querySelectorAll('#exReturnItems tr').forEach(tr => {
     const cb = tr.querySelector('input[type=checkbox]');
     if (!cb.checked) return;
-    const l = exSale.lines[parseInt(cb.dataset.i)];
+    const i = parseInt(cb.dataset.i);
+    const l = exReturnLines[i];
     const qty = parseFloat(tr.querySelector('.ex-rqty').value) || 0;
-    if (qty > 0) returned.push({ product_id: l.product_id, name: l.name, unit_name: l.unit_name, factor: l.factor, qty: qty, unit_price: l.unit_price, is_vat: l.is_vat });
+    const priceInput = tr.querySelector('.ex-rprice');
+    const price = priceInput ? (parseFloat(priceInput.value) || 0) : l.unit_price;
+    if (qty > 0) returned.push({ product_id: l.product_id, name: l.name, unit_name: l.unit_name, factor: l.factor, qty: qty, unit_price: price, is_vat: l.is_vat });
   });
   const new_lines = exCart.map(l => { const u = l.product.units[l.unitIndex]; return { product_id: l.product.id, name: l.product.name, unit_name: u.name, factor: u.factor, qty: l.qty, unit_price: u.price, discount: 0, is_vat: l.product.is_vat, tier: u.tier || '' }; });
   if (!returned.length && !new_lines.length) return;
   const btn = document.getElementById('exBtn'); btn.disabled = true; btn.textContent = 'Processing…';
   const payload = { sale_id: exSale ? exSale.sale_id : null, returned_items: returned, new_lines: new_lines,
                     vat_applied: document.getElementById('exVatOn').checked,
-                    payment_method: document.getElementById('exMethod').value };
+                    payment_method: document.getElementById('exMethod').value,
+                    amount_tendered: document.getElementById('exTendered').value };
   const res = await fetch('/pos/exchange', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
   const data = await res.json();
   if (data.ok) { window.location = '/pos/receipt/' + data.sale_id; }
