@@ -144,6 +144,17 @@ def pos_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_curr
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     q = (q or "").strip()
+    if q:
+        # A scanned barcode is an exact, unique code — if it matches, that's
+        # the product, full stop. Only fall back to a fuzzy name search when
+        # nothing scans to it, so typing a product name still works as before.
+        barcode_hit = (
+            db.query(models.Product)
+            .filter(models.Product.is_active.is_(True), models.Product.barcode == q)
+            .first()
+        )
+        if barcode_hit:
+            return {"products": [_product_payload_for_pos(barcode_hit)]}
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
         query = query.filter(models.Product.name.ilike(f"%{q}%"))

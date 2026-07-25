@@ -14,6 +14,12 @@
     <input name="name" value="{{ product.name if product else '' }}" required autofocus>
   </label>
 
+  <label>Barcode
+    <input name="barcode" value="{{ product.barcode if product and product.barcode else '' }}"
+           placeholder="Scan with a barcode scanner, or type it in" autocomplete="off">
+    <small class="hint">Optional. Once set, scanning this code at POS, Purchasing or Quotations finds this product instantly.</small>
+  </label>
+
   <label>Category
     <input name="category" list="category-list" placeholder="Type or pick…"
            value="{{ product.category.name if product and product.category else '' }}">

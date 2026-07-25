@@ -28,7 +28,7 @@ PAGE_SIZE = 20
 
 # Fields whose before/after we log on a product edit. Stock and price changes
 # are the theft/accountability-sensitive ones the owner most wants visible.
-AUDIT_FIELDS = ["name", "cost_price", "selling_price", "beginning_stock", "stock_qty",
+AUDIT_FIELDS = ["name", "barcode", "cost_price", "selling_price", "beginning_stock", "stock_qty",
                 "reorder_level", "is_vat", "markup_pct", "markup_price", "margin_pct", "margin_price"]
 
 
@@ -119,7 +119,9 @@ def list_products(
 
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
-        query = query.filter(models.Product.name.ilike(f"%{q}%"))
+        query = query.filter(
+            models.Product.name.ilike(f"%{q}%") | (models.Product.barcode == q)
+        )
     if alert:
         # Only products whose selling price no longer covers cost.
         query = query.filter(
@@ -145,7 +147,9 @@ def list_products(
     # category filter itself) so switching pills reflects what's really there.
     base_for_counts = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
-        base_for_counts = base_for_counts.filter(models.Product.name.ilike(f"%{q}%"))
+        base_for_counts = base_for_counts.filter(
+            models.Product.name.ilike(f"%{q}%") | (models.Product.barcode == q)
+        )
     if alert:
         base_for_counts = base_for_counts.filter(
             models.Product.cost_price > 0,
@@ -219,6 +223,7 @@ def edit_product(product_id: int, request: Request, db: Session = Depends(get_db
 
 def _save_from_form(product: models.Product, db: Session, form):
     product.name = (form.get("name") or "").strip()
+    product.barcode = (form.get("barcode") or "").strip() or None
     product.category = _get_or_create_category(db, form.get("category"))
     product.unit_type = _get_or_create_unit_type(db, form.get("unit_type"))
     product.cost_price = _to_decimal(form.get("cost_price"))
@@ -258,6 +263,9 @@ async def create_product(request: Request, db: Session = Depends(get_db), user=D
     form = await request.form()
     if not (form.get("name") or "").strip():
         return _render_form(request, db, user, product=None, error="Product name is required.")
+    barcode = (form.get("barcode") or "").strip()
+    if barcode and db.query(models.Product).filter(models.Product.barcode == barcode).first():
+        return _render_form(request, db, user, product=None, error=f"Barcode “{barcode}” is already assigned to another product.")
     product = models.Product()
     _save_from_form(product, db, form)
     db.add(product)
@@ -281,6 +289,9 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
     form = await request.form()
     if not (form.get("name") or "").strip():
         return _render_form(request, db, user, product=product, error="Product name is required.")
+    barcode = (form.get("barcode") or "").strip()
+    if barcode and db.query(models.Product).filter(models.Product.barcode == barcode, models.Product.id != product.id).first():
+        return _render_form(request, db, user, product=product, error=f"Barcode “{barcode}” is already assigned to another product.")
     before = _product_snapshot(product)
     old_total = Decimal(str(product.total_qty or 0))
     _save_from_form(product, db, form)

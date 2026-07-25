@@ -42,7 +42,7 @@
 <form class="toolbar" method="get" action="/products">
   {% if alert %}<input type="hidden" name="alert" value="1">{% endif %}
   {% if category_id %}<input type="hidden" name="category_id" value="{{ category_id }}">{% endif %}
-  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search product name…" autofocus>
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search product name or scan barcode…" autofocus>
   <button class="btn-secondary" type="submit">Search</button>
   {% if q or category_id %}<a class="btn-link" href="/products{{ '?alert=1' if alert }}">Clear</a>{% endif %}
 </form>
@@ -52,6 +52,7 @@
     <thead>
       <tr>
         <th>Product Name</th>
+        <th>Barcode</th>
         <th>Category</th>
         <th>Unit Type</th>
         <th class="num">Cost of Sales</th>
@@ -76,6 +77,7 @@
             {% endif %}
           {% endif %}
         </td>
+        <td class="muted">{{ p.barcode or '—' }}</td>
         <td>{{ p.category.name if p.category else '—' }}</td>
         <td>{{ p.unit_type.name if p.unit_type else '—' }}</td>
         <td class="num">
@@ -101,14 +103,14 @@
       </tr>
       {% if p.container %}
       <tr class="container-row">
-        <td colspan="9" class="container-line">
+        <td colspan="10" class="container-line">
           ↳ Sealed: <strong>{{ p.container.sealed }}</strong> {{ p.container.pack_name }}{{ '' if p.container.sealed == 1 else 's' }}
           &nbsp;·&nbsp; Open container: <strong class="open-hl">{{ p.container.open|qty }} {{ p.container.loose_name }}</strong>
         </td>
       </tr>
       {% endif %}
       {% else %}
-      <tr><td colspan="9" class="empty">No products yet. Click <strong>Add product</strong> to start encoding inventory.</td></tr>
+      <tr><td colspan="10" class="empty">No products yet. Click <strong>Add product</strong> to start encoding inventory.</td></tr>
       {% endfor %}
     </tbody>
   </table>
