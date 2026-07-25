@@ -298,6 +298,24 @@ def dashboard(
         elif sale.due_date <= horizon:
             due_soon.append(entry)
 
+    # ---- payables (what we owe suppliers) ---------------------------------
+    # A 'confirmed' receive-type purchase IS the payable — goods/cost already
+    # moved, payment hasn't. No partial-settlement ledger here (unlike
+    # receivables), so outstanding = the purchase total.
+    payables_total = Decimal(str(
+        db.query(func.coalesce(func.sum(models.Purchase.total), 0))
+        .filter(models.Purchase.txn_type == "receive", models.Purchase.status == "confirmed")
+        .scalar() or 0
+    ))
+    payables_overdue = (
+        db.query(func.count(models.Purchase.id))
+        .filter(
+            models.Purchase.txn_type == "receive", models.Purchase.status == "confirmed",
+            models.Purchase.due_date.isnot(None), models.Purchase.due_date < today,
+        )
+        .scalar()
+    ) or 0
+
     # ---- product performance --------------------------------------------
     perf = (
         db.query(
@@ -368,6 +386,7 @@ def dashboard(
             "out_of_stock": out_of_stock, "low_stock": low_stock, "no_cost": no_cost,
             "pdc_alert_count": pdc_alert_count,
             "credit_total": credit_total, "due_soon": due_soon, "overdue": overdue,
+            "payables_total": payables_total, "payables_overdue": payables_overdue,
             "top_revenue": top_revenue, "dead_stock": dead_stock,
             "pending_pos": pending_pos, "pending_po_count": pending_po_count, "pending_pos_total": pending_pos_total,
             "recent": recent, "backup": backup_info, "backup_stale_days": BACKUP_STALE_DAYS,

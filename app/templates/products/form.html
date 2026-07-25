@@ -176,6 +176,9 @@
      margin: price = cost / (1 - pct/100)   -> pct is a SHARE OF the price
      Mirrors app/pricing.py; the server recomputes on save, this just shows the
      numbers (and each one's TRUE margin) before you commit to them. */
+  {% set mmp = min_margin_pct() %}
+  var MIN_MARGIN_PCT = {{ mmp if mmp is not none else 'null' }};   // shop-wide target, or null (disabled) — see Settings
+
   function costValue() {
     return parseFloat(document.querySelector('input[name="cost_price"]').value) || 0;
   }
@@ -183,13 +186,19 @@
     if (priceEl) priceEl.value = price > 0 ? price.toFixed(2) : '';
     var profit = price - cost;
     if (price > 0 && cost > 0) {
+      var marginPct = profit / price * 100;
       profitEl.textContent = '₱' + profit.toFixed(2);
       profitEl.className = 'num ' + (profit < 0 ? 'neg' : '');
-      marginEl.textContent = (profit / price * 100).toFixed(1) + '%';
-      marginEl.className = 'num ' + (profit < 0 ? 'neg' : '');
+      // Below cost is always an error (red, existing behaviour). Profitable
+      // but under the shop's own minimum-margin target is a softer amber
+      // nudge — the price isn't wrong, just thinner than the standard.
+      var belowTarget = MIN_MARGIN_PCT !== null && profit >= 0 && marginPct < MIN_MARGIN_PCT;
+      marginEl.textContent = marginPct.toFixed(1) + '%' + (belowTarget ? ' ⚠' : '');
+      marginEl.className = 'num ' + (profit < 0 ? 'neg' : (belowTarget ? 'thin-margin' : ''));
+      marginEl.title = belowTarget ? ('Below your ' + MIN_MARGIN_PCT + '% minimum margin target') : '';
     } else {
       profitEl.textContent = '—'; profitEl.className = 'num muted';
-      marginEl.textContent = '—'; marginEl.className = 'num muted';
+      marginEl.textContent = '—'; marginEl.className = 'num muted'; marginEl.title = '';
     }
   }
 
@@ -213,8 +222,9 @@
     showRow(margin, cost, document.getElementById('marginPrice'),
             document.getElementById('marginProfit'), document.getElementById('marginMargin'));
 
+    var targetNote = MIN_MARGIN_PCT !== null ? (' Rows marked ⚠ fall below your ' + MIN_MARGIN_PCT + '% minimum margin target.') : '';
     hint.textContent = (cost > 0)
-      ? 'Markup and margin are calculated from the Cost of Sales above. Note they differ: the same % gives a different price.'
+      ? 'Markup and margin are calculated from the Cost of Sales above. Note they differ: the same % gives a different price.' + targetNote
       : 'Markup and margin are calculated from the Cost of Sales above — enter a cost for them to work.';
   }
 

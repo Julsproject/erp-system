@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from . import models
+from . import models, settings_store
 from .database import get_db
 from .deps import get_current_user, is_admin
 from .templating import templates
@@ -329,6 +329,95 @@ def export_sales_by_product(
         content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _low_margin_rows(db: Session, threshold: float):
+    """Same rule as the 'thin margin' Notification: profitable products
+    (selling above cost) whose true margin still falls under the shop's
+    target. Products at/below cost are a harder problem — they're already
+    surfaced separately — so they're excluded here."""
+    products = (
+        db.query(models.Product)
+        .filter(
+            models.Product.is_active.is_(True),
+            models.Product.cost_price > 0,
+            models.Product.selling_price > models.Product.cost_price,
+        )
+        .order_by(models.Product.name)
+        .all()
+    )
+    rows = []
+    for p in products:
+        price = Decimal(str(p.selling_price or 0))
+        cost = Decimal(str(p.cost_price or 0))
+        margin_pct = float((price - cost) / price * 100) if price > 0 else 0.0
+        if margin_pct < threshold:
+            rows.append({
+                "product": p,
+                "cost": cost,
+                "price": price,
+                "margin_pct": margin_pct,
+                "gap_pct": threshold - margin_pct,
+            })
+    rows.sort(key=lambda r: r["margin_pct"])
+    return rows
+
+
+@router.get("/reports/low-margin", response_class=HTMLResponse)
+def low_margin_report(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    threshold = settings_store.min_margin_pct()
+    rows = _low_margin_rows(db, threshold) if threshold is not None else []
+
+    return templates.TemplateResponse(
+        "reports/low_margin.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "rows": rows, "threshold": threshold,
+        },
+    )
+
+
+@router.get("/reports/low-margin/export")
+def export_low_margin(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    threshold = settings_store.min_margin_pct()
+    rows = _low_margin_rows(db, threshold) if threshold is not None else []
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Low Margin"
+    ws.append([f"Products below {threshold:g}% margin target" if threshold is not None else "No margin target set"])
+    ws.append([])
+    headers = ["Product", "Cost", "Selling Price", "Margin %", "Gap to Target %"]
+    ws.append(headers)
+    header_fill = PatternFill("solid", fgColor="1F6FEB")
+    for cell in ws[ws.max_row]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+    for r in rows:
+        ws.append([r["product"].name, float(r["cost"]), float(r["price"]), round(r["margin_pct"], 1), round(r["gap_pct"], 1)])
+    widths = [30, 14, 14, 12, 16]
+    for i, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+    ws.freeze_panes = "A4"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="low_margin_{_today().isoformat()}.xlsx"'},
     )
 
 

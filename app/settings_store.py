@@ -21,6 +21,12 @@ DEFAULTS = {
     "receipt_contact": "",
     "receipt_tin": "",
     "receipt_footer": "Thank you for your purchase!",
+    # Shop-wide minimum acceptable margin %. Blank = disabled — no
+    # below-target warnings until the owner opts in by setting a number.
+    # Separate from the existing below-cost/no-margin alerts, which always
+    # fire regardless of this (losing money is never OK; this is a softer,
+    # "you're profitable but under your own standard" nudge).
+    "min_margin_pct": "",
 }
 
 
@@ -66,5 +72,18 @@ def business_info() -> dict:
         return get_all(db)
     except Exception:
         return dict(DEFAULTS)
+    finally:
+        db.close()
+
+
+def min_margin_pct():
+    """The shop-wide minimum-margin target, or None when not set (disabled).
+    Standalone lookup (opens its own session) for the Notifications sweep."""
+    db = SessionLocal()
+    try:
+        raw = get_setting(db, "min_margin_pct", "")
+        return float(raw) if raw not in (None, "") else None
+    except Exception:
+        return None
     finally:
         db.close()

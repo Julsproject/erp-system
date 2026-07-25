@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Payables · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Purchasing</h1>
+</div>
+
+<div class="tabs">
+  <a class="tab" href="/suppliers">Suppliers</a>
+  <a class="tab" href="/purchases">Purchase History</a>
+  <a class="tab active" href="/purchases/payables">Payables</a>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat owed"><span class="mini-num">{{ total_owed|peso }}</span><span>Total Outstanding Payables</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total_count }}</span><span>Unpaid Deliveries</span></div>
+  <div class="mini-stat {{ 'owed' if overdue_count }}"><span class="mini-num">{{ overdue_count }}</span><span>Overdue</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ due_soon_count }}</span><span>Due within {{ (horizon - today).days }} days</span></div>
+</div>
+
+<p class="muted" style="margin:-6px 0 16px;">
+  Deliveries received and confirmed, but not yet paid to the supplier. Once marked paid, they move to
+  <a href="/purchases">Purchase History</a>.
+</p>
+
+<form class="toolbar" method="get" action="/purchases/payables">
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search ref #, invoice #, or supplier…">
+  <select name="supplier_id" onchange="this.form.submit()" class="search" style="max-width:220px;flex:none;">
+    <option value="0">All suppliers</option>
+    {% for s in suppliers %}
+    <option value="{{ s.id }}" {{ 'selected' if supplier_id == s.id }}>{{ s.name }}</option>
+    {% endfor %}
+  </select>
+  <button class="btn-secondary" type="submit">Search</button>
+  {% if q or supplier_id %}<a class="btn-link" href="/purchases/payables">Clear</a>{% endif %}
+</form>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Ref #</th><th>Supplier</th><th>Received</th><th>Due</th><th class="num">Amount Owed</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for p in rows %}
+      <tr>
+        <td class="strong">{{ p.ref_no }}</td>
+        <td>{{ p.supplier.name if p.supplier else '—' }}</td>
+        <td>{{ p.confirmed_at.strftime('%b %d, %Y') if p.confirmed_at else '—' }}</td>
+        <td>
+          {% if p.due_date %}
+            {{ p.due_date.strftime('%b %d, %Y') }}
+            {% if p.due_date < today %}
+            <span class="txn" style="background:#fef2f2;color:#b91c1c;">overdue</span>
+            {% elif p.due_date <= horizon %}
+            <span class="txn" style="background:#fef3c7;color:#92400e;">due soon</span>
+            {% endif %}
+          {% else %}
+          <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td class="num owed">{{ p.total|peso }}</td>
+        <td class="row-actions"><a class="btn-pay" href="/purchases/{{ p.id }}">View / Pay</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No outstanding payables{{ ' match that search' if q or supplier_id else '' }}. 🎉</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn-secondary" href="/purchases/payables?page={{ page - 1 }}&q={{ q }}{{ '&supplier_id=' ~ supplier_id if supplier_id }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-secondary" href="/purchases/payables?page={{ page + 1 }}&q={{ q }}{{ '&supplier_id=' ~ supplier_id if supplier_id }}">Next →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

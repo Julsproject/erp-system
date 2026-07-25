@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Low Margin Report · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Low Margin Report</h1>
+    {% if threshold is not none %}
+    <p class="muted">Products selling above cost, but under your {{ threshold|round(1) }}% margin target.</p>
+    {% else %}
+    <p class="muted">No margin target is set yet.</p>
+    {% endif %}
+  </div>
+  {% if threshold is not none %}
+  <a class="btn-secondary" href="/reports/low-margin/export">⬇ Download Excel</a>
+  {% endif %}
+</div>
+
+{% if threshold is none %}
+<div class="hint-box" style="max-width:820px;">
+  This report is driven by the minimum margin target in
+  <a href="/settings">Settings</a> — the same one that triggers the amber margin warning on
+  the product form and in Notifications. Set a target there (e.g. 30%) and this list will
+  fill in with anything selling under it.
+</div>
+{% else %}
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ rows|length }}</span><span>Below target</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ threshold|round(1) }}%</span><span>Margin target</span></div>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Product</th><th class="num">Cost</th><th class="num">Selling Price</th><th class="num">Margin</th><th class="num">Gap to Target</th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="strong"><a href="/products/{{ r.product.id }}/edit">{{ r.product.name }}</a></td>
+        <td class="num">{{ r.cost|peso }}</td>
+        <td class="num">{{ r.price|peso }}</td>
+        <td class="num" style="color:var(--warn);font-weight:600;">{{ '%.1f'|format(r.margin_pct) }}%</td>
+        <td class="num muted">{{ '%.1f'|format(r.gap_pct) }} pts</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="empty">Nothing below target — every active product clears your margin target.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

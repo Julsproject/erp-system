@@ -111,6 +111,16 @@ def business_info() -> dict:
         return {}
 
 
+def min_margin_pct():
+    """The shop-wide minimum-margin target (float), or None when disabled.
+    Imported lazily; never raises."""
+    try:
+        from .settings_store import min_margin_pct as _mmp
+        return _mmp()
+    except Exception:
+        return None
+
+
 templates.env.filters["peso"] = peso
 templates.env.filters["qty"] = qty
 templates.env.globals["price_alert_count"] = price_alert_count
@@ -118,3 +128,4 @@ templates.env.globals["pdc_due_count"] = pdc_due_count
 templates.env.globals["asset_version"] = asset_version
 templates.env.globals["notif_unread_count"] = notif_unread_count
 templates.env.globals["business_info"] = business_info
+templates.env.globals["min_margin_pct"] = min_margin_pct

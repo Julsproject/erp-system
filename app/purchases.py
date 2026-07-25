@@ -7,7 +7,7 @@ A receive-type purchase has a status lifecycle, same idea as Quotations:
   paid      -> payment was later settled with the supplier; no stock effect.
 A return has no staging — it removes stock immediately, same as before.
 """
-from datetime import date
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, Request, status as http_status
@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import models, pricing
+from . import audit, models, pricing
 from .database import get_db
 from .deps import get_current_user, is_admin
 from .products import _get_or_create_category, _get_or_create_unit_type
@@ -25,6 +25,19 @@ router = APIRouter()
 
 CENTS = Decimal("0.01")
 COST_DP = Decimal("0.0001")
+
+
+def _weighted_avg_cost(product: models.Product, base_qty: Decimal, unit_cost_per_base: Decimal) -> Decimal:
+    """Blend an incoming receipt into the product's cost, weighted by quantity
+    on hand right now. This IS the product's cost going forward — there's no
+    separate 'last cost' field, so every markup/margin price and the min-margin
+    warning move with the true blended cost, not just the latest invoice."""
+    old_qty = Decimal(str(product.total_qty or 0))
+    if old_qty <= 0 or base_qty <= 0:
+        return unit_cost_per_base.quantize(CENTS, rounding=ROUND_HALF_UP)
+    old_cost = Decimal(str(product.cost_price or 0))
+    blended = ((old_qty * old_cost) + (base_qty * unit_cost_per_base)) / (old_qty + base_qty)
+    return blended.quantize(CENTS, rounding=ROUND_HALF_UP)
 
 PAYMENT_METHODS = [("cash", "Cash"), ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque"), ("gcash", "GCash"), ("other", "Other")]
 STATUS_LABELS = {"pending": "Pending", "confirmed": "Confirmed", "paid": "Paid", "cancelled": "Cancelled"}
@@ -83,6 +96,24 @@ def preview_margin_alert(product: models.Product, quoted_cost: Decimal):
     return _margin_check(quoted_cost, product.selling_price)
 
 
+def _purchase_product_payload(p: models.Product) -> dict:
+    """Shape a product for the purchase form's picker (units by name+factor
+    only — a purchase line's cost is typed in, not chosen from a price)."""
+    base_unit = p.unit_type.name if p.unit_type else "Unit"
+    units = [{"name": base_unit, "factor": 1.0}]
+    for u in p.units:
+        units.append({"name": u.name, "factor": float(u.factor_to_base or 1)})
+    return {
+        "id": p.id,
+        "name": p.name,
+        "base_unit": base_unit,
+        "units": units,
+        "cost_price": float(p.cost_price or 0),
+        "selling_price": float(p.selling_price or 0),
+        "on_hand": float(p.total_qty or 0),
+    }
+
+
 @router.get("/purchases/search")
 def purchase_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Product lookup for the purchase form (includes current cost/selling price)."""
@@ -95,23 +126,21 @@ def purchase_search(q: str = "", db: Session = Depends(get_db), user=Depends(get
     if q:
         query = query.filter(models.Product.name.ilike(f"%{q}%"))
     products = query.order_by(models.Product.name).limit(30).all()
+    return {"products": [_purchase_product_payload(p) for p in products]}
 
-    out = []
-    for p in products:
-        base_unit = p.unit_type.name if p.unit_type else "Unit"
-        units = [{"name": base_unit, "factor": 1.0}]
-        for u in p.units:
-            units.append({"name": u.name, "factor": float(u.factor_to_base or 1)})
-        out.append({
-            "id": p.id,
-            "name": p.name,
-            "base_unit": base_unit,
-            "units": units,
-            "cost_price": float(p.cost_price or 0),
-            "selling_price": float(p.selling_price or 0),
-            "on_hand": float(p.total_qty or 0),
-        })
-    return {"products": out}
+
+@router.get("/purchases/product/{product_id:int}")
+def purchase_product(product_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """A single product's current units/cost — lets the pending-PO editor offer
+    unit switching on a line that predates opening the editor."""
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if not is_admin(user):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    p = db.get(models.Product, product_id)
+    if not p or not p.is_active:
+        return {"found": False}
+    return {"found": True, "product": _purchase_product_payload(p)}
 
 
 @router.get("/purchases", response_class=HTMLResponse)
@@ -171,6 +200,79 @@ def list_purchases(
          "status_filter": status_filter, "counts": counts, "labels": STATUS_LABELS,
          "q": q, "date_from": date_from, "date_to": date_to,
          "page": page, "pages": pages, "total": total},
+    )
+
+
+DUE_SOON_DAYS = 15   # same window as Receivables (sales.py) and Notifications
+
+
+@router.get("/purchases/payables", response_class=HTMLResponse)
+def list_payables(
+    request: Request,
+    q: str = "",
+    supplier_id: int = 0,
+    page: int = 1,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """What we owe suppliers: every confirmed-but-unpaid receiving, with aging.
+
+    A 'confirmed' receive-type purchase IS the payable — goods and cost
+    already moved, payment hasn't; 'pending' isn't owed yet (nothing
+    received), 'paid' no longer is. Mirrors Sales -> Receivables, except
+    there's no partial-settlement ledger here (a purchase is paid in full,
+    not collected against over time), so the outstanding amount is just the
+    purchase total.
+    """
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    q = (q or "").strip()
+    page = max(page, 1)
+    today = date.today()
+    horizon = today + timedelta(days=DUE_SOON_DAYS)
+
+    query = (
+        db.query(models.Purchase)
+        .filter(models.Purchase.txn_type == "receive", models.Purchase.status == "confirmed")
+    )
+    if supplier_id:
+        query = query.filter(models.Purchase.supplier_id == supplier_id)
+    if q:
+        like = f"%{q}%"
+        query = query.outerjoin(models.Supplier, models.Purchase.supplier_id == models.Supplier.id).filter(
+            or_(models.Purchase.ref_no.ilike(like), models.Purchase.invoice_no.ilike(like), models.Supplier.name.ilike(like))
+        )
+
+    total_count, total_owed = query.with_entities(
+        func.count(models.Purchase.id), func.coalesce(func.sum(models.Purchase.total), 0)
+    ).one()
+    pages = max((total_count + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+    page = min(page, pages)
+    rows = (
+        query.order_by(func.coalesce(models.Purchase.due_date, models.Purchase.confirmed_at).asc())
+        .offset((page - 1) * PAGE_SIZE)
+        .limit(PAGE_SIZE)
+        .all()
+    )
+
+    overdue_count = sum(1 for p in rows if p.due_date and p.due_date < today)
+    due_soon_count = sum(1 for p in rows if p.due_date and today <= p.due_date <= horizon)
+
+    suppliers = db.query(models.Supplier).order_by(models.Supplier.name).all()
+
+    return templates.TemplateResponse(
+        "purchases/payables.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "rows": rows, "today": today, "horizon": horizon,
+            "total_count": total_count, "total_owed": Decimal(str(total_owed or 0)),
+            "overdue_count": overdue_count, "due_soon_count": due_soon_count,
+            "q": q, "supplier_id": supplier_id, "suppliers": suppliers,
+            "page": page, "pages": pages,
+        },
     )
 
 
@@ -357,7 +459,7 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
         old_cost = Decimal(str(product.cost_price or 0))
         new_cost = old_cost
         if unit_cost > 0:
-            new_cost = (unit_cost / factor).quantize(CENTS, rounding=ROUND_HALF_UP)
+            new_cost = _weighted_avg_cost(product, base_qty, unit_cost / factor)
 
         if txn_type == "return":
             # Goods going back to the supplier: take them out of stock, leave cost alone.
@@ -390,6 +492,100 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
     return {"ok": True, "purchase_id": purchase.id, "ref_no": purchase.ref_no}
 
 
+def _apply_pending_lines(purchase: models.Purchase, db: Session, lines: list) -> bool:
+    """(Re)build a still-pending receive-type PO's line items.
+
+    Nothing here touches stock or a product's actual cost_price — that only
+    happens at confirm time (see confirm_purchase). old_cost/new_cost are just
+    a preview of what confirming would do, recomputed against each product's
+    cost right now. Returns True was applied, else quotes the same left
+    untouched."""
+    new_lines = []
+    total = Decimal("0")
+    for ln in lines:
+        product = db.get(models.Product, int(ln["product_id"])) if ln.get("product_id") else None
+        if not product:
+            continue
+        qty = _dec(ln.get("qty"))
+        if qty <= 0:
+            continue
+        factor = _dec(ln.get("factor"), "1")
+        if factor <= 0:
+            factor = Decimal("1")
+        unit_cost = _dec(ln.get("unit_cost"))
+        raw_total = ln.get("line_total")
+        line_total = _money(raw_total) if raw_total not in (None, "") else _money(qty * unit_cost)
+        total += line_total
+
+        base_qty = qty * factor
+        old_cost = Decimal(str(product.cost_price or 0))
+        new_cost = old_cost
+        if unit_cost > 0:
+            new_cost = _weighted_avg_cost(product, base_qty, unit_cost / factor)
+
+        new_lines.append(models.PurchaseLine(
+            product_id=product.id,
+            product_name=product.name,
+            unit_name=ln.get("unit_name"),
+            unit_factor=factor,
+            qty=qty,
+            unit_cost=_money(unit_cost),
+            line_total=line_total,
+            old_cost=old_cost.quantize(COST_DP),
+            new_cost=new_cost.quantize(COST_DP),
+        ))
+
+    if not new_lines:
+        return False
+
+    purchase.lines.clear()
+    purchase.lines.extend(new_lines)
+    purchase.total = _money(total)
+    return True
+
+
+@router.post("/purchases/{purchase_id:int}/update")
+async def update_purchase_items(
+    purchase_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)
+):
+    """Add/remove items on a Purchase Order that hasn't been received yet.
+
+    Once confirmed, stock and cost have already moved based on these exact
+    lines — the whole point of 'Confirmed' is that it reflects what actually
+    arrived, so items are locked at that point (raise a return instead).
+    """
+    if not user:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    if not is_admin(user):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+    purchase = db.get(models.Purchase, purchase_id)
+    if not purchase:
+        return JSONResponse({"ok": False, "error": "Purchase not found."}, status_code=404)
+    if purchase.txn_type != "receive" or purchase.status != "pending":
+        return JSONResponse({"ok": False, "error": "Only a pending Purchase Order can be edited."}, status_code=400)
+
+    data = await request.json()
+    lines = data.get("lines") or []
+    if not lines:
+        return JSONResponse(
+            {"ok": False, "error": "A Purchase Order needs at least one item — cancel it instead if none are wanted."},
+            status_code=400,
+        )
+
+    before_total, before_count = purchase.total, len(purchase.lines)
+    if not _apply_pending_lines(purchase, db, lines):
+        return JSONResponse({"ok": False, "error": "No valid items."}, status_code=400)
+
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="purchase",
+        entity_id=purchase.id, entity_label=purchase.ref_no,
+        summary=f"Edited items on {purchase.ref_no}: {before_count} → {len(purchase.lines)} line(s)",
+        changes={"total": [str(before_total), str(purchase.total)], "line_count": [before_count, len(purchase.lines)]},
+    )
+    db.commit()
+    return {"ok": True, "purchase_id": purchase.id}
+
+
 @router.post("/purchases/{purchase_id:int}/confirm")
 def confirm_purchase(purchase_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Mark a Purchase Order as physically received: add stock, update cost."""
@@ -408,21 +604,27 @@ def confirm_purchase(purchase_id: int, db: Session = Depends(get_db), user=Depen
         if not product:
             continue
         base_qty = (line.qty or Decimal("0")) * (line.unit_factor or Decimal("1"))
-        product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
-        db.add(models.StockMovement(product_id=product.id, qty_base=base_qty, reason="purchase"))
 
-        # Recompute against the product's cost right now (it may have moved
-        # since this PO was drafted), then apply it.
+        # Blend into the weighted-average cost BEFORE stock_qty moves — the
+        # blend needs the pre-receipt quantity on hand as its weight.
         old_cost = Decimal(str(product.cost_price or 0))
         new_cost = old_cost
         if line.unit_cost and line.unit_cost > 0 and line.unit_factor:
-            new_cost = (Decimal(str(line.unit_cost)) / Decimal(str(line.unit_factor))).quantize(CENTS, rounding=ROUND_HALF_UP)
+            unit_cost_per_base = Decimal(str(line.unit_cost)) / Decimal(str(line.unit_factor))
+            new_cost = _weighted_avg_cost(product, base_qty, unit_cost_per_base)
             product.cost_price = new_cost
         line.old_cost = old_cost.quantize(COST_DP)
         line.new_cost = new_cost.quantize(COST_DP)
 
+        product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
+        db.add(models.StockMovement(product_id=product.id, qty_base=base_qty, reason="purchase"))
+
     purchase.status = "confirmed"
     purchase.confirmed_at = func.now()
+    # This is the moment a payable actually exists — goods and cost just
+    # moved, payment hasn't. Due date follows the supplier's payment terms.
+    days = purchase.supplier.payment_days if purchase.supplier and purchase.supplier.payment_days is not None else 30
+    purchase.due_date = date.today() + timedelta(days=int(days))
     db.commit()
     return RedirectResponse(f"/purchases/{purchase_id}", status_code=http_status.HTTP_302_FOUND)
 
@@ -552,5 +754,6 @@ def view_purchase(
         "purchases/view.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "purchase": purchase, "rows": rows, "alerts": alerts, "methods": PAYMENT_METHODS,
-         "linked_returns": linked_returns, "error": error, "pending_pdc": pending_pdc},
+         "linked_returns": linked_returns, "error": error, "pending_pdc": pending_pdc,
+         "today": date.today()},
     )

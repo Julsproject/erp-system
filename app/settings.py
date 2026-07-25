@@ -59,10 +59,20 @@ async def save_settings(request: Request, db: Session = Depends(get_db), user=De
     if not (form.get("business_name") or "").strip():
         return _render(request, db, user, error="Business name can't be empty.")
 
+    raw_margin = (form.get("min_margin_pct") or "").strip()
+    if raw_margin:
+        try:
+            margin_val = float(raw_margin)
+        except ValueError:
+            return _render(request, db, user, error="Minimum margin must be a number, or left blank to disable.")
+        if margin_val < 0 or margin_val >= 100:
+            return _render(request, db, user, error="Minimum margin must be between 0 and 99.")
+
     before = settings_store.get_all(db)
     for key, _label, maxlen in FIELDS:
         value = (form.get(key) or "").strip()[:maxlen]
         settings_store.set_setting(db, key, value)
+    settings_store.set_setting(db, "min_margin_pct", raw_margin)
     db.flush()
     after = settings_store.get_all(db)
     changes = audit.diff(before, after)

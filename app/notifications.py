@@ -41,7 +41,7 @@ ZERO = Decimal("0")
 NO_INVOICE_WINDOW_DAYS = 30   # how long a no-invoice return stays in the Active list
 
 CATEGORY_LABELS = {
-    "stock": "Inventory", "pricing": "Pricing", "credit": "Credits",
+    "stock": "Inventory", "pricing": "Pricing", "credit": "Credits", "payable": "Payables",
     "cheque": "Cheques", "delivery": "Deliveries", "backup": "Backup", "pos": "Point of Sale",
 }
 
@@ -119,6 +119,34 @@ def _current_alerts(db: Session) -> dict:
             "link": "/products?alert=1",
         }
 
+    # ---- below the shop's minimum-margin target (softer than below-cost) --
+    # Only when the owner has actually set a target (see Settings). A product
+    # already flagged above (at/below cost) isn't flagged again here — that's
+    # the harder error; this is "profitable, but thinner than your standard."
+    min_margin = settings_store.min_margin_pct()
+    if min_margin is not None:
+        priced = (
+            db.query(models.Product)
+            .filter(
+                models.Product.is_active.is_(True),
+                models.Product.cost_price > 0,
+                models.Product.selling_price > models.Product.cost_price,
+            )
+            .all()
+        )
+        for p in priced:
+            price = Decimal(str(p.selling_price or 0))
+            cost = Decimal(str(p.cost_price or 0))
+            margin_pct = float((price - cost) / price * 100) if price > 0 else 0.0
+            if margin_pct < min_margin:
+                alerts[f"thin_margin:{p.id}"] = {
+                    "category": "pricing", "severity": "warning",
+                    "title": f"Below {min_margin:g}% margin target: {p.name}",
+                    "body": f"Selling {_peso(price)} on a {_peso(cost)} cost is only {margin_pct:.1f}% margin, "
+                            f"under your {min_margin:g}% target — still profitable, just thinner than your standard.",
+                    "link": f"/products/{p.id}/edit",
+                }
+
     # ---- credits (overdue + due soon) -----------------------------------
     settled_sub = (
         db.query(
@@ -159,6 +187,36 @@ def _current_alerts(db: Session) -> dict:
                 "title": f"Credit due soon: {who}",
                 "body": f"Invoice {sale.invoice_no} — {_peso(outstanding)} due in {days} day(s).",
                 "link": "/sales/receivables",
+            }
+
+    # ---- payables (overdue + due soon) ------------------------------------
+    # A 'confirmed' receive-type purchase IS the payable — goods/cost already
+    # moved, payment hasn't. Mirrors the credit alerts above.
+    payables = (
+        db.query(models.Purchase)
+        .filter(
+            models.Purchase.txn_type == "receive", models.Purchase.status == "confirmed",
+            models.Purchase.due_date.isnot(None),
+        )
+        .all()
+    )
+    for p in payables:
+        who = p.supplier.name if p.supplier else "a supplier"
+        if p.due_date < today:
+            days = (today - p.due_date).days
+            alerts[f"payable_overdue:{p.id}"] = {
+                "category": "payable", "severity": "danger",
+                "title": f"Overdue payable: {who}",
+                "body": f"{p.ref_no} — {_peso(p.total)} outstanding, {days} day(s) past due.",
+                "link": "/purchases/payables",
+            }
+        elif p.due_date <= horizon:
+            days = (p.due_date - today).days
+            alerts[f"payable_due:{p.id}"] = {
+                "category": "payable", "severity": "warning",
+                "title": f"Payable due soon: {who}",
+                "body": f"{p.ref_no} — {_peso(p.total)} due in {days} day(s).",
+                "link": "/purchases/payables",
             }
 
     # ---- cheques due / overdue ------------------------------------------

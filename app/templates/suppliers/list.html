@@ -12,6 +12,7 @@
 <div class="tabs">
   <a class="tab active" href="/suppliers">Suppliers</a>
   <a class="tab" href="/purchases">Purchase History</a>
+  <a class="tab" href="/purchases/payables">Payables</a>
 </div>
 
 <form class="toolbar" method="get" action="/suppliers">
@@ -25,7 +26,7 @@
     <thead>
       <tr>
         <th>Code</th><th>Supplier</th><th>Contact Person</th><th>Mobile</th>
-        <th>Terms</th><th>Status</th><th></th>
+        <th>Payment Due</th><th>Status</th><th></th>
       </tr>
     </thead>
     <tbody>
@@ -39,7 +40,9 @@
         </td>
         <td>{{ s.contact_person or '—' }}</td>
         <td>{{ s.mobile or '—' }}</td>
-        <td>{{ s.payment_terms or '—' }}</td>
+        <td>{{ 'COD' if s.payment_days == 0 else (s.payment_days ~ ' days' if s.payment_days is not none else '—') }}
+          {% if s.payment_terms %}<small class="muted" style="display:block;">{{ s.payment_terms }}</small>{% endif %}
+        </td>
         <td>
           {% if s.is_active %}
           <span class="txn" style="background:#dcfce7;color:#15803d;">Active</span>

@@ -44,13 +44,19 @@
     <input name="tin" value="{{ supplier.tin or '' if supplier else '' }}">
   </label>
 
-  <label>Payment Terms
+  <label>Payment Due (days)
+    <input name="payment_days" type="number" min="0" step="1"
+           value="{{ supplier.payment_days if supplier and supplier.payment_days is not none else 30 }}">
+    <small class="hint">How many days after a delivery is confirmed before payment is due. 0 = COD. Drives the Payables due-date/overdue tracking.</small>
+  </label>
+
+  <label>Payment Notes <span class="muted">(optional)</span>
     <input name="payment_terms" list="terms-list" value="{{ supplier.payment_terms or '' if supplier else '' }}"
-           placeholder="e.g. COD, 30 days">
+           placeholder="e.g. 50% DP, Consignment">
     <datalist id="terms-list">
       {% for t in terms %}<option value="{{ t }}">{% endfor %}
     </datalist>
-    <small class="hint">Type your own if it's not in the list.</small>
+    <small class="hint">Free-text detail that doesn't fit a day count — shown for reference only.</small>
   </label>
 
   <label>Status

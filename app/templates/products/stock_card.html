@@ -9,10 +9,21 @@
   <div class="head-actions">
     <a class="btn-secondary" href="/products">← Inventory</a>
     <a class="btn-secondary" href="/products/{{ product.id }}/edit">Edit product</a>
+    <a class="btn-secondary" href="/?track_product={{ product.id }}">📈 Cost &amp; price history</a>
   </div>
 </div>
 
 <div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ product.cost_price|peso }}</span><span>Cost now</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ product.selling_price|peso }}</span><span>Selling price now</span></div>
+  <div class="mini-stat {{ 'owed' if product.selling_price and product.cost_price and product.selling_price <= product.cost_price }}">
+    <span class="mini-num">
+      {% if product.selling_price and product.cost_price and product.selling_price > 0 %}
+      {{ '%.1f'|format((product.selling_price - product.cost_price) / product.selling_price * 100) }}%
+      {% else %}—{% endif %}
+    </span>
+    <span>Current margin</span>
+  </div>
   <div class="mini-stat"><span class="mini-num">{{ current_total|qty }}</span><span>On hand now</span></div>
   <div class="mini-stat"><span class="mini-num">{{ total_in|qty }}</span><span>Total in</span></div>
   <div class="mini-stat"><span class="mini-num">{{ total_out|qty }}</span><span>Total out</span></div>

@@ -29,6 +29,11 @@
     <strong>Confirmed — goods received.</strong> Stock was added and cost prices updated on
     {{ purchase.confirmed_at.strftime('%b %d, %Y %I:%M %p') if purchase.confirmed_at else '' }}.
     Mark it paid once you've settled with the supplier.
+    {% if purchase.due_date %}
+    <br>This is an outstanding <a href="/purchases/payables" style="color:inherit;font-weight:700;text-decoration:underline;">payable</a>,
+    due {{ purchase.due_date.strftime('%b %d, %Y') }}
+    {% if purchase.due_date < today %}<span class="txn" style="background:#fef2f2;color:#b91c1c;">overdue</span>{% endif %}.
+    {% endif %}
   </div>
   {% elif purchase.status == 'paid' %}
   <div class="quo-status-banner paid">
@@ -86,55 +91,197 @@
   </div>
 </div>
 
-<div class="table-wrap">
-  <table class="grid">
-    <thead>
-      <tr>
-        <th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Unit Cost</th>
-        <th class="num">Total</th><th>Cost / base unit</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in rows %}
-      {% set l = r.line %}
-      <tr>
-        <td class="strong">{{ l.product_name }}</td>
-        <td>{{ l.unit_name or '—' }}</td>
-        <td class="num">{{ l.qty|qty }}</td>
-        <td class="num">{{ l.unit_cost|peso }}</td>
-        <td class="num strong">{{ l.line_total|peso }}</td>
-        <td>
-          {% if purchase.txn_type == 'return' %}
-            <span class="muted">unchanged</span>
-          {% elif r.changed %}
-            <span class="muted">{{ l.old_cost|peso }}</span> →
-            <strong>{{ l.new_cost|peso }}</strong>
-            {% if purchase.status == 'pending' %}
-              <span class="txn" style="background:#e0f2fe;color:#0369a1;">preview</span>
-            {% elif r.increased %}
-              <span class="warn-tag">▲ +{{ r.diff|peso }}</span>
+<div id="poViewTable">
+  <div class="table-wrap">
+    <table class="grid">
+      <thead>
+        <tr>
+          <th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Unit Cost</th>
+          <th class="num">Total</th><th>Cost / base unit</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        {% set l = r.line %}
+        <tr>
+          <td class="strong">{{ l.product_name }}</td>
+          <td>{{ l.unit_name or '—' }}</td>
+          <td class="num">{{ l.qty|qty }}</td>
+          <td class="num">{{ l.unit_cost|peso }}</td>
+          <td class="num strong">{{ l.line_total|peso }}</td>
+          <td>
+            {% if purchase.txn_type == 'return' %}
+              <span class="muted">unchanged</span>
+            {% elif r.changed %}
+              <span class="muted">{{ l.old_cost|peso }}</span> →
+              <strong>{{ l.new_cost|peso }}</strong>
+              {% if purchase.status == 'pending' %}
+                <span class="txn" style="background:#e0f2fe;color:#0369a1;">preview</span>
+              {% elif r.increased %}
+                <span class="warn-tag">▲ +{{ r.diff|peso }}</span>
+              {% else %}
+                <span class="txn" style="background:#dcfce7;color:#15803d;">▼ {{ r.diff|peso }}</span>
+              {% endif %}
             {% else %}
-              <span class="txn" style="background:#dcfce7;color:#15803d;">▼ {{ r.diff|peso }}</span>
+              <span class="muted">{{ l.new_cost|peso }} (no change)</span>
             {% endif %}
-          {% else %}
-            <span class="muted">{{ l.new_cost|peso }} (no change)</span>
-          {% endif %}
-          {% if r.alert %}
-          <div class="cost-warn">⚠ {{ r.alert.message }}</div>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-    <tfoot>
-      <tr>
-        <td colspan="4" class="num strong">Total</td>
-        <td class="num strong">{{ purchase.total|peso }}</td>
-        <td></td>
-      </tr>
-    </tfoot>
-  </table>
+            {% if r.alert %}
+            <div class="cost-warn">⚠ {{ r.alert.message }}</div>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="4" class="num strong">Total</td>
+          <td class="num strong">{{ purchase.total|peso }}</td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% if purchase.txn_type == 'receive' and purchase.status == 'pending' %}
+  <button type="button" class="btn-link no-print" style="margin-top:12px;" onclick="poEditStart()">✎ Add more items or remove one</button>
+  {% endif %}
 </div>
+
+{% if purchase.txn_type == 'receive' and purchase.status == 'pending' %}
+<div id="poEditBox" class="no-print" style="display:none;margin-top:16px;">
+  <div class="table-wrap">
+    <table class="grid cart-table">
+      <thead><tr><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Unit Cost</th><th class="num">Total</th><th></th></tr></thead>
+      <tbody id="poEditBody"></tbody>
+    </table>
+  </div>
+  <input id="poEditSearch" class="search pos-search" type="search" placeholder="Search product to add…" autocomplete="off" style="margin-top:12px;">
+  <div id="poEditResults" class="pos-results" style="max-height:22vh;"></div>
+  <div class="totals-row grand" style="margin-top:12px;"><span>New total</span><span id="poEditTotal">₱0.00</span></div>
+  <div class="pos-actions" style="justify-content:flex-start;margin-top:14px;">
+    <button class="btn" id="poEditSaveBtn" onclick="poEditSave()" disabled>Save changes</button>
+    <button class="btn-secondary" onclick="poEditCancel()">Cancel</button>
+  </div>
+  <div id="poEditError" class="alert" style="display:none;margin-top:12px;"></div>
+</div>
+
+<script>
+  const PO_EDIT_ID = {{ purchase.id }};
+  // Seed from what's already on this PO. Kept lines have no `units` array
+  // (their unit is locked in as originally entered) until the editor fetches
+  // the product's current unit list, same idea as the quotation editor.
+  let poEditCart = [
+    {% for l in purchase.lines %}
+    { product_id: {{ l.product_id or 'null' }}, name: {{ l.product_name|tojson }}, unit_name: {{ l.unit_name|tojson }},
+      factor: {{ l.unit_factor }}, qty: {{ l.qty }}, unitCost: {{ l.unit_cost }}, units: null, unitIndex: 0 },
+    {% endfor %}
+  ];
+  let poEditTimer = null;
+  const poPeso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  function escapeHtmlPO(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+
+  async function poEditStart() {
+    document.getElementById('poViewTable').style.display = 'none';
+    document.getElementById('poEditBox').style.display = 'block';
+    await Promise.all(poEditCart.map(async (l) => {
+      if (!l.product_id || l.units) return;
+      try {
+        const res = await fetch('/purchases/product/' + l.product_id);
+        const data = await res.json();
+        if (!data.found) return;   // product archived since this PO was raised — leave it locked
+        l.units = data.product.units;
+        const idx = l.units.findIndex(u => u.name === l.unit_name);
+        l.unitIndex = idx >= 0 ? idx : 0;
+      } catch (e) { /* offline — leave line as-is */ }
+    }));
+    poEditRender();
+  }
+  function poEditCancel() { window.location.reload(); }
+
+  function poEditLineTotal(l) { return Math.max((Number(l.qty) || 0) * (Number(l.unitCost) || 0), 0); }
+  function poEditRender() {
+    const body = document.getElementById('poEditBody');
+    if (!poEditCart.length) { body.innerHTML = '<tr><td colspan="6" class="empty">No items — add at least one below, or cancel this PO instead.</td></tr>'; poEditRecompute(); return; }
+    body.innerHTML = '';
+    poEditCart.forEach((l, i) => {
+      const tr = document.createElement('tr');
+      const unitCell = l.units
+        ? '<select class="cart-unit" onchange="poEditSetUnit(' + i + ', this.value)">' +
+            l.units.map((u, ui) => '<option value="' + ui + '"' + (ui === l.unitIndex ? ' selected' : '') + '>' + escapeHtmlPO(u.name) + '</option>').join('') +
+          '</select>'
+        : escapeHtmlPO(l.unit_name || '');
+      tr.innerHTML =
+        '<td class="strong">' + escapeHtmlPO(l.name) + '</td>' +
+        '<td>' + unitCell + '</td>' +
+        '<td class="num"><input class="cart-qty" type="number" step="any" min="0" value="' + l.qty + '" oninput="poEditSetQty(' + i + ', this.value)"></td>' +
+        '<td class="num"><input class="cart-disc" type="number" step="any" min="0" value="' + l.unitCost + '" oninput="poEditSetCost(' + i + ', this.value)"></td>' +
+        '<td class="num strong">' + poPeso(poEditLineTotal(l)) + '</td>' +
+        '<td><button type="button" class="btn-link danger" onclick="poEditRemove(' + i + ')">✕</button></td>';
+      body.appendChild(tr);
+    });
+    poEditRecompute();
+  }
+  function poEditSetUnit(i, v) { poEditCart[i].unitIndex = parseInt(v); poEditCart[i].unit_name = poEditCart[i].units[poEditCart[i].unitIndex].name; poEditCart[i].factor = poEditCart[i].units[poEditCart[i].unitIndex].factor; poEditRender(); }
+  function poEditSetQty(i, v) { poEditCart[i].qty = parseFloat(v) || 0; poEditRender(); }
+  function poEditSetCost(i, v) { poEditCart[i].unitCost = parseFloat(v) || 0; poEditRender(); }
+  function poEditRemove(i) { poEditCart.splice(i, 1); poEditRender(); }
+  function poEditRecompute() {
+    let total = 0;
+    poEditCart.forEach(l => total += poEditLineTotal(l));
+    document.getElementById('poEditTotal').textContent = poPeso(total);
+    document.getElementById('poEditSaveBtn').disabled = poEditCart.length === 0;
+  }
+
+  document.getElementById('poEditSearch').addEventListener('input', () => {
+    clearTimeout(poEditTimer); poEditTimer = setTimeout(poEditSearch, 180);
+  });
+  async function poEditSearch() {
+    const q = document.getElementById('poEditSearch').value.trim();
+    const box = document.getElementById('poEditResults');
+    if (!q) { box.innerHTML = ''; return; }
+    const res = await fetch('/purchases/search?q=' + encodeURIComponent(q));
+    const data = await res.json();
+    const products = data.products || [];
+    if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
+    box.innerHTML = '';
+    products.forEach(p => {
+      const el = document.createElement('button');
+      el.type = 'button'; el.className = 'pos-item'; el.onclick = () => poEditAdd(p);
+      el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtmlPO(p.name) + '</span></div>' +
+        '<div class="pos-item-sub">cost ' + poPeso(p.cost_price) + ' / ' + escapeHtmlPO(p.base_unit) + '</div>';
+      box.appendChild(el);
+    });
+  }
+  function poEditAdd(p) {
+    poEditCart.push({ product_id: p.id, name: p.name, unit_name: p.units[0].name, factor: p.units[0].factor,
+                       qty: 1, unitCost: p.cost_price || 0, units: p.units, unitIndex: 0 });
+    poEditRender();
+    document.getElementById('poEditSearch').value = '';
+    document.getElementById('poEditResults').innerHTML = '<p class="pos-hint">' + escapeHtmlPO(p.name) + ' added — search again to add another.</p>';
+  }
+  async function poEditSave() {
+    if (!poEditCart.length) return;
+    const btn = document.getElementById('poEditSaveBtn'); btn.disabled = true; btn.textContent = 'Saving…';
+    const lines = poEditCart.map(l => ({
+      product_id: l.product_id, unit_name: l.unit_name, factor: l.factor,
+      qty: l.qty, unit_cost: l.unitCost, line_total: poEditLineTotal(l),
+    }));
+    try {
+      const res = await fetch('/purchases/' + PO_EDIT_ID + '/update', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lines: lines }),
+      });
+      const data = await res.json();
+      if (data.ok) { window.location.reload(); }
+      else {
+        const e = document.getElementById('poEditError'); e.textContent = data.error || 'Could not save changes.'; e.style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Save changes';
+      }
+    } catch (e) {
+      const err = document.getElementById('poEditError'); err.textContent = 'Network error. Please try again.'; err.style.display = 'block';
+      btn.disabled = false; btn.textContent = 'Save changes';
+    }
+  }
+</script>
+{% endif %}
 
 {% if purchase.txn_type == 'return' %}
 <p class="muted" style="margin-top:14px;">

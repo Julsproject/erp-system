@@ -5,6 +5,8 @@ Selling Price, Actual Beginning Stocks, Stocks Qty, Total Qty.
 """
 import csv
 import io
+import json
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 import openpyxl
@@ -389,6 +391,129 @@ def stock_card(product_id: int, request: Request, db: Session = Depends(get_db),
             "count": len(movements),
         },
     )
+
+
+@router.get("/products/{product_id:int}/history")
+def product_history(product_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Cost and selling-price over time, for the Dashboard's per-item tracking
+    chart. Built from two real sources, not a dedicated price-log table:
+
+      cost  — PurchaseLine.new_cost at each confirmed delivery (the actual
+              moment a product's cost changes), plus any manual cost_price
+              edit found in the Activity Log (a cost can also be corrected by
+              hand, not only by receiving stock).
+      price — the Activity Log's before/after on selling_price, since a price
+              only ever changes through an admin edit — there's no separate
+              event source for it the way purchases are for cost.
+
+    Both series end with today's live value as the last point, so the line
+    always reaches "now" even if the last recorded change was a while ago.
+    The Activity Log only goes back to when it was built, so a product's
+    history here effectively starts from then for anything not tied to a
+    purchase.
+    """
+    if not user:
+        return {"found": False}
+    if not is_admin(user):
+        return {"found": False}
+    product = db.get(models.Product, product_id)
+    if not product or not product.is_active:
+        return {"found": False}
+
+    today = date.today()
+    now = datetime.now()
+    # points[key] = {date, ts, value, label, old}. Keyed by a unique event id
+    # (not by date) so multiple changes on the same day each keep their own
+    # point instead of the later one overwriting the earlier one. `ts` (full
+    # timestamp) drives ordering and the chart's x-position so same-day points
+    # don't collapse onto each other; `date` is just the display label.
+    # `old` (when known — a purchase line's old_cost, or an audit diff's
+    # before-value) is what carried this series before this specific point,
+    # so a single recorded change can still be seeded with an earlier
+    # baseline instead of showing as a lone dot.
+    cost_points = {}
+    price_points = {}
+
+    # ---- cost: confirmed purchases -----------------------------------------
+    purchase_rows = (
+        db.query(models.PurchaseLine, models.Purchase)
+        .join(models.Purchase, models.PurchaseLine.purchase_id == models.Purchase.id)
+        .filter(
+            models.PurchaseLine.product_id == product_id,
+            models.Purchase.txn_type == "receive",
+            models.Purchase.status.in_(("confirmed", "paid")),
+            models.Purchase.confirmed_at.isnot(None),
+        )
+        .order_by(models.Purchase.confirmed_at)
+        .all()
+    )
+    for line, purchase in purchase_rows:
+        cost_points[f"purchase-{line.id}"] = {
+            "date": purchase.confirmed_at.date().isoformat(), "ts": purchase.confirmed_at.isoformat(),
+            "value": float(line.new_cost or 0), "label": f"Received via {purchase.ref_no}",
+            "old": float(line.old_cost or 0),
+        }
+
+    # ---- cost + price: manual edits, from the Activity Log ----------------
+    audit_rows = (
+        db.query(models.AuditLog)
+        .filter(models.AuditLog.entity_type == "product", models.AuditLog.entity_id == product_id,
+                models.AuditLog.action.in_(("create", "update")))
+        .order_by(models.AuditLog.created_at)
+        .all()
+    )
+    for row in audit_rows:
+        if not row.changes:
+            continue
+        try:
+            changes = json.loads(row.changes)
+        except ValueError:
+            continue
+        d = row.created_at.date().isoformat()
+        ts = row.created_at.isoformat()
+        if "cost_price" in changes:
+            try:
+                old, new = changes["cost_price"]
+                cost_points[f"audit-{row.id}-cost"] = {"date": d, "ts": ts, "value": float(new), "label": "Manual cost edit",
+                                                         "old": float(old) if old not in (None, "") else None}
+            except (TypeError, ValueError):
+                pass
+        if "selling_price" in changes:
+            try:
+                old, new = changes["selling_price"]
+                price_points[f"audit-{row.id}-price"] = {"date": d, "ts": ts, "value": float(new), "label": "Manual price edit",
+                                                           "old": float(old) if old not in (None, "") else None}
+            except (TypeError, ValueError):
+                pass
+
+    def _finalize(points: dict, current_value: float, current_label: str) -> list:
+        series = sorted(points.values(), key=lambda p: p["ts"])
+        # A single change is still real movement — seed a baseline at the
+        # product's creation date using that change's "before" value, so it
+        # draws as a slope ("was X since added, changed to Y on this date")
+        # instead of one disconnected dot. Only when that's actually earlier
+        # than anything already in the series.
+        if series and series[0].get("old") is not None and product.created_at:
+            if product.created_at < datetime.fromisoformat(series[0]["ts"]):
+                series.insert(0, {
+                    "date": product.created_at.date().isoformat(), "ts": product.created_at.isoformat(),
+                    "value": series[0]["old"], "label": "Since product was added",
+                })
+        today_iso = today.isoformat()
+        if not series or series[-1]["date"] != today_iso:
+            series.append({"date": today_iso, "ts": now.isoformat(), "value": current_value, "label": current_label})
+        return [{"date": p["date"], "ts": p["ts"], "value": p["value"], "label": p["label"]} for p in series]
+
+    cost_series = _finalize(cost_points, float(product.cost_price or 0), "Current cost")
+    price_series = _finalize(price_points, float(product.selling_price or 0), "Current price")
+
+    return {
+        "found": True,
+        "product": {"id": product.id, "name": product.name, "cost_price": float(product.cost_price or 0),
+                     "selling_price": float(product.selling_price or 0)},
+        "cost_series": cost_series,
+        "price_series": price_series,
+    }
 
 
 # --------------------------------------------------------------------------- #

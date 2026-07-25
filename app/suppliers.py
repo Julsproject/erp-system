@@ -65,6 +65,7 @@ async def quick_supplier(request: Request, db: Session = Depends(get_db), user=D
         contact_person=(data.get("contact_person") or "").strip() or None,
         mobile=(data.get("mobile") or "").strip() or None,
         payment_terms=(data.get("payment_terms") or "").strip() or None,
+        payment_days=30,   # sensible default; refine later via the full Suppliers form
         is_active=True,
     )
     db.add(supplier)
@@ -144,6 +145,11 @@ def _apply_form(supplier: models.Supplier, form):
     supplier.address = (form.get("address") or "").strip() or None
     supplier.tin = (form.get("tin") or "").strip() or None
     supplier.payment_terms = (form.get("payment_terms") or "").strip() or None
+    try:
+        days = int(form.get("payment_days") or 30)
+    except (TypeError, ValueError):
+        days = 30
+    supplier.payment_days = max(days, 0)
     supplier.is_active = (form.get("status") or "active") == "active"
 
 

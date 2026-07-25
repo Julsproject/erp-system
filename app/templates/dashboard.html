@@ -116,6 +116,14 @@
       {{ due_soon|length }} due within {{ 15 }} days
     </span>
   </div>
+  <div class="kpi {{ 'kpi-warn' if payables_total > 0 }}">
+    <span class="kpi-label">Outstanding Payables</span>
+    <span class="kpi-value">{{ payables_total|peso }}</span>
+    <span class="kpi-sub">
+      {% if payables_overdue %}<strong class="danger-text">{{ payables_overdue }} overdue</strong>{% else %}What we owe suppliers{% endif %}
+      · <a href="/purchases/payables">View →</a>
+    </span>
+  </div>
 </div>
 
 <!-- ============ CHARTS ============ -->
@@ -174,6 +182,27 @@
     {% endif %}
   </section>
 </div>
+
+<!-- ============ PER-ITEM COST & PRICE TRACKING ============ -->
+<section class="card chart-card" style="margin-bottom:18px;">
+  <h3 class="card-title">Cost &amp; Price Tracking</h3>
+  <p class="muted" style="margin:-8px 0 14px;font-size:13px;">
+    Pick a product to see how its cost and selling price have moved over time — catches cost creeping up
+    without the price following.
+  </p>
+  <input id="trackSearch" class="search pos-search" type="search" placeholder="Search a product to track…" autocomplete="off" style="max-width:420px;">
+  <div id="trackResults" class="pos-results" style="max-height:22vh;"></div>
+  <div id="trackChartBox" style="display:none;margin-top:16px;">
+    <div class="track-head">
+      <h4 id="trackProductName" style="margin:0;font-size:15px;"></h4>
+      <div class="track-legend">
+        <span class="track-dot cost"></span> Cost <span class="track-dot price"></span> Selling price
+      </div>
+    </div>
+    <div id="trackChartSvg"></div>
+    <p class="muted" id="trackNote" style="font-size:12px;margin-top:8px;"></p>
+  </div>
+</section>
 
 <!-- ============ NEEDS ATTENTION ============ -->
 <section class="card attention">
@@ -361,4 +390,120 @@
     {% else %}<p class="pos-hint">No transactions yet.</p>{% endif %}
   </section>
 </div>
+
+<script>
+  /* ===== Cost & Price Tracking ===== */
+  let trackTimer = null;
+  const trackPeso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  function trackEscape(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+
+  document.getElementById('trackSearch').addEventListener('input', () => {
+    clearTimeout(trackTimer); trackTimer = setTimeout(trackRunSearch, 180);
+  });
+  async function trackRunSearch() {
+    const q = document.getElementById('trackSearch').value.trim();
+    const box = document.getElementById('trackResults');
+    if (!q) { box.innerHTML = ''; return; }
+    const res = await fetch('/pos/search?q=' + encodeURIComponent(q));
+    const data = await res.json();
+    const products = data.products || [];
+    if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
+    box.innerHTML = '';
+    products.forEach(p => {
+      const el = document.createElement('button');
+      el.type = 'button'; el.className = 'pos-item'; el.onclick = () => trackLoad(p.id, p.name);
+      el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + trackEscape(p.name) + '</span></div>' +
+        '<div class="pos-item-sub">sells ' + trackPeso(p.units[0].price) + ' / ' + trackEscape(p.base_unit) + '</div>';
+      box.appendChild(el);
+    });
+  }
+
+  async function trackLoad(id, name) {
+    document.getElementById('trackResults').innerHTML = '';
+    document.getElementById('trackSearch').value = name;
+    const res = await fetch('/products/' + id + '/history');
+    const data = await res.json();
+    if (!data.found) { document.getElementById('trackChartBox').style.display = 'none'; return; }
+    document.getElementById('trackChartBox').style.display = 'block';
+    document.getElementById('trackProductName').textContent = data.product.name;
+    trackRenderChart(data.cost_series, data.price_series);
+
+    const totalPoints = data.cost_series.length + data.price_series.length;
+    const note = document.getElementById('trackNote');
+    if (totalPoints <= 2) {
+      note.textContent = 'Not much history yet — points appear here as this product\'s cost or price changes (from receiving stock or editing it), so the trend builds up over time.';
+    } else {
+      note.textContent = 'Cost points come from confirmed deliveries and manual edits; price points come from the Activity Log — both end at today\'s live value.';
+    }
+  }
+
+  function trackRenderChart(costSeries, priceSeries) {
+    // Position by full timestamp (not just day) so multiple changes on the
+    // same day each get their own x slot instead of overlapping.
+    const allTs = Array.from(new Set(costSeries.map(p => p.ts).concat(priceSeries.map(p => p.ts)))).sort();
+    const allValues = costSeries.concat(priceSeries).map(p => p.value);
+    const minV = Math.min.apply(null, allValues.concat([0]));
+    const maxV = Math.max.apply(null, allValues.concat([1])) * 1.15;
+    const W = 760, H = 240, padL = 64, padR = 16, padT = 16, padB = 34;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+
+    function xFor(ts) {
+      const idx = allTs.indexOf(ts);
+      return padL + (allTs.length <= 1 ? plotW / 2 : (idx / (allTs.length - 1)) * plotW);
+    }
+    function yFor(v) {
+      const range = (maxV - minV) || 1;
+      return padT + plotH - ((v - minV) / range) * plotH;
+    }
+    function pathFor(series) {
+      return series.map((p, i) => (i === 0 ? 'M' : 'L') + xFor(p.ts).toFixed(1) + ',' + yFor(p.value).toFixed(1)).join(' ');
+    }
+    function dotsFor(series, cls) {
+      return series.map(p =>
+        '<circle class="track-pt ' + cls + '" cx="' + xFor(p.ts).toFixed(1) + '" cy="' + yFor(p.value).toFixed(1) + '" r="4">' +
+        '<title>' + trackEscape(p.label) + ' — ' + p.date + ' — ' + trackPeso(p.value) + '</title></circle>'
+      ).join('');
+    }
+
+    // Y-axis gridlines (4 bands) with peso labels.
+    let grid = '';
+    for (let i = 0; i <= 4; i++) {
+      const v = minV + (maxV - minV) * (i / 4);
+      const y = yFor(v);
+      grid += '<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + y.toFixed(1) + '" class="track-grid"/>';
+      grid += '<text x="' + (padL - 8) + '" y="' + (y + 4).toFixed(1) + '" class="track-axis-label" text-anchor="end">' + trackPeso(v) + '</text>';
+    }
+    // X-axis: first and last date only, to avoid crowding.
+    const allPoints = costSeries.concat(priceSeries);
+    let xLabels = '';
+    if (allTs.length) {
+      const firstDate = (allPoints.find(p => p.ts === allTs[0]) || {}).date || '';
+      xLabels += '<text x="' + padL + '" y="' + (H - 8) + '" class="track-axis-label">' + firstDate + '</text>';
+      if (allTs.length > 1) {
+        const lastDate = (allPoints.find(p => p.ts === allTs[allTs.length - 1]) || {}).date || '';
+        xLabels += '<text x="' + (W - padR) + '" y="' + (H - 8) + '" class="track-axis-label" text-anchor="end">' + lastDate + '</text>';
+      }
+    }
+
+    const svg =
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" class="track-svg" role="img" aria-label="Cost and price over time">' +
+        grid + xLabels +
+        '<path d="' + pathFor(costSeries) + '" class="track-line cost"/>' +
+        '<path d="' + pathFor(priceSeries) + '" class="track-line price"/>' +
+        dotsFor(costSeries, 'cost') + dotsFor(priceSeries, 'price') +
+      '</svg>';
+    document.getElementById('trackChartSvg').innerHTML = svg;
+  }
+
+  // Arriving from a product's Stock Card via "Cost & price history" — auto-load it.
+  (function () {
+    const params = new URLSearchParams(window.location.search);
+    const pid = params.get('track_product');
+    if (pid) {
+      fetch('/products/' + pid + '/history').then(r => r.json()).then(d => {
+        if (d.found) trackLoad(d.product.id, d.product.name);
+      });
+    }
+  })();
+</script>
 {% endblock %}

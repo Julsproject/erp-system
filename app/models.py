@@ -380,7 +380,11 @@ class Supplier(Base):
     email = Column(String(120))
     address = Column(String(255))
     tin = Column(String(30))
-    payment_terms = Column(String(60))     # e.g. COD, 30 days, 50% DP
+    payment_terms = Column(String(60))     # free-text note, e.g. "50% DP" — not used for date math
+    # Structured terms, same idea as Customer.credit_days: how many days after
+    # a delivery is confirmed before it's due for payment. Drives Payables
+    # aging (due-soon/overdue), which free text can't be computed from.
+    payment_days = Column(Integer, nullable=False, server_default="30")
     is_active = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -412,6 +416,13 @@ class Purchase(Base):
     payment_method = Column(String(20), nullable=True)   # cash | bank_transfer | cheque | gcash | other
     paid_at = Column(DateTime(timezone=True), nullable=True)
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
+
+    # When this becomes payable — set once, at confirm time, to
+    # confirmed_at + the supplier's payment_days (same idea as a Sale's
+    # due_date). A 'confirmed' receive-type purchase IS the payable: goods
+    # and cost already moved, payment hasn't. Never set for pending (nothing
+    # owed yet) or return (no payment involved).
+    due_date = Column(Date, nullable=True)
 
     # For a return: which delivery it's being sent back from.
     original_purchase_id = Column(Integer, ForeignKey("purchases.id"), nullable=True)

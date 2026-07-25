@@ -37,6 +37,17 @@
       <input type="text" name="receipt_footer" value="{{ values.receipt_footer }}" maxlength="255"
              placeholder="Thank you for your purchase!">
     </label>
+
+    <label class="full">Minimum margin warning (%) <span class="muted">(optional)</span>
+      <input type="number" name="min_margin_pct" value="{{ values.min_margin_pct }}" min="0" max="99" step="0.1"
+             placeholder="e.g. 30 — leave blank to disable" style="max-width:220px;">
+      <span class="hint">
+        A product priced below this margin gets flagged in Notifications — even if it's still profitable, just
+        under your own standard. Separate from the always-on "selling at or below cost" warning, which fires
+        regardless of this setting.
+      </span>
+    </label>
+
     <div class="form-actions full">
       <button class="btn" type="submit">Save changes</button>
     </div>
