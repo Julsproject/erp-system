@@ -590,6 +590,7 @@ def pos_receipt(
     from_: str = Query("", alias="from"),
     cust: int = 0,
     quote: int = 0,
+    thermal: int = 0,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -622,6 +623,6 @@ def pos_receipt(
     return templates.TemplateResponse(
         "receipt.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "sale": sale, "from": from_, "cust": cust, "quote": quote,
+         "sale": sale, "from": from_, "cust": cust, "quote": quote, "thermal": thermal,
          "linked": linked, "original": original, "credit_outstanding": credit_outstanding},
     )

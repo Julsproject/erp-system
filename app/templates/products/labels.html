@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Barcode Labels · {{ app_name }}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin:0; background:#eef1f5; font-family:"Segoe UI",system-ui,sans-serif; color:#0f172a; }
+    .toolbar { max-width:900px; margin:20px auto; display:flex; justify-content:space-between; align-items:center; padding:0 10px; }
+    .toolbar a, .toolbar button { padding:10px 18px; border-radius:10px; border:none; cursor:pointer; font-size:14px; font-weight:600; text-decoration:none; }
+    .toolbar a { background:#fff; color:#334155; border:1px solid #e2e8f0; }
+    .toolbar button { background:#4f46e5; color:#fff; }
+    .sheet { max-width:900px; margin:0 auto 40px; background:#fff; padding:16px; border-radius:12px; border:1px solid #e2e8f0; }
+    .label-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
+    .label {
+      border:1px dashed #cbd5e1; border-radius:6px; padding:8px 10px;
+      display:flex; flex-direction:column; align-items:center; text-align:center;
+      min-height:110px; justify-content:center;
+    }
+    .label .biz { font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:.04em; }
+    .label .name { font-size:12px; font-weight:700; margin-top:2px; line-height:1.25; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .label .price { font-size:14px; font-weight:800; color:#1d4ed8; margin-top:2px; }
+    .label img { width:100%; max-width:160px; height:36px; margin-top:5px; }
+    .label .code { font-size:10px; letter-spacing:.06em; color:#334155; margin-top:1px; }
+    @media print {
+      body { background:#fff; }
+      .toolbar { display:none; }
+      .sheet { border:none; padding:0; margin:0; max-width:none; }
+      .label { border:1px solid #000; break-inside:avoid; }
+      @page { margin:8mm; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <a href="/products">← Back to inventory</a>
+    <button onclick="window.print()">🖨 Print labels</button>
+  </div>
+  <div class="sheet">
+    {% set biz = business_info() %}
+    <div class="label-grid">
+      {% for l in labels %}
+      <div class="label">
+        <div class="biz">{{ biz.business_name or app_name }}</div>
+        <div class="name">{{ l.product.name }}</div>
+        <div class="price">{{ l.product.selling_price|peso if l.product.selling_price else '' }}</div>
+        <img src="{{ l.barcode_uri }}" alt="barcode">
+        <div class="code">{{ l.product.barcode }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</body>
+</html>

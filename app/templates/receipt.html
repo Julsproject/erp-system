@@ -5,15 +5,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Receipt {{ sale.invoice_no }} · {{ app_name }}</title>
   <style>
-    :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; }
+    :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --logo-blue:#4a90d9; --logo-gray:#5b6472; }
     * { box-sizing: border-box; }
     body { margin:0; background:#eef1f5; font-family:"Segoe UI",system-ui,sans-serif; color:var(--ink); }
-    .sheet { max-width:420px; margin:28px auto; background:#fff; border:1px solid var(--line); border-radius:12px; padding:26px 28px; box-shadow:0 6px 24px rgba(15,23,42,.08); }
-    .r-head { text-align:center; border-bottom:1px dashed var(--line); padding-bottom:14px; margin-bottom:14px; }
-    .r-store { font-size:18px; font-weight:800; letter-spacing:-.01em; }
+    .sheet { max-width:460px; margin:28px auto; background:#fff; border:1px solid var(--line); border-radius:12px; padding:26px 28px; box-shadow:0 6px 24px rgba(15,23,42,.08); }
+
+    /* ---- Header: full/A4 layout — invoice details left, business right ---- */
+    .r-head-2col { display:flex; justify-content:space-between; align-items:flex-start; gap:16px;
+                   border-bottom:2px solid var(--ink); padding-bottom:14px; margin-bottom:14px; }
+    .r-head-left { text-align:left; }
+    .r-head-right { text-align:right; }
+    .r-doc-type { font-size:15px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; margin-bottom:6px; }
+    .r-meta-line { font-size:12px; color:var(--muted); margin-top:2px; }
+    .r-meta-line b { color:var(--ink); font-weight:600; }
+    .r-biz-row { display:flex; align-items:center; justify-content:flex-end; gap:8px; }
+    .r-logo { width:30px; height:30px; flex:none; }
+    .r-store { font-size:17px; font-weight:800; letter-spacing:-.01em; }
+
+    /* ---- Header: thermal layout — centered, stacked ---- */
+    .r-head-thermal { text-align:center; border-bottom:1px dashed var(--line); padding-bottom:10px; margin-bottom:10px; }
+    .r-head-thermal .r-store { font-size:15px; }
+    .r-head-thermal .r-doc-type { margin-top:6px; font-size:12px; }
+    .r-head-thermal .r-meta-line { text-align:center; }
+
     .r-sub { color:var(--muted); font-size:12px; margin-top:2px; }
-    .r-meta { font-size:12.5px; color:var(--muted); display:flex; justify-content:space-between; flex-wrap:wrap; gap:4px; margin-bottom:12px; }
-    .r-meta b { color:var(--ink); font-weight:600; }
+    .r-billto { font-size:12.5px; color:var(--muted); margin-bottom:12px; }
+    .r-billto b { color:var(--ink); font-weight:600; }
     table { width:100%; border-collapse:collapse; font-size:13px; }
     th { text-align:left; color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.04em; padding:6px 0; border-bottom:1px solid var(--line); }
     td { padding:7px 0; vertical-align:top; }
@@ -32,37 +49,73 @@
     .r-link.exchange { background:#eff6ff; border:1px solid #bfdbfe; color:#1d4ed8; }
     .r-link a { color:inherit; font-weight:700; text-decoration:underline; }
     .r-link + .r-link { margin-top:-6px; }
-    .actions { max-width:420px; margin:0 auto 40px; display:flex; gap:10px; justify-content:center; }
+    .actions { max-width:460px; margin:0 auto 40px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
     .btn { padding:10px 18px; border-radius:10px; border:none; cursor:pointer; font-size:14px; font-weight:600; text-decoration:none; }
     .btn.print { background:#4f46e5; color:#fff; }
     .btn.back { background:#fff; color:#334155; border:1px solid var(--line); }
+
+    {% if thermal %}
+    /* Narrow single-column layout sized for a 58/80mm thermal printer. */
+    .sheet { max-width:302px; margin:14px auto; padding:12px 10px; border-radius:0; box-shadow:none; font-size:12px; }
+    table { font-size:11.5px; }
+    .r-tot .grand { font-size:15px; }
+    @media print {
+      body { background:#fff; }
+      .sheet { box-shadow:none; border:none; margin:0; max-width:none; padding:0; }
+      .actions { display:none; }
+      @page { size:80mm auto; margin:2mm; }
+    }
+    {% else %}
     @media print {
       body { background:#fff; }
       .sheet { box-shadow:none; border:none; margin:0; max-width:none; }
       .actions { display:none; }
       @page { margin:8mm; }
     }
+    {% endif %}
   </style>
 </head>
 <body>
   <div class="sheet">
     {% set biz = business_info() %}
-    <div class="r-head">
+    {% set doc_label = 'Refund Slip' if sale.txn_type == 'refund' else ('Exchange Slip' if sale.txn_type == 'exchange' else 'Sales Invoice') %}
+
+    {% if thermal %}
+    <div class="r-head-thermal">
       <div class="r-store">{{ biz.business_name or app_name }}</div>
       {% if biz.receipt_address %}<div class="r-sub">{{ biz.receipt_address }}</div>{% endif %}
       {% if biz.receipt_contact %}<div class="r-sub">{{ biz.receipt_contact }}</div>{% endif %}
       {% if biz.receipt_tin %}<div class="r-sub">TIN: {{ biz.receipt_tin }}</div>{% endif %}
-      <div class="r-sub" style="margin-top:6px;font-weight:600;color:var(--ink);">{{ 'Refund Slip' if sale.txn_type == 'refund' else ('Exchange Slip' if sale.txn_type == 'exchange' else 'Sales Invoice') }}</div>
+      <div class="r-doc-type">{{ doc_label }}</div>
+      <div class="r-meta-line">Invoice: <b>{{ sale.invoice_no }}</b></div>
+      <div class="r-meta-line">{{ sale.created_at.strftime('%b %d, %Y %I:%M %p') if sale.created_at else '' }}</div>
+      <div class="r-meta-line">Cashier: <b>{{ sale.cashier.full_name or sale.cashier.username if sale.cashier else '—' }}</b></div>
     </div>
+    {% else %}
+    <div class="r-head-2col">
+      <div class="r-head-left">
+        <div class="r-doc-type">{{ doc_label }}</div>
+        <div class="r-meta-line">Invoice #: <b>{{ sale.invoice_no }}</b></div>
+        <div class="r-meta-line">Date: <b>{{ sale.created_at.strftime('%b %d, %Y %I:%M %p') if sale.created_at else '' }}</b></div>
+        <div class="r-meta-line">Cashier: <b>{{ sale.cashier.full_name or sale.cashier.username if sale.cashier else '—' }}</b></div>
+      </div>
+      <div class="r-head-right">
+        <div class="r-biz-row">
+          <svg class="r-logo" viewBox="0 0 64 64" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8,34 L32,10 L56,34 M8,34 L8,54 M56,34 L56,46" stroke="var(--logo-blue)" stroke-width="5"/>
+            <path d="M20,27 L44,27 M44,54 L56,54" stroke="var(--logo-gray)" stroke-width="5"/>
+            <path d="M32,27 L32,50" stroke="var(--logo-gray)" stroke-width="6"/>
+          </svg>
+          <div class="r-store">{{ biz.business_name or app_name }}</div>
+        </div>
+        {% if biz.receipt_address %}<div class="r-sub">{{ biz.receipt_address }}</div>{% endif %}
+        {% if biz.receipt_contact %}<div class="r-sub">{{ biz.receipt_contact }}</div>{% endif %}
+        {% if biz.receipt_tin %}<div class="r-sub">TIN: {{ biz.receipt_tin }}</div>{% endif %}
+      </div>
+    </div>
+    {% endif %}
 
-    <div class="r-meta">
-      <span>Invoice: <b>{{ sale.invoice_no }}</b></span>
-      <span>{{ sale.created_at.strftime('%b %d, %Y %I:%M %p') if sale.created_at else '' }}</span>
-    </div>
-    <div class="r-meta">
-      <span>Customer: <b>{{ sale.customer_name or 'Walk-in' }}</b></span>
-      <span>Cashier: <b>{{ sale.cashier.full_name or sale.cashier.username if sale.cashier else '—' }}</b></span>
-    </div>
+    <div class="r-billto">Customer: <b>{{ sale.customer_name or 'Walk-in' }}</b></div>
 
     {% if original %}
     <div class="r-link {{ 'refund' if sale.txn_type == 'refund' else 'exchange' }}">
@@ -146,6 +199,11 @@
     {% endif %}
     {% if sale.txn_type == 'sale' %}
     <a class="btn back" href="/deliveries/new?sale_id={{ sale.id }}">📦 Schedule Delivery</a>
+    {% endif %}
+    {% if thermal %}
+    <a class="btn back" href="/pos/receipt/{{ sale.id }}?from={{ from }}&cust={{ cust }}&quote={{ quote }}">🧾 Full-page view</a>
+    {% else %}
+    <a class="btn back" href="/pos/receipt/{{ sale.id }}?from={{ from }}&cust={{ cust }}&quote={{ quote }}&thermal=1">🧾 Thermal receipt</a>
     {% endif %}
     <button class="btn print" onclick="window.print()">🖨 Print</button>
   </div>

@@ -466,6 +466,45 @@ class StockMovement(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class StockCount(Base):
+    """A physical inventory / cycle count session: scan items on the shelf,
+    the system compares against what it thinks is on hand, and Complete
+    applies the difference as a stock correction. Delta-based (not an
+    absolute overwrite), so it stays correct even if sales happen elsewhere
+    on the system while the count is in progress."""
+    __tablename__ = "stock_counts"
+
+    id = Column(Integer, primary_key=True)
+    ref_no = Column(String(20), unique=True)
+    status = Column(String(20), nullable=False, server_default="open")  # open | completed | cancelled
+    notes = Column(String(255))
+    created_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    completed_by = Column(Integer, ForeignKey("users.id"))
+    completed_at = Column(DateTime(timezone=True))
+
+    lines = relationship("StockCountLine", back_populates="stock_count", cascade="all, delete-orphan")
+
+
+class StockCountLine(Base):
+    __tablename__ = "stock_count_lines"
+
+    id = Column(Integer, primary_key=True)
+    stock_count_id = Column(Integer, ForeignKey("stock_counts.id"), nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    product_name = Column(String(150), nullable=False)
+    # Snapshotted the moment this product was first scanned into the count —
+    # what the system said was on hand at that instant. The eventual
+    # adjustment is (counted - system_qty), applied as a delta, not as an
+    # overwrite of whatever stock_qty happens to be at Complete time.
+    system_qty = Column(Numeric(14, 3), nullable=False)
+    counted_qty = Column(Numeric(14, 3), nullable=False, server_default="0")
+    first_scanned_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    stock_count = relationship("StockCount", back_populates="lines")
+    product = relationship("Product")
+
+
 class ExpenseCategory(Base):
     """Create-your-own, same idea as Category/UnitType on Products."""
     __tablename__ = "expense_categories"

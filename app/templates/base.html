@@ -87,6 +87,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 9h13v8H3z"/><path d="M16 12h3.5l1.5 3v2h-5"/><circle cx="7" cy="18" r="1.6"/><circle cx="17.5" cy="18" r="1.6"/></svg>
         <span>Suppliers</span>
       </a>
+      <a class="nav-item {{ 'active' if path.startswith('/stock-count') }}" href="/stock-count">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        <span>Stock Count</span>
+      </a>
       <details class="nav-group" {{ 'open' if finance_active }}>
         <summary class="nav-item nav-group-summary {{ 'active' if finance_active }}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 21h18M4 21V10M20 21V10M2 10l10-6 10 6M8 21v-6M16 21v-6"/></svg>

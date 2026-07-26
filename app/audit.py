@@ -31,7 +31,7 @@ ACTION_LABELS = {
     "create": "Created", "update": "Edited", "archive": "Archived",
     "void": "Voided", "cancel": "Cancelled", "confirm": "Confirmed",
     "pay": "Marked paid", "dispatch": "Dispatched", "complete": "Completed",
-    "adjust_stock": "Stock adjusted", "convert": "Converted",
+    "adjust_stock": "Stock adjusted", "stock_count": "Stock count correction", "convert": "Converted",
     "login": "Signed in", "login_failed": "Failed sign-in", "logout": "Signed out",
     "password_change": "Password changed", "settings_change": "Settings changed",
 }

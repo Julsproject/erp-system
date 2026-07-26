@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}{{ count.ref_no }} · Stock Count · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{{ count.ref_no }}
+      {% if count.status == 'open' %}<span class="txn" style="background:#eff6ff;color:#1d4ed8;">open</span>
+      {% elif count.status == 'completed' %}<span class="txn" style="background:#f0fdf4;color:#15803d;">completed</span>
+      {% else %}<span class="txn" style="background:#f1f5f9;color:#64748b;">cancelled</span>{% endif %}
+    </h1>
+    <p class="muted">
+      Started {{ count.created_at.strftime('%b %d, %Y %I:%M %p') if count.created_at else '' }}
+      {% if count.completed_at %} · {{ 'Completed' if count.status == 'completed' else 'Cancelled' }} {{ count.completed_at.strftime('%b %d, %Y %I:%M %p') }}{% endif %}
+    </p>
+  </div>
+  <a class="btn-link" href="/stock-count">← Back to Stock Count</a>
+</div>
+
+{% if count.status == 'open' %}
+<section class="card pos-search-panel" style="margin-bottom:18px;">
+  <input id="scanBox" class="search pos-search" type="search" placeholder="Scan a barcode, or type a product name…" autofocus autocomplete="off">
+  <div id="scanChoices" class="pos-results" style="display:none;"></div>
+  <p class="muted" id="scanMsg" style="font-size:12.5px;margin:8px 0 0;"></p>
+</section>
+{% endif %}
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num" id="statLines">{{ lines|length }}</span><span>Products counted</span></div>
+  <div class="mini-stat" id="statVarianceBox"><span class="mini-num" id="statVariance">{{ variance_count }}</span><span>With a variance</span></div>
+</div>
+
+<div class="table-wrap">
+  <table class="grid" id="linesTable">
+    <thead>
+      <tr><th>Product</th><th class="num">System Qty</th><th class="num">Counted</th><th class="num">Variance</th></tr>
+    </thead>
+    <tbody>
+      {% for l in lines %}
+      {% set variance = l.counted_qty - l.system_qty %}
+      <tr data-line-id="{{ l.id }}">
+        <td class="strong">{{ l.product_name }}</td>
+        <td class="num">{{ l.system_qty|qty }}</td>
+        <td class="num">
+          {% if count.status == 'open' %}
+          <input type="number" step="0.001" min="0" class="countedInput" data-line-id="{{ l.id }}"
+                 value="{{ l.counted_qty }}" style="width:90px;text-align:right;" onchange="setCounted(this)">
+          {% else %}{{ l.counted_qty|qty }}{% endif %}
+        </td>
+        <td class="num {{ 'owed' if variance != 0 }}">{{ '+' if variance > 0 }}{{ variance|qty }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">Nothing scanned yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if count.status == 'open' %}
+<div class="head-actions" style="margin-top:18px;">
+  <form method="post" action="/stock-count/{{ count.id }}/cancel" onsubmit="return confirm('Cancel this count? Nothing counted so far will be applied.');" style="display:inline;">
+    <button class="btn-secondary" type="submit">Cancel count</button>
+  </form>
+  <form method="post" action="/stock-count/{{ count.id }}/complete"
+        onsubmit="return confirm('Complete this count? Every product with a variance will have its stock corrected to match what was counted. This cannot be undone in bulk.');" style="display:inline;">
+    <button class="btn" type="submit">✓ Complete count &amp; apply corrections</button>
+  </form>
+</div>
+{% elif count.status == 'completed' %}
+<p class="muted" style="margin-top:14px;">Every row with a variance above was applied as a stock correction, logged in the
+  <a href="/audit">Activity Log</a> and each product's Stock Card.</p>
+{% endif %}
+
+{% if count.status == 'open' %}
+<script>
+const countId = {{ count.id }};
+const scanBox = document.getElementById('scanBox');
+const scanChoices = document.getElementById('scanChoices');
+const scanMsg = document.getElementById('scanMsg');
+
+function fmtQty(v) {
+  return (Math.round(v * 1000) / 1000).toString();
+}
+
+function upsertRow(line) {
+  const tbody = document.querySelector('#linesTable tbody');
+  const empty = tbody.querySelector('.empty');
+  if (empty) empty.closest('tr').remove();
+  let row = tbody.querySelector('tr[data-line-id="' + line.id + '"]');
+  const variance = line.counted_qty - line.system_qty;
+  const varClass = variance !== 0 ? 'owed' : '';
+  const varText = (variance > 0 ? '+' : '') + fmtQty(variance);
+  if (row) {
+    row.querySelector('.countedInput').value = fmtQty(line.counted_qty);
+    const varCell = row.children[3];
+    varCell.textContent = varText;
+    varCell.className = 'num ' + varClass;
+  } else {
+    row = document.createElement('tr');
+    row.setAttribute('data-line-id', line.id);
+    row.innerHTML =
+      '<td class="strong"></td><td class="num"></td>' +
+      '<td class="num"><input type="number" step="0.001" min="0" class="countedInput" data-line-id="' + line.id + '" style="width:90px;text-align:right;" onchange="setCounted(this)"></td>' +
+      '<td class="num"></td>';
+    row.children[0].textContent = line.name;
+    row.children[1].textContent = fmtQty(line.system_qty);
+    row.querySelector('.countedInput').value = fmtQty(line.counted_qty);
+    row.children[3].textContent = varText;
+    row.children[3].className = 'num ' + varClass;
+    tbody.appendChild(row);
+  }
+  updateStats();
+}
+
+function updateStats() {
+  const rows = document.querySelectorAll('#linesTable tbody tr[data-line-id]');
+  document.getElementById('statLines').textContent = rows.length;
+  let withVariance = 0;
+  rows.forEach(r => { if (r.children[3].textContent.trim() !== '0' && r.children[3].textContent.trim() !== '') withVariance++; });
+  document.getElementById('statVariance').textContent = withVariance;
+}
+
+async function doScan(payload) {
+  scanMsg.textContent = '';
+  scanChoices.style.display = 'none';
+  const res = await fetch('/stock-count/' + countId + '/scan', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (data.ok) {
+    upsertRow(data.line);
+    scanBox.value = '';
+    scanBox.focus();
+    return;
+  }
+  if (data.choices) {
+    scanChoices.innerHTML = '';
+    data.choices.forEach(c => {
+      const el = document.createElement('button');
+      el.type = 'button'; el.className = 'pos-item';
+      el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + c.name.replace(/</g, '&lt;') + '</span></div>';
+      el.onclick = () => doScan({product_id: c.id});
+      scanChoices.appendChild(el);
+    });
+    scanChoices.style.display = 'block';
+    scanMsg.textContent = 'Multiple matches — pick one:';
+    return;
+  }
+  scanMsg.textContent = data.error || 'Not found.';
+  scanBox.select();
+}
+
+scanBox.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  const q = scanBox.value.trim();
+  if (!q) return;
+  doScan({q: q});
+});
+
+async function setCounted(input) {
+  const lineId = input.dataset.lineId;
+  const res = await fetch('/stock-count/' + countId + '/line/' + lineId + '/set', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({counted_qty: input.value}),
+  });
+  const data = await res.json();
+  if (data.ok) upsertRow(data.line);
+}
+
+updateStats();
+</script>
+{% endif %}
+{% endblock %}

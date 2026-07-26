@@ -3,12 +3,15 @@
 Columns the client asked for: Product Name, Category, Unit Type, Cost of Sales,
 Selling Price, Actual Beginning Stocks, Stocks Qty, Total Qty.
 """
+import base64
 import csv
 import io
 import json
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
+import barcode as barcode_lib
+from barcode.writer import SVGWriter
 import openpyxl
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -25,6 +28,9 @@ from .templating import templates
 router = APIRouter()
 
 PAGE_SIZE = 20
+CENTS = Decimal("0.01")
+
+BULK_MODES = ("pct", "amount", "markup")
 
 # Fields whose before/after we log on a product edit. Stock and price changes
 # are the theft/accountability-sensitive ones the owner most wants visible.
@@ -108,6 +114,7 @@ def list_products(
     page: int = 1,
     alert: int = 0,
     category_id: int = 0,
+    bulk_msg: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -180,6 +187,7 @@ def list_products(
             "pages": pages,
             "total": total,
             "alert": alert,
+            "bulk_msg": bulk_msg,
             "category_id": category_id,
             "categories": categories,
             "cat_counts": cat_counts,
@@ -334,6 +342,149 @@ def archive_product(product_id: int, request: Request, db: Session = Depends(get
         )
         db.commit()
     return RedirectResponse("/products", status_code=status.HTTP_302_FOUND)
+
+
+def _bulk_mode_label(mode: str, value: Decimal) -> str:
+    sign = "+" if value >= 0 else ""
+    if mode == "pct":
+        return f"Bulk price update: {sign}{value:g}% on Fixed Price"
+    if mode == "amount":
+        return f"Bulk price update: {sign}{value:g} on Fixed Price"
+    return f"Bulk price update: Markup set to {value:g}%"
+
+
+@router.post("/products/bulk-price", response_class=HTMLResponse)
+async def bulk_price_start(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Step 1: show the selected products with a live client-side preview.
+    Nothing is saved here — Apply (below) recomputes and saves for real."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/products", status_code=302)
+    form = await request.form()
+    ids = sorted({int(i) for i in form.getlist("ids") if i.isdigit()})
+    if not ids:
+        return RedirectResponse("/products", status_code=302)
+    products = (
+        db.query(models.Product)
+        .filter(models.Product.id.in_(ids), models.Product.is_active.is_(True))
+        .order_by(models.Product.name)
+        .all()
+    )
+    return templates.TemplateResponse(
+        "products/bulk_price.html",
+        {"request": request, "app_name": request.app.title, "user": user, "products": products},
+    )
+
+
+@router.post("/products/bulk-price/apply")
+async def bulk_price_apply(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Step 2: the server recomputes every price from scratch (never trusts
+    numbers the browser sent) and saves, logging one audit row per product
+    that actually changed — so this shows up on that product's normal price
+    history exactly like a one-off edit would."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/products", status_code=302)
+    form = await request.form()
+    ids = sorted({int(i) for i in form.getlist("ids") if i.isdigit()})
+    mode = (form.get("mode") or "").strip()
+    if mode not in BULK_MODES:
+        mode = "pct"
+    try:
+        value = Decimal(str(form.get("value") or "0").strip().replace(",", ""))
+    except InvalidOperation:
+        value = Decimal("0")
+
+    if not ids:
+        return RedirectResponse("/products", status_code=302)
+
+    products = (
+        db.query(models.Product)
+        .filter(models.Product.id.in_(ids), models.Product.is_active.is_(True))
+        .all()
+    )
+    label = _bulk_mode_label(mode, value)
+    updated = 0
+    skipped = 0
+    for p in products:
+        if mode == "markup" and (not p.cost_price or p.cost_price <= 0):
+            skipped += 1
+            continue
+        before = _product_snapshot(p)
+        if mode == "pct":
+            new_price = (Decimal(str(p.selling_price or 0)) * (1 + value / 100)).quantize(CENTS, rounding=ROUND_HALF_UP)
+            p.selling_price = max(new_price, Decimal("0"))
+        elif mode == "amount":
+            new_price = (Decimal(str(p.selling_price or 0)) + value).quantize(CENTS, rounding=ROUND_HALF_UP)
+            p.selling_price = max(new_price, Decimal("0"))
+        else:  # markup
+            p.markup_pct = value
+            p.markup_price = pricing.markup_price(p.cost_price, value)
+        after = _product_snapshot(p)
+        changes = audit.diff(before, after)
+        if changes:
+            audit.record(
+                db, user=user, request=request, action="update", entity_type="product",
+                entity_id=p.id, entity_label=p.name, summary=label, changes=changes,
+            )
+            updated += 1
+    db.commit()
+    msg = f"Updated {updated} product{'s' if updated != 1 else ''}"
+    if skipped:
+        msg += f", skipped {skipped} with no cost on file"
+    return RedirectResponse(f"/products?bulk_msg={msg}", status_code=status.HTTP_302_FOUND)
+
+
+def _generate_internal_barcode(product_id: int) -> str:
+    """For products with no manufacturer barcode (locally-sourced, repackaged
+    goods) — a locally-unique code we invent and print ourselves. No need to
+    mimic a real EAN-13/UPC checksum scheme; Code128 (used to render it)
+    reads any digit/letter string fine."""
+    return f"LC{product_id:08d}"
+
+
+def _barcode_data_uri(code: str) -> str:
+    """Render `code` as a Code128 barcode (works for any barcode we already
+    have on file — manufacturer EAN-13 digits included, Code128 just encodes
+    them as text) and return it as an inline data: URI, ready for an <img>."""
+    buf = io.BytesIO()
+    bc = barcode_lib.get("code128", code, writer=SVGWriter())
+    bc.write(buf, options={"write_text": False, "quiet_zone": 2})
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/svg+xml;base64,{b64}"
+
+
+@router.post("/products/labels", response_class=HTMLResponse)
+async def print_labels(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/products", status_code=302)
+    form = await request.form()
+    ids = sorted({int(i) for i in form.getlist("ids") if i.isdigit()})
+    if not ids:
+        return RedirectResponse("/products", status_code=302)
+    products = (
+        db.query(models.Product)
+        .filter(models.Product.id.in_(ids), models.Product.is_active.is_(True))
+        .order_by(models.Product.name)
+        .all()
+    )
+    assigned = False
+    for p in products:
+        if not p.barcode:
+            p.barcode = _generate_internal_barcode(p.id)
+            assigned = True
+    if assigned:
+        db.commit()
+
+    labels = [{"product": p, "barcode_uri": _barcode_data_uri(p.barcode)} for p in products]
+    return templates.TemplateResponse(
+        "products/labels.html",
+        {"request": request, "app_name": request.app.title, "user": user, "labels": labels},
+    )
 
 
 # Human labels + in/out direction for the stock-movement reasons written across

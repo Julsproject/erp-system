@@ -14,6 +14,10 @@
   </div>
 </div>
 
+{% if bulk_msg %}
+<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;">{{ bulk_msg }}</div>
+{% endif %}
+
 {% if alert %}
 <div class="alert" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">
   <strong>These items lose money on every sale.</strong>
@@ -47,10 +51,13 @@
   {% if q or category_id %}<a class="btn-link" href="/products{{ '?alert=1' if alert }}">Clear</a>{% endif %}
 </form>
 
+{% set is_admin_user = (user.role or '')|lower == 'admin' %}
+<form id="bulkForm" method="post">
 <div class="table-wrap">
   <table class="grid">
     <thead>
       <tr>
+        {% if is_admin_user %}<th><input type="checkbox" id="selectAllChk" onchange="toggleAllChk(this)"></th>{% endif %}
         <th>Product Name</th>
         <th>Barcode</th>
         <th>Category</th>
@@ -66,6 +73,7 @@
     <tbody>
       {% for p in products %}
       <tr>
+        {% if is_admin_user %}<td><input type="checkbox" class="rowChk" name="ids" value="{{ p.id }}" onchange="updateBulkBar()"></td>{% endif %}
         <td class="strong">{{ p.name }}
           {% if p.cost_price and p.cost_price > 0 %}
             {% if not p.selling_price or p.selling_price <= 0 %}
@@ -103,18 +111,28 @@
       </tr>
       {% if p.container %}
       <tr class="container-row">
-        <td colspan="10" class="container-line">
+        <td colspan="{{ 11 if is_admin_user else 10 }}" class="container-line">
           ↳ Sealed: <strong>{{ p.container.sealed }}</strong> {{ p.container.pack_name }}{{ '' if p.container.sealed == 1 else 's' }}
           &nbsp;·&nbsp; Open container: <strong class="open-hl">{{ p.container.open|qty }} {{ p.container.loose_name }}</strong>
         </td>
       </tr>
       {% endif %}
       {% else %}
-      <tr><td colspan="10" class="empty">No products yet. Click <strong>Add product</strong> to start encoding inventory.</td></tr>
+      <tr><td colspan="{{ 11 if is_admin_user else 10 }}" class="empty">No products yet. Click <strong>Add product</strong> to start encoding inventory.</td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
+</form>
+
+{% if is_admin_user %}
+<div class="bulk-bar" id="bulkBar" style="display:none;">
+  <span><strong id="bulkCount">0</strong> selected</span>
+  <button type="submit" form="bulkForm" formaction="/products/bulk-price" class="btn-secondary">💲 Bulk price update</button>
+  <button type="submit" form="bulkForm" formaction="/products/labels" class="btn-secondary">🏷 Print barcode labels</button>
+  <button type="button" class="btn-link" onclick="clearAllChk()">Clear selection</button>
+</div>
+{% endif %}
 
 {% if pages > 1 %}
 <div class="pager">
@@ -122,5 +140,28 @@
   <span class="muted">Page {{ page }} of {{ pages }}</span>
   {% if page < pages %}<a class="btn-secondary" href="/products?page={{ page + 1 }}&q={{ q }}{{ '&alert=1' if alert }}{{ '&category_id=' ~ category_id if category_id }}">Next →</a>{% endif %}
 </div>
+{% endif %}
+
+{% if is_admin_user %}
+<script>
+function updateBulkBar() {
+  const n = document.querySelectorAll('.rowChk:checked').length;
+  document.getElementById('bulkCount').textContent = n;
+  document.getElementById('bulkBar').style.display = n ? 'flex' : 'none';
+  const all = document.querySelectorAll('.rowChk');
+  const selectAll = document.getElementById('selectAllChk');
+  if (selectAll) selectAll.checked = all.length > 0 && n === all.length;
+}
+function toggleAllChk(box) {
+  document.querySelectorAll('.rowChk').forEach(c => c.checked = box.checked);
+  updateBulkBar();
+}
+function clearAllChk() {
+  document.querySelectorAll('.rowChk').forEach(c => c.checked = false);
+  const selectAll = document.getElementById('selectAllChk');
+  if (selectAll) selectAll.checked = false;
+  updateBulkBar();
+}
+</script>
 {% endif %}
 {% endblock %}
