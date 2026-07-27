@@ -57,8 +57,66 @@ h1, h2, h3 { letter-spacing: -0.01em; }
   display: flex; flex-direction: column;
   padding: 18px 14px;
   position: sticky; top: 0; height: 100vh;
+  transition: width .16s var(--ease);
 }
 .sidebar-top-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sidebar-collapse-btn {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 28px; height: 28px; border-radius: var(--radius-sm); border: none;
+  background: transparent; color: var(--muted); cursor: pointer; transition: background .15s, color .15s;
+}
+.sidebar-collapse-btn:hover { background: var(--surface-2); color: var(--ink); }
+.sidebar-collapse-btn svg { width: 17px; height: 17px; }
+
+/* ---- Collapsed (icon rail) mode + hover-to-expand — desktop only. -------
+   The sidebar itself is the ONLY box that resizes (68px <-> 244px), so there
+   is never a mismatch between reserved layout space and what's drawn — no
+   overlay, no separate panel, nothing that can leave a gap or cover content
+   underneath. .main simply reflows by the width difference while hovering,
+   same as any other width change. */
+@media (min-width: 821px) {
+  html[data-sidebar="collapsed"] .sidebar { width: 68px; }
+  html[data-sidebar="collapsed"] .sidebar:hover { width: 244px; z-index: 40; box-shadow: var(--shadow-lg); }
+
+  html[data-sidebar="collapsed"] .sidebar-top-row { flex-direction: column; gap: 8px; }
+  html[data-sidebar="collapsed"] .sidebar:hover .sidebar-top-row { flex-direction: row; }
+  html[data-sidebar="collapsed"] .brand { padding: 4px 0 6px; justify-content: center; }
+  html[data-sidebar="collapsed"] .sidebar:hover .brand { padding: 6px 8px 18px; justify-content: flex-start; }
+
+  html[data-sidebar="collapsed"] .brand-text,
+  html[data-sidebar="collapsed"] .nav-label,
+  html[data-sidebar="collapsed"] .nav-item span,
+  html[data-sidebar="collapsed"] .nav-chev,
+  html[data-sidebar="collapsed"] .nav-subitems,
+  html[data-sidebar="collapsed"] .who-name,
+  html[data-sidebar="collapsed"] .who-role,
+  html[data-sidebar="collapsed"] #themeLabel,
+  html[data-sidebar="collapsed"] .logout {
+    display: none;
+  }
+  html[data-sidebar="collapsed"] .sidebar:hover .brand-text { display: inline; }
+  html[data-sidebar="collapsed"] .sidebar:hover .nav-label { display: block; }
+  html[data-sidebar="collapsed"] .sidebar:hover .nav-item span { display: inline; }
+  html[data-sidebar="collapsed"] .sidebar:hover .nav-chev { display: inline-block; }
+  html[data-sidebar="collapsed"] .sidebar:hover .nav-subitems { display: flex; }
+  html[data-sidebar="collapsed"] .sidebar:hover .who-name,
+  html[data-sidebar="collapsed"] .sidebar:hover .who-role { display: block; }
+  html[data-sidebar="collapsed"] .sidebar:hover #themeLabel { display: inline; }
+  html[data-sidebar="collapsed"] .sidebar:hover .logout { display: block; }
+
+  html[data-sidebar="collapsed"] .nav-item { justify-content: center; padding: 9px; }
+  html[data-sidebar="collapsed"] .sidebar:hover .nav-item { justify-content: flex-start; padding: 7px 10px; }
+  html[data-sidebar="collapsed"] .nav-group-summary { justify-content: center; }
+  html[data-sidebar="collapsed"] .sidebar:hover .nav-group-summary { justify-content: flex-start; }
+  html[data-sidebar="collapsed"] .who { justify-content: center; padding: 6px 0; }
+  html[data-sidebar="collapsed"] .sidebar:hover .who { justify-content: flex-start; padding: 6px 6px 10px; }
+  html[data-sidebar="collapsed"] .theme-toggle { justify-content: center; }
+  html[data-sidebar="collapsed"] .sidebar:hover .theme-toggle { justify-content: flex-start; }
+}
+
+/* Collapse button only makes sense on desktop; mobile has its own hamburger. */
+@media (max-width: 820px) { .sidebar-collapse-btn { display: none; } }
+
 .brand { display: flex; align-items: center; gap: 11px; padding: 6px 8px 18px; }
 .brand-mark {
   width: 34px; height: 34px;
@@ -838,10 +896,15 @@ table.grid tr:last-child td { border-bottom: none; }
 .quo-status-banner.confirmed { background: #eff6ff; border: 1.5px solid #93c5fd; color: #1e40af; }
 .quo-status-banner.paid { background: #f0fdf4; border: 1.5px solid #86efac; color: #166534; }
 .quo-status-banner.cancelled { background: #f8fafc; border: 1.5px solid var(--line-2); color: var(--muted); }
-/* Printing a quotation: hide navigation and buttons, keep just the quote itself. */
+/* Printing a quotation, or the Dashboard as a PDF: hide navigation and
+   interactive controls, keep just the content itself. */
 @media print {
   .sidebar, .no-print { display: none !important; }
   .main, .content { margin: 0 !important; padding: 0 !important; max-width: none !important; }
+  .print-only-heading { display: block !important; margin-bottom: 16px; }
+  .print-only-heading h1 { font-size: 20px; margin: 0 0 4px; }
+  .print-only-heading p { font-size: 12px; color: var(--muted); margin: 0; }
+  .card, .chart-card { break-inside: avoid; }
 }
 
 /* ---- Notifications Center ------------------------------------------------ */

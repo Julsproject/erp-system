@@ -78,10 +78,6 @@
         <td>
           {% if p.txn_type == 'return' %}
           <span class="muted">—</span>
-          {% elif p.status == 'pending' %}
-          <span class="txn" style="background:#fef3c7;color:#b45309;">Pending</span>
-          {% elif p.status == 'confirmed' %}
-          <span class="txn" style="background:#dbeafe;color:#1d4ed8;">Confirmed</span>
           {% elif p.status == 'paid' %}
           <span class="txn" style="background:#dcfce7;color:#15803d;">Paid</span>
           {% else %}

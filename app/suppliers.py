@@ -100,10 +100,26 @@ def list_suppliers(
         .limit(PAGE_SIZE)
         .all()
     )
+
+    # Site-wide payables snapshot (not scoped to the name search above) —
+    # what's actually owed right now, same basis as the Payables tab.
+    payables_owed, payables_count = (
+        db.query(func.coalesce(func.sum(models.Purchase.total), 0), func.count(models.Purchase.id))
+        .filter(models.Purchase.txn_type == "receive", models.Purchase.status == "confirmed")
+        .one()
+    )
+    pending_pos = (
+        db.query(func.count(models.Purchase.id))
+        .filter(models.Purchase.txn_type == "receive", models.Purchase.status == "pending")
+        .scalar()
+    )
+
     return templates.TemplateResponse(
         "suppliers/list.html",
         {"request": request, "app_name": request.app.title, "user": user, "suppliers": suppliers, "q": q,
-         "page": page, "pages": pages, "total": total},
+         "page": page, "pages": pages, "total": total,
+         "payables_owed": Decimal(str(payables_owed or 0)), "payables_count": payables_count,
+         "pending_pos": pending_pos or 0},
     )
 
 

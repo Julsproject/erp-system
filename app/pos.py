@@ -89,11 +89,6 @@ def _linked_ref(db: Session, prefix: str, orig) -> str | None:
 def pos_page(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    # Operating the register requires a declared opening cash float — gated
-    # here (not by role) so an admin acting as cashier is covered the same way.
-    from .shifts import get_open_shift
-    if not get_open_shift(db, user.id):
-        return RedirectResponse("/shifts/open?next=/pos", status_code=302)
     return templates.TemplateResponse(
         "pos.html",
         {"request": request, "app_name": request.app.title, "user": user},

@@ -239,23 +239,6 @@ def _current_alerts(db: Session) -> dict:
             "link": "/pdc",
         }
 
-    # ---- pending deliveries ---------------------------------------------
-    pending_deliveries = (
-        db.query(models.Delivery)
-        .filter(models.Delivery.status == "pending")
-        .all()
-    )
-    for d in pending_deliveries:
-        who = d.recipient_name or "customer"
-        alerts[f"delivery_pending:{d.id}"] = {
-            "category": "delivery", "severity": "info",
-            "title": f"Delivery pending: {d.delivery_no}",
-            "body": f"For {who}"
-                    f"{' — scheduled ' + d.scheduled_date.strftime('%b %d, %Y') if d.scheduled_date else ''}."
-                    " Not yet dispatched.",
-            "link": f"/deliveries/{d.id}",
-        }
-
     # ---- no-invoice refunds/exchanges -------------------------------------
     # A refund/exchange where the cashier couldn't match an invoice means the
     # returned item's price came from what was typed in, not a verified sale

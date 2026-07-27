@@ -66,11 +66,7 @@
         <td>{{ d.driver_name or '—' }}</td>
         <td>{{ d.scheduled_date.strftime('%b %d, %Y') if d.scheduled_date else '—' }}</td>
         <td>
-          {% if d.status == 'pending' %}
-          <span class="txn" style="background:#fef3c7;color:#b45309;">Pending</span>
-          {% elif d.status == 'out_for_delivery' %}
-          <span class="txn" style="background:#dbeafe;color:#1d4ed8;">Out for Delivery</span>
-          {% elif d.status == 'delivered' %}
+          {% if d.status == 'delivered' %}
           <span class="txn" style="background:#dcfce7;color:#15803d;">Delivered</span>
           {% else %}
           <span class="txn" style="background:#f1f5f9;color:#64748b;">Cancelled</span>

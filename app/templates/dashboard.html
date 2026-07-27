@@ -25,7 +25,7 @@
     <h1 class="page-title">Dashboard</h1>
     <p class="muted">{{ today.strftime('%A, %b %d, %Y') }} · Welcome, {{ user.full_name or user.username }}</p>
   </div>
-  <div style="display:flex;gap:10px;align-items:center;">
+  <div class="no-print" style="display:flex;gap:10px;align-items:center;">
     <div class="seg">
       <a class="seg-btn {{ 'active' if days == 7 and not custom }}" href="/?days=7">7 days</a>
       <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="/?days=30">30 days</a>
@@ -49,7 +49,13 @@
         </form>
       </div>
     </details>
+    <button type="button" class="btn-secondary" onclick="window.print()">⬇ Download PDF</button>
   </div>
+</div>
+
+<div class="print-only-heading" style="display:none;">
+  <h1>{{ business_info().business_name or app_name }} — Dashboard</h1>
+  <p>{{ period_start.strftime('%b %d, %Y') if period_start else '' }} – {{ period_end.strftime('%b %d, %Y') if period_end else '' }} · Generated {{ today.strftime('%b %d, %Y %I:%M %p') }}</p>
 </div>
 
 {% if backup.stale %}
@@ -190,8 +196,8 @@
     Pick a product to see how its cost and selling price have moved over time — catches cost creeping up
     without the price following.
   </p>
-  <input id="trackSearch" class="search pos-search" type="search" placeholder="Search a product to track…" autocomplete="off" style="max-width:420px;">
-  <div id="trackResults" class="pos-results" style="max-height:22vh;"></div>
+  <input id="trackSearch" class="search pos-search no-print" type="search" placeholder="Search a product to track…" autocomplete="off" style="max-width:420px;">
+  <div id="trackResults" class="pos-results no-print" style="max-height:22vh;"></div>
   <div id="trackChartBox" style="display:none;margin-top:16px;">
     <div class="track-head">
       <h4 id="trackProductName" style="margin:0;font-size:15px;"></h4>

@@ -142,6 +142,14 @@ def list_products(
     pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
     page = min(page, pages)
 
+    qty_expr = models.Product.beginning_stock + models.Product.stock_qty
+    total_cost_value, total_retail_value = query.with_entities(
+        func.coalesce(func.sum(qty_expr * models.Product.cost_price), 0),
+        func.coalesce(func.sum(qty_expr * models.Product.selling_price), 0),
+    ).one()
+    total_cost_value = Decimal(str(total_cost_value or 0))
+    total_retail_value = Decimal(str(total_retail_value or 0))
+
     products = (
         query.order_by(models.Product.name)
         .offset((page - 1) * PAGE_SIZE)
@@ -186,6 +194,8 @@ def list_products(
             "page": page,
             "pages": pages,
             "total": total,
+            "total_cost_value": total_cost_value,
+            "total_retail_value": total_retail_value,
             "alert": alert,
             "bulk_msg": bulk_msg,
             "category_id": category_id,

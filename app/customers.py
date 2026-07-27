@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .database import get_db
-from .deps import get_current_user
+from .deps import get_current_user, is_admin
 from .templating import templates
 
 router = APIRouter()
@@ -75,6 +75,28 @@ def list_customers(
         .limit(PAGE_SIZE)
         .all()
     )
+
+    # Site-wide receivables snapshot — same basis as the Credits page. Money
+    # figures stay admin-only, same as Credits itself.
+    total_receivable, customers_owing = Decimal("0"), 0
+    if is_admin(user):
+        settled_sub = (
+            db.query(
+                models.ReceivableSettlement.sale_id.label("sid"),
+                func.coalesce(func.sum(models.ReceivableSettlement.amount), 0).label("paid"),
+            )
+            .group_by(models.ReceivableSettlement.sale_id)
+            .subquery()
+        )
+        outstanding_expr = models.Sale.receivable_amount - func.coalesce(settled_sub.c.paid, 0)
+        total_receivable, customers_owing = (
+            db.query(func.coalesce(func.sum(outstanding_expr), 0), func.count(func.distinct(models.Sale.customer_id)))
+            .outerjoin(settled_sub, settled_sub.c.sid == models.Sale.id)
+            .filter(models.Sale.receivable_amount > 0, outstanding_expr > 0)
+            .one()
+        )
+        total_receivable = Decimal(str(total_receivable or 0))
+
     return templates.TemplateResponse(
         "customers/list.html",
         {
@@ -86,6 +108,8 @@ def list_customers(
             "page": page,
             "pages": pages,
             "total": total,
+            "total_receivable": total_receivable,
+            "customers_owing": customers_owing or 0,
         },
     )
 

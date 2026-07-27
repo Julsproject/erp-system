@@ -47,17 +47,27 @@
 
     <div class="full cod-box" id="dCodBox" style="{{ 'display:none;' if not (outstanding and outstanding > 0) }}">
       <label class="checkbox" style="margin:0;">
-        <input type="checkbox" name="is_cod" id="dIsCod">
-        <span><strong>Cash on Delivery (COD)</strong> — the driver collects the balance when the goods are handed over</span>
+        <input type="checkbox" name="is_cod" id="dIsCod" onchange="dToggleCollect()">
+        <span><strong>Cash on Delivery (COD)</strong> — record what was collected on handover</span>
       </label>
       <p class="cod-hint">
         Balance to collect: <strong id="dCodAmount">{{ outstanding|peso if outstanding else '₱0.00' }}</strong>.
-        The sale stays unpaid until you mark this delivery <em>Delivered</em>, which is where you record what the driver collected.
+        Logging this delivery marks it Delivered right away, so enter what was actually collected below.
       </p>
+      <div id="dCollectFields" style="display:none;margin-top:10px;">
+        <label>Collected via
+          <select name="collect_method">
+            {% for code, label in cod_methods %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+          </select>
+        </label>
+        <label>Amount collected
+          <input name="collect_amount" id="dCollectAmount" type="number" step="0.01" min="0" value="{{ '%.2f'|format(outstanding) if outstanding else '' }}">
+        </label>
+      </div>
     </div>
 
     <div class="form-actions full">
-      <button class="btn" type="submit">Create Delivery</button>
+      <button class="btn" type="submit">✓ Log Delivery</button>
       <a class="btn-secondary" href="/deliveries">Cancel</a>
     </div>
   </form>
@@ -90,11 +100,18 @@ async function dLookup() {
   if (owed > 0) {
     document.getElementById('dCodAmount').textContent =
       '₱' + owed.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    document.getElementById('dCollectAmount').value = owed.toFixed(2);
     box.style.display = 'block';
   } else {
     box.style.display = 'none';
     document.getElementById('dIsCod').checked = false;
   }
+  dToggleCollect();
+}
+
+function dToggleCollect() {
+  document.getElementById('dCollectFields').style.display =
+    document.getElementById('dIsCod').checked ? 'block' : 'none';
 }
 </script>
 {% endblock %}

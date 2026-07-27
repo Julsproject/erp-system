@@ -9,6 +9,14 @@
   <a class="btn" href="/customers/new">+ Add customer</a>
 </div>
 
+{% if (user.role or '')|lower == 'admin' %}
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>Customer{{ '' if total == 1 else 's' }}</span></div>
+  <div class="mini-stat {{ 'owed' if total_receivable }}"><span class="mini-num">{{ total_receivable|peso }}</span><span>Receivables Owed</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ customers_owing }}</span><span>Customers with a balance</span></div>
+</div>
+{% endif %}
+
 <form class="toolbar" method="get" action="/customers">
   <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search name…">
   <button class="btn-secondary" type="submit">Search</button>

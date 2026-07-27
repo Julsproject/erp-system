@@ -14,6 +14,13 @@
   </div>
 </div>
 
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>SKU{{ '' if total == 1 else 's' }}{{ ' matching filter' if q or category_id or alert }}</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total_cost_value|peso }}</span><span>Stock Value (at cost)</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total_retail_value|peso }}</span><span>Stock Value (at retail)</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ (total_retail_value - total_cost_value)|peso }}</span><span>Potential Gross Profit</span></div>
+</div>
+
 {% if bulk_msg %}
 <div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;">{{ bulk_msg }}</div>
 {% endif %}

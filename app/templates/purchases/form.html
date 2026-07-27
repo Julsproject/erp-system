@@ -1,17 +1,22 @@
 {% extends "base.html" %}
-{% block title %}New purchase · {{ app_name }}{% endblock %}
+{% block title %}{{ 'Return to Supplier' if return_against_po else 'New purchase' }} · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1 class="page-title">New Purchase</h1>
-  <a class="btn-link" href="/purchases">← Back to purchase history</a>
+  <h1 class="page-title">{{ 'Return to Supplier' if return_against_po else 'New Purchase' }}</h1>
+  <a class="btn-link" href="{{ '/purchases/' ~ return_against_po.id if return_against_po else '/purchases' }}">
+    ← Back to {{ 'delivery' if return_against_po else 'purchase history' }}
+  </a>
 </div>
 
-<div class="pos-modes">
-  <button type="button" class="mode-btn active" id="mReceive" onclick="setType('receive')">Receive (stock in)</button>
-  <button type="button" class="mode-btn" id="mReturn" onclick="setType('return')">Return to supplier</button>
+{% if return_against_po %}
+<div class="alert" style="background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8;margin-bottom:16px;">
+  ↩ Returning items to <strong>{{ return_against_po.supplier.name if return_against_po.supplier else '—' }}</strong>
+  from delivery <strong>{{ return_against_po.ref_no }}</strong> — check the items received before sending anything back.
 </div>
+{% endif %}
 
-<div class="pos-grid">
+<div class="pos-grid" {{ 'style="grid-template-columns:1fr;max-width:900px;"' if return_against_po }}>
+  {% if not return_against_po %}
   <!-- LEFT: product search -->
   <section class="card pos-search-panel">
     <input id="pSearch" class="search pos-search" type="search" placeholder="Search product to add…" autofocus autocomplete="off">
@@ -65,21 +70,25 @@
     <datalist id="np-cats">{% for c in categories %}<option value="{{ c.name }}">{% endfor %}</datalist>
     <datalist id="np-units">{% for u in unit_types %}<option value="{{ u.name }}">{% endfor %}</datalist>
   </section>
+  {% endif %}
 
   <!-- RIGHT: document -->
   <section class="card pos-cart-panel">
     <div class="pos-head-fields">
       <label class="pos-customer">Supplier
-        <select id="supplierId">
+        <select id="supplierId" {{ 'disabled' if return_against_po }}>
           <option value="">— choose supplier —</option>
           {% for s in suppliers %}
           <option value="{{ s.id }}" {{ 'selected' if preselect and s.id == preselect }}>{{ s.name }}{{ ' (' ~ s.code ~ ')' if s.code }}</option>
           {% endfor %}
         </select>
+        {% if not return_against_po %}
         <button type="button" class="btn-link" style="margin-top:4px;font-size:12.5px;" onclick="showNewSupplier()">＋ New supplier</button>
+        {% endif %}
       </label>
       <label class="pos-customer">Supplier Invoice / DR #
-        <input id="invoiceNo" type="text" placeholder="optional" autocomplete="off">
+        <input id="invoiceNo" type="text" placeholder="optional" autocomplete="off"
+               value="{{ return_against_po.ref_no if return_against_po else '' }}">
       </label>
     </div>
 
@@ -117,13 +126,25 @@
       </label>
     </div>
 
-    <div class="pos-head-fields" id="returnAgainstRow" style="display:none;">
-      <label class="pos-customer">Return against delivery <span class="muted">(optional)</span>
-        <select id="returnAgainst">
-          <option value="">— not tied to a specific delivery —</option>
+    {% if not return_against_po %}
+    <div class="pos-head-fields">
+      <label class="pos-customer">Payment method <span class="muted">(paid on the spot)</span>
+        <select id="paymentMethod" onchange="onPaymentMethodChange()">
+          {% for value, label in payment_methods %}
+          <option value="{{ value }}">{{ label }}</option>
+          {% endfor %}
         </select>
       </label>
     </div>
+    <div id="chequeFields" class="cheque-grid" style="display:none;">
+      <label>Bank<input id="chequeBank" type="text" placeholder="e.g. BDO"></label>
+      <label>Cheque #<input id="chequeNo" type="text" placeholder="000123"></label>
+      <label>Cheque date<input id="chequeDate" type="date"></label>
+    </div>
+    <p class="hint" id="chequeHint" style="display:none;margin:0 0 12px;">
+      This still logs the purchase as settled — the cheque itself goes into the <a href="/pdc">Cheques register</a> as pending until it clears.
+    </p>
+    {% endif %}
 
     <div class="table-wrap">
       <table class="grid cart-table">
@@ -152,41 +173,19 @@
 
 <script>
 const peso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-let lines = [];
-let txnType = 'receive';
+const txnType = {{ 'true' if return_against_po else 'false' }} ? 'return' : 'receive';
+const returnAgainstId = {{ return_against_po.id if return_against_po else 'null' }};
+// Cart starts pre-filled with exactly what was received on this delivery
+// when returning against one — edit quantities down or remove a line for
+// whatever's actually going back, instead of re-searching the catalog.
+let lines = {{ return_lines_prefill|tojson }};
 let searchTimer = null;
 const searchBox = document.getElementById('pSearch');
 
-searchBox.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 180); });
-document.getElementById('supplierId').addEventListener('change', () => { recompute(); refreshReceipts(); });
-
-function setType(t) {
-  txnType = t;
-  document.getElementById('mReceive').classList.toggle('active', t === 'receive');
-  document.getElementById('mReturn').classList.toggle('active', t === 'return');
-  document.getElementById('returnAgainstRow').style.display = t === 'return' ? 'flex' : 'none';
-  if (t === 'return') refreshReceipts();
-  renderLines();
+if (searchBox) {
+  searchBox.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 180); });
 }
-
-/* Populate "Return against delivery" with this supplier's past receipts. */
-async function refreshReceipts() {
-  if (txnType !== 'return') return;
-  const sel = document.getElementById('returnAgainst');
-  const supplierId = document.getElementById('supplierId').value;
-  sel.innerHTML = '<option value="">— not tied to a specific delivery —</option>';
-  if (!supplierId) return;
-  try {
-    const res = await fetch('/purchases/receipts?supplier_id=' + encodeURIComponent(supplierId));
-    const data = await res.json();
-    (data.receipts || []).forEach(r => {
-      const opt = document.createElement('option');
-      opt.value = r.id;
-      opt.textContent = r.ref_no + ' — ' + r.date + ' — ' + peso(r.total);
-      sel.appendChild(opt);
-    });
-  } catch (e) { /* leave the default option */ }
-}
+document.getElementById('supplierId').addEventListener('change', recompute);
 
 async function runSearch() {
   const res = await fetch('/purchases/search?q=' + encodeURIComponent(searchBox.value.trim()));
@@ -300,8 +299,14 @@ function clearAll() {
   document.getElementById('invoiceNo').value = '';
   document.getElementById('deliveryDate').value = '';
   document.getElementById('notes').value = '';
-  document.getElementById('returnAgainst').value = '';
-  renderLines(); searchBox.focus();
+  renderLines();
+  if (searchBox) searchBox.focus();
+}
+
+function onPaymentMethodChange() {
+  const isCheque = document.getElementById('paymentMethod').value === 'cheque';
+  document.getElementById('chequeFields').style.display = isCheque ? 'grid' : 'none';
+  document.getElementById('chequeHint').style.display = isCheque ? 'block' : 'none';
 }
 
 function recompute() {
@@ -337,7 +342,11 @@ async function savePurchase() {
     invoice_no: document.getElementById('invoiceNo').value,
     delivery_date: document.getElementById('deliveryDate').value,
     notes: document.getElementById('notes').value,
-    original_purchase_id: txnType === 'return' ? document.getElementById('returnAgainst').value : null,
+    original_purchase_id: returnAgainstId,
+    payment_method: document.getElementById('paymentMethod') ? document.getElementById('paymentMethod').value : null,
+    bank: document.getElementById('chequeBank') ? document.getElementById('chequeBank').value : '',
+    cheque_no: document.getElementById('chequeNo') ? document.getElementById('chequeNo').value : '',
+    cheque_date: document.getElementById('chequeDate') ? document.getElementById('chequeDate').value : '',
     lines: lines.map(l => {
       const u = l.product.units[l.unitIndex];
       return { product_id: l.product.id, unit_name: u.name, factor: u.factor, qty: l.qty,

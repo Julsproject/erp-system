@@ -15,6 +15,13 @@
   <a class="tab" href="/purchases/payables">Payables</a>
 </div>
 
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>Supplier{{ '' if total == 1 else 's' }}</span></div>
+  <div class="mini-stat {{ 'owed' if payables_owed }}"><span class="mini-num">{{ payables_owed|peso }}</span><span>Payables Owed</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ payables_count }}</span><span>Unpaid Deliveries</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ pending_pos }}</span><span>Pending POs</span></div>
+</div>
+
 <form class="toolbar" method="get" action="/suppliers">
   <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search supplier name…">
   <button class="btn-secondary" type="submit">Search</button>

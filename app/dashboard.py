@@ -188,10 +188,19 @@ def dashboard(
     )
     by_day = {r[0]: Decimal(str(r[1] or 0)) for r in rows}
     label_stride = max(1, days // 12)
+    # The last day always gets a label (so the chart reads up to "today"), but
+    # if the stride would also label the day right before it, that pair
+    # collides into unreadable overlapping text — drop the stride one so only
+    # the forced last label remains.
+    last_i = days - 1
+    show_indices = set(range(0, days, label_stride))
+    show_indices.add(last_i)
+    if label_stride > 1 and (last_i - 1) in show_indices:
+        show_indices.discard(last_i - 1)
     trend = []
     for i in range(days):
         d = period_start + timedelta(days=i)
-        show_label = (i % label_stride == 0) or (i == days - 1)
+        show_label = i in show_indices
         trend.append({
             "date": d, "label": d.strftime("%b %d"), "short": d.strftime("%a"),
             "total": by_day.get(d, ZERO), "show_label": show_label,
