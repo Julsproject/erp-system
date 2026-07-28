@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block title %}Selling Price · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Selling Price</h1>
+    <p class="muted">Search a product, adjust its price, save — no need to open the full edit form.</p>
+  </div>
+</div>
+
+<div class="tabs">
+  <a class="tab" href="/products">All Products</a>
+  <a class="tab" href="/products?alert=1">⚠ Price Review Needed</a>
+  <a class="tab active" href="/products/pricing">Selling Price</a>
+</div>
+
+<div class="card" style="padding:20px;max-width:680px;margin-top:16px;">
+  <input id="priceSearch" class="search" type="search" placeholder="Search product name or scan a barcode…" autocomplete="off" autofocus style="width:100%;max-width:none;">
+  <div id="priceResults" class="pos-results" style="margin-top:10px;"></div>
+</div>
+
+<div class="card" id="priceEditCard" style="padding:20px;max-width:680px;margin-top:16px;display:none;">
+  <h3 class="card-title" id="peName" style="margin-top:0;">—</h3>
+  <p class="muted">Cost of Sales: <strong id="peCost">₱0.00</strong></p>
+
+  <div class="table-wrap">
+    <table class="grid price-table">
+      <thead>
+        <tr><th>Price</th><th class="num">%</th><th class="num">Selling price (₱)</th><th class="num">Profit</th><th class="num">True margin</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Fixed</strong><small class="muted" style="display:block;">typed in — POS uses this</small></td>
+          <td class="num muted">—</td>
+          <td class="num"><input id="peFixedPrice" type="number" step="0.01" min="0" inputmode="decimal" oninput="peRecalc()"></td>
+          <td class="num" id="peFixedProfit">—</td>
+          <td class="num" id="peFixedMargin">—</td>
+        </tr>
+        <tr>
+          <td><strong>Markup</strong><small class="muted" style="display:block;">% on top of cost</small></td>
+          <td class="num"><input id="peMarkupPct" type="number" step="0.01" min="0" class="pct-in" oninput="peRecalc()"></td>
+          <td class="num"><input id="peMarkupPrice" type="number" class="readonly" readonly tabindex="-1"></td>
+          <td class="num" id="peMarkupProfit">—</td>
+          <td class="num" id="peMarkupMargin">—</td>
+        </tr>
+        <tr>
+          <td><strong>Margin</strong><small class="muted" style="display:block;">% of the selling price</small></td>
+          <td class="num"><input id="peMarginPct" type="number" step="0.01" min="0" max="99.99" class="pct-in" oninput="peRecalc()"></td>
+          <td class="num"><input id="peMarginPrice" type="number" class="readonly" readonly tabindex="-1"></td>
+          <td class="num" id="peMarginProfit">—</td>
+          <td class="num" id="peMarginMargin">—</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="hint" id="peHint"></p>
+
+  <div class="form-actions" style="margin-top:14px;">
+    <button class="btn" type="button" onclick="peSave()">Save price</button>
+    <button class="btn-secondary" type="button" onclick="peCancel()">Search another</button>
+  </div>
+  <div id="peMsg" class="alert" style="display:none;margin-top:12px;"></div>
+</div>
+
+<script>
+let peProduct = null;
+const peSearchBox = document.getElementById('priceSearch');
+let peTimer = null;
+peSearchBox.addEventListener('input', () => { clearTimeout(peTimer); peTimer = setTimeout(peRunSearch, 200); });
+peSearchBox.addEventListener('keydown', async (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  clearTimeout(peTimer);
+  const q = peSearchBox.value.trim();
+  if (!q) return;
+  const res = await fetch('/products/price-search?q=' + encodeURIComponent(q));
+  const data = await res.json();
+  const products = data.products || [];
+  if (products.length === 1) { peSelect(products[0]); }
+  else { peRenderResults(products); }
+});
+
+async function peRunSearch() {
+  const q = peSearchBox.value.trim();
+  if (!q) { document.getElementById('priceResults').innerHTML = ''; return; }
+  const res = await fetch('/products/price-search?q=' + encodeURIComponent(q));
+  const data = await res.json();
+  peRenderResults(data.products || []);
+}
+
+function peRenderResults(products) {
+  const box = document.getElementById('priceResults');
+  if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
+  box.innerHTML = '';
+  products.forEach(p => {
+    const el = document.createElement('button');
+    el.type = 'button'; el.className = 'pos-item'; el.onclick = () => peSelect(p);
+    el.innerHTML =
+      '<div class="pos-item-main"><span class="pos-item-name">' + peEsc(p.name) + '</span></div>' +
+      '<div class="pos-item-sub">Cost ' + peMoney(p.cost_price) + ' · Selling ' + peMoney(p.selling_price) + '</div>';
+    box.appendChild(el);
+  });
+}
+
+function peEsc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function peMoney(v) { return '₱' + (Number(v) || 0).toFixed(2); }
+
+function peSelect(p) {
+  peProduct = p;
+  document.getElementById('peName').textContent = p.name;
+  document.getElementById('peCost').textContent = peMoney(p.cost_price);
+  document.getElementById('peFixedPrice').value = (p.selling_price || 0).toFixed(2);
+  document.getElementById('peMarkupPct').value = (p.markup_pct || 0).toFixed(2);
+  document.getElementById('peMarginPct').value = (p.margin_pct || 0).toFixed(2);
+  document.getElementById('peMsg').style.display = 'none';
+  document.getElementById('priceEditCard').style.display = 'block';
+  peRecalc();
+  document.getElementById('priceEditCard').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+
+function peCancel() {
+  peProduct = null;
+  document.getElementById('priceEditCard').style.display = 'none';
+  peSearchBox.value = '';
+  document.getElementById('priceResults').innerHTML = '';
+  peSearchBox.focus();
+}
+
+/* Mirrors app/pricing.py and the product edit form's own calculation. */
+{% set mmp = min_margin_pct() %}
+var MIN_MARGIN_PCT = {{ mmp if mmp is not none else 'null' }};
+
+function peShowRow(price, cost, priceEl, profitEl, marginEl) {
+  if (priceEl) priceEl.value = price > 0 ? price.toFixed(2) : '';
+  var profit = price - cost;
+  if (price > 0 && cost > 0) {
+    var marginPct = profit / price * 100;
+    profitEl.textContent = '₱' + profit.toFixed(2);
+    profitEl.className = 'num ' + (profit < 0 ? 'neg' : '');
+    var belowTarget = MIN_MARGIN_PCT !== null && profit >= 0 && marginPct < MIN_MARGIN_PCT;
+    marginEl.textContent = marginPct.toFixed(1) + '%' + (belowTarget ? ' ⚠' : '');
+    marginEl.className = 'num ' + (profit < 0 ? 'neg' : (belowTarget ? 'thin-margin' : ''));
+    marginEl.title = belowTarget ? ('Below your ' + MIN_MARGIN_PCT + '% minimum margin target') : '';
+  } else {
+    profitEl.textContent = '—'; profitEl.className = 'num muted';
+    marginEl.textContent = '—'; marginEl.className = 'num muted'; marginEl.title = '';
+  }
+}
+
+function peRecalc() {
+  if (!peProduct) return;
+  var cost = Number(peProduct.cost_price) || 0;
+  var hint = document.getElementById('peHint');
+
+  var fixed = parseFloat(document.getElementById('peFixedPrice').value) || 0;
+  peShowRow(fixed, cost, null, document.getElementById('peFixedProfit'), document.getElementById('peFixedMargin'));
+
+  var mPct = parseFloat(document.getElementById('peMarkupPct').value) || 0;
+  var gPct = parseFloat(document.getElementById('peMarginPct').value) || 0;
+  if (gPct > 99.99) { gPct = 99.99; document.getElementById('peMarginPct').value = gPct; }
+
+  var markup = cost > 0 ? Math.round(cost * (1 + mPct / 100) * 100) / 100 : 0;
+  var margin = cost > 0 ? Math.round(cost / (1 - gPct / 100) * 100) / 100 : 0;
+
+  peShowRow(markup, cost, document.getElementById('peMarkupPrice'), document.getElementById('peMarkupProfit'), document.getElementById('peMarkupMargin'));
+  peShowRow(margin, cost, document.getElementById('peMarginPrice'), document.getElementById('peMarginProfit'), document.getElementById('peMarginMargin'));
+
+  hint.textContent = (cost > 0)
+    ? 'Markup and margin are calculated from the Cost of Sales. Note they differ: the same % gives a different price.'
+    : 'This product has no Cost of Sales yet — Markup and Margin need one to work. The Fixed price still saves fine.';
+}
+
+async function peSave() {
+  if (!peProduct) return;
+  const payload = {
+    selling_price: document.getElementById('peFixedPrice').value,
+    markup_pct: document.getElementById('peMarkupPct').value,
+    margin_pct: document.getElementById('peMarginPct').value,
+  };
+  const msg = document.getElementById('peMsg');
+  try {
+    const res = await fetch('/products/' + peProduct.id + '/pricing', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.ok) {
+      peProduct.selling_price = data.selling_price;
+      peProduct.markup_pct = data.markup_pct;
+      peProduct.margin_pct = data.margin_pct;
+      peProduct.cost_price = data.cost_price;
+      msg.style.background = '#f0fdf4'; msg.style.borderColor = '#bbf7d0'; msg.style.color = '#15803d';
+      msg.textContent = 'Saved — ' + peProduct.name + ' now sells at ' + peMoney(data.selling_price) + '.';
+    } else {
+      msg.style.background = ''; msg.style.borderColor = ''; msg.style.color = '';
+      msg.textContent = data.error || 'Save failed.';
+    }
+  } catch (e) {
+    msg.style.background = ''; msg.style.borderColor = ''; msg.style.color = '';
+    msg.textContent = 'Network error. Please try again.';
+  }
+  msg.style.display = 'block';
+}
+</script>
+{% endblock %}

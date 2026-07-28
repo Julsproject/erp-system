@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Sales Returns · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Sales Returns</h1>
+</div>
+
+<div class="tabs">
+  <a class="tab" href="/sales">Cash Sales</a>
+  <a class="tab" href="/sales/receivables">Credit Sales (Accounts Receivable)</a>
+  <a class="tab" href="/quotations">Sales Quotation</a>
+  <a class="tab active" href="/sales/returns">Sales Returns</a>
+  <a class="tab" href="/sales/exchanges">Exchange of Items</a>
+  <a class="tab" href="/customers">Customers</a>
+</div>
+
+<p class="muted" style="margin:-6px 0 16px;">Every product returned, one row each — what the customer brought back, not just the transaction total.</p>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Invoice #</th><th>Date</th><th>Customer</th><th>Product Returned</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Amount</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for line, sale in rows %}
+      <tr>
+        <td class="strong">{{ sale.invoice_no }}</td>
+        <td>{{ sale.created_at.strftime('%b %d, %Y %I:%M %p') if sale.created_at else '' }}</td>
+        <td>{{ sale.customer_name or 'Walk-in' }}</td>
+        <td>{{ line.product_name }}{{ ' (' ~ line.unit_name ~ ')' if line.unit_name }}</td>
+        <td class="num">{{ line.qty|qty }}</td>
+        <td class="num">{{ line.unit_price|peso }}</td>
+        <td class="num strong">{{ (-line.line_total)|peso }}</td>
+        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ sale.id }}?from=sales">Receipt</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="empty">No returns yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn-secondary" href="/sales/returns?page={{ page - 1 }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-secondary" href="/sales/returns?page={{ page + 1 }}">Next →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

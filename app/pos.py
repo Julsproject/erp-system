@@ -18,6 +18,7 @@ from . import models
 from .customers import get_or_create_customer
 from .database import get_db
 from .deps import get_current_user
+from .products import _get_or_create_category, _get_or_create_unit_type
 from .templating import templates
 
 router = APIRouter()
@@ -68,6 +69,16 @@ def _add_stock(product: models.Product, base_qty: Decimal):
     product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
 
 
+def _sale_outstanding(db: Session, sale) -> Decimal:
+    """How much of a sale's receivable is still unpaid."""
+    settled = (
+        db.query(func.coalesce(func.sum(models.ReceivableSettlement.amount), 0))
+        .filter(models.ReceivableSettlement.sale_id == sale.id)
+        .scalar()
+    )
+    return (sale.receivable_amount or Decimal("0")) - Decimal(str(settled or 0))
+
+
 def _linked_ref(db: Session, prefix: str, orig) -> str | None:
     """Build a reference that points at the original sale, e.g. REF-45.
 
@@ -89,9 +100,12 @@ def _linked_ref(db: Session, prefix: str, orig) -> str | None:
 def pos_page(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    categories = db.query(models.Category).order_by(models.Category.name).all()
+    unit_types = db.query(models.UnitType).order_by(models.UnitType.name).all()
     return templates.TemplateResponse(
         "pos.html",
-        {"request": request, "app_name": request.app.title, "user": user},
+        {"request": request, "app_name": request.app.title, "user": user,
+         "categories": categories, "unit_types": unit_types},
     )
 
 
@@ -168,6 +182,47 @@ def pos_product(product_id: int, db: Session = Depends(get_db), user=Depends(get
     if not p or not p.is_active:
         return {"found": False}
     return {"found": True, "product": _product_payload_for_pos(p)}
+
+
+@router.post("/pos/quick-product")
+async def pos_quick_product(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Create a product that isn't in inventory yet, straight from the POS
+    screen — cashiers use this too, so it deliberately has no selling-price
+    fields (that's the owner's call, not shown here). It's added to the cart
+    at ₱0; the cashier types whatever this specific sale charges directly on
+    the cart line, same as any other manually-priced line."""
+    if not user:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+    data = await request.json()
+    name = (data.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "Product name is required."}, status_code=400)
+
+    existing = (
+        db.query(models.Product)
+        .filter(func.lower(models.Product.name) == name.lower())
+        .filter(models.Product.is_active.is_(True))
+        .first()
+    )
+    if existing:
+        return {"ok": True, "existed": True, "product": _product_payload_for_pos(existing)}
+
+    product = models.Product(
+        name=name,
+        cost_price=_money(data.get("cost_price") or 0),
+        selling_price=Decimal("0"),
+        beginning_stock=_dec(data.get("beginning_stock")),
+        stock_qty=_dec(data.get("stock_qty")),
+        reorder_level=_dec(data.get("reorder_level")),
+        is_active=True,
+    )
+    product.category = _get_or_create_category(db, data.get("category"))
+    product.unit_type = _get_or_create_unit_type(db, data.get("unit_type") or "Piece")
+    db.add(product)
+    db.commit()
+    db.refresh(product)
+    return {"ok": True, "existed": False, "product": _product_payload_for_pos(product)}
 
 
 def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied, discount_total, lines, payments):
@@ -396,11 +451,23 @@ async def pos_refund(request: Request, db: Session = Depends(get_db), user=Depen
     if not items:
         return JSONResponse({"ok": False, "error": "Select at least one item to refund."}, status_code=400)
 
+    # The cashier's own invoice # (e.g. "45") wins when they typed one; only
+    # auto-generate a reference (REF-45, or a sequential fallback) if they left it blank.
+    typed_invoice = (data.get("invoice_no") or "").strip()
+    if typed_invoice and db.query(models.Sale).filter(models.Sale.invoice_no == typed_invoice).first():
+        return JSONResponse({"ok": False, "error": f"Invoice number '{typed_invoice}' is already used."}, status_code=400)
+
+    # Same as a normal sale: a typed customer name gets its own Customer
+    # record (created if new), not just free text on the receipt — otherwise
+    # it can't show up in the Customers list or their purchase history.
+    typed_customer_name = (data.get("customer_name") or "").strip()
+    typed_customer = get_or_create_customer(db, typed_customer_name) if (not orig and typed_customer_name) else None
+
     refund = models.Sale(
         txn_type="refund",
         original_sale_id=orig.id if orig else None,
-        customer_name=(orig.customer_name if orig else (data.get("customer_name") or None)),
-        customer_id=(orig.customer_id if orig else None),
+        customer_name=(orig.customer_name if orig else (typed_customer.name if typed_customer else None)),
+        customer_id=(orig.customer_id if orig else (typed_customer.id if typed_customer else None)),
         cashier_id=user.id,
         # No matched invoice means these items — and their prices — came from
         # an inventory search the cashier typed in, not a verified original
@@ -446,17 +513,46 @@ async def pos_refund(request: Request, db: Session = Depends(get_db), user=Depen
     gross = _money(total)
     vat = _vat_of(vat_base)
 
+    # Which channel the money actually went out through — defaults to cash,
+    # but the cashier can pick GCash/Bank Transfer/Cheque just as easily.
+    # (Credit doesn't apply here — there's nothing new being sold to owe
+    # against, so there's no receivable for it to sit on.)
+    method = (data.get("payment_method") or "cash").strip().lower()
+    if method not in ("cash", "gcash", "bank_transfer", "cheque"):
+        method = "cash"
+
     refund.subtotal = -gross
     refund.net_amount = -(gross - vat)
     refund.vat_amount = -vat
     refund.total = -gross
-    refund.payment_method = "Cash refund"
+
+    # If the original sale is still owed on (bought on credit, not yet paid
+    # off), the returned goods were never actually paid for — so the refund
+    # reduces that credit balance first, instead of paying cash out for
+    # something no cash was ever collected for. Only whatever's left over
+    # (if the return is worth more than what's still owed) pays out.
+    applied_to_credit = Decimal("0")
+    if orig:
+        outstanding = _sale_outstanding(db, orig)
+        if outstanding > 0:
+            applied_to_credit = min(gross, outstanding)
+    cash_out = gross - applied_to_credit
+
+    refund.payment_method = (
+        ("Applied to credit" if cash_out <= 0 else METHOD_LABELS[method] + " refund + credit applied")
+        if applied_to_credit > 0 else METHOD_LABELS[method] + " refund"
+    )
     refund.amount_tendered = Decimal("0")
-    refund.change_amount = gross  # cash paid out to customer
+    refund.change_amount = cash_out  # only the leftover, if any, paid out to customer
     db.flush()
+    if applied_to_credit > 0:
+        db.add(models.ReceivableSettlement(
+            sale_id=orig.id, method="credit_note", amount=applied_to_credit,
+            source_sale_id=refund.id, cashier_id=user.id,
+        ))
     # Point the refund at the invoice it came from (REF-45); fall back to a
     # sequential number for refunds with no original invoice.
-    refund.invoice_no = _linked_ref(db, "REF", orig) or f"REF-{refund.id:06d}"
+    refund.invoice_no = typed_invoice or _linked_ref(db, "REF", orig) or f"REF-{refund.id:06d}"
     db.commit()
     return {"ok": True, "sale_id": refund.id, "invoice_no": refund.invoice_no}
 
@@ -472,11 +568,21 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
     if not returned and not new_lines:
         return JSONResponse({"ok": False, "error": "Nothing to exchange."}, status_code=400)
 
+    typed_invoice = (data.get("invoice_no") or "").strip()
+    if typed_invoice and db.query(models.Sale).filter(models.Sale.invoice_no == typed_invoice).first():
+        return JSONResponse({"ok": False, "error": f"Invoice number '{typed_invoice}' is already used."}, status_code=400)
+
+    # Same as a normal sale: a typed customer name gets its own Customer
+    # record (created if new), not just free text on the receipt — otherwise
+    # it can't show up in the Customers list or their purchase history.
+    typed_customer_name = (data.get("customer_name") or "").strip()
+    typed_customer = get_or_create_customer(db, typed_customer_name) if (not orig and typed_customer_name) else None
+
     ex = models.Sale(
         txn_type="exchange",
         original_sale_id=orig.id if orig else None,
-        customer_name=(orig.customer_name if orig else (data.get("customer_name") or None)),
-        customer_id=(orig.customer_id if orig else None),
+        customer_name=(orig.customer_name if orig else (typed_customer.name if typed_customer else None)),
+        customer_id=(orig.customer_id if orig else (typed_customer.id if typed_customer else None)),
         cashier_id=user.id,
         # See pos_refund: no matched invoice means the returned item(s) and
         # their price(s) came from an inventory search, not a verified sale
@@ -485,11 +591,9 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
     )
     db.add(ex)
 
-    vat_applied = bool(data.get("vat_applied"))   # VAT on the NEW items
+    vat_applied = bool(data.get("vat_applied"))   # VAT on the amount actually due, see below
     returned_total = Decimal("0")
-    returned_vat_base = Decimal("0")              # returned items that carried VAT
     new_total = Decimal("0")
-    new_vat_base = Decimal("0")
 
     for it in returned:
         qty = _dec(it.get("qty"))
@@ -499,8 +603,6 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
         factor = _dec(it.get("factor"), "1")
         value = qty * unit_price
         returned_total += value
-        if bool(it.get("is_vat")):
-            returned_vat_base += value
         product = db.get(models.Product, int(it["product_id"])) if it.get("product_id") else None
         if product:
             _add_stock(product, qty * factor)
@@ -518,13 +620,11 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
         unit_price = _dec(ln.get("unit_price"))
         factor = _dec(ln.get("factor"), "1")
         discount = _dec(ln.get("discount"))
-        is_vat = vat_applied   # VAT is a whole-transaction toggle, same as a sale
+        is_vat = vat_applied   # per-line flag for reporting; see below for the actual VAT charged
         lt = qty * unit_price - discount
         if lt < 0:
             lt = Decimal("0")
         new_total += lt
-        if is_vat:
-            new_vat_base += lt
         product = db.get(models.Product, int(ln["product_id"])) if ln.get("product_id") else None
         if product:
             _deduct_stock(product, qty * factor)
@@ -536,44 +636,116 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
             price_tier=(ln.get("tier") or "fixed"),
         ))
 
-    # Both sides are already VAT-inclusive, so the difference is a straight
-    # comparison; VAT is extracted from each side for reporting only.
-    returned_vat = _vat_of(returned_vat_base)
-    new_vat = _vat_of(new_vat_base)
+    # Both sides are already VAT-inclusive. VAT is extracted from the amount
+    # actually changing hands now (the difference) — not from the new items'
+    # total on its own — since that's the number on the receipt the customer
+    # is being asked to pay (or refunded).
     diff = _money(new_total - returned_total)  # >0 customer pays, <0 cash refund
+    if vat_applied:
+        vat_amt = _vat_of(abs(diff))
+        vat_signed = vat_amt if diff >= 0 else -vat_amt
+    else:
+        vat_signed = Decimal("0")
 
     ex.subtotal = _money(new_total)
-    ex.vat_amount = new_vat - returned_vat
-    ex.net_amount = diff - (new_vat - returned_vat)
+    ex.vat_amount = vat_signed
+    ex.net_amount = diff - vat_signed
     ex.total = diff
+    pending_cheque = None   # filled in below if the customer owes and pays by cheque
+    pending_credit_note = None   # filled in below if a refund gets applied to an old credit balance
     if diff > 0:
+        # Same channels a normal sale accepts, since this is genuinely money
+        # the customer still owes: Cash/GCash/Bank Transfer settle now;
+        # Cheque and Credit both sit as a receivable until cleared/paid off.
         method = (data.get("payment_method") or "cash").strip().lower()
-        if method not in METHOD_LABELS or method in ("receivable", "cheque"):
+        if method not in ("cash", "gcash", "bank_transfer", "cheque", "receivable"):
             method = "cash"
-        # Cash is the only method where "handed over more than owed, give
-        # change back" is a real physical thing — GCash/Card/Bank Transfer are
-        # exact-amount transfers, so those still just charge the difference.
-        if method == "cash":
-            tendered = _dec(data.get("amount_tendered"))
-            if tendered < diff:
-                return JSONResponse({"ok": False, "error": "Amount tendered can't be less than the amount owed."}, status_code=400)
+        if method in ("cheque", "receivable") and not ex.customer_id:
+            return JSONResponse({"ok": False, "error": "Cheque or Credit needs a customer name."}, status_code=400)
+
+        if method == "receivable":
+            ex.receivable_amount = diff
+            ex.amount_tendered = Decimal("0")
+            ex.change_amount = Decimal("0")
+            ex.payment_method = METHOD_LABELS[method]
+            customer = db.get(models.Customer, ex.customer_id)
+            days = customer.credit_days if customer and customer.credit_days is not None else 15
+            ex.due_date = date.today() + timedelta(days=int(days))
+        elif method == "cheque":
+            raw_date = (data.get("cheque_date") or "").strip()
+            try:
+                cheque_date = date.fromisoformat(raw_date)
+            except ValueError:
+                return JSONResponse({"ok": False, "error": "Enter a valid cheque date (the date printed on the cheque)."}, status_code=400)
+            ex.receivable_amount = diff   # not cash in hand until it clears — see _finalize_sale
+            ex.amount_tendered = Decimal("0")
+            ex.change_amount = Decimal("0")
+            ex.payment_method = METHOD_LABELS[method]
+            pending_cheque = {
+                "amount": diff, "cheque_date": cheque_date,
+                "bank": (data.get("bank") or "").strip() or None,
+                "cheque_no": (data.get("cheque_no") or "").strip() or None,
+            }
         else:
-            tendered = diff
-        change = _money(tendered - diff)
-        ex.payments.append(models.Payment(method=method, amount=_money(tendered)))
-        ex.amount_tendered = _money(tendered)
-        ex.change_amount = change
-        ex.payment_method = METHOD_LABELS[method]
+            # Cash is the only method where "handed over more than owed, give
+            # change back" is a real physical thing — GCash/Bank Transfer are
+            # exact-amount transfers, so those still just charge the difference.
+            if method == "cash":
+                # Amount received is optional — just for change. Left blank or
+                # under what's owed, assume they were handed exactly the amount due.
+                tendered = _dec(data.get("amount_tendered"))
+                if tendered < diff:
+                    tendered = diff
+            else:
+                tendered = diff
+            change = _money(tendered - diff)
+            ex.payments.append(models.Payment(method=method, amount=_money(tendered)))
+            ex.amount_tendered = _money(tendered)
+            ex.change_amount = change
+            ex.payment_method = METHOD_LABELS[method]
     elif diff < 0:
+        # Money going back OUT to the customer — unless the original sale
+        # is still owed on (bought on credit, unpaid), in which case the
+        # returned goods were never actually paid for, so this reduces that
+        # credit balance first instead of paying cash for it. Only whatever's
+        # left over (return worth more than what's still owed) pays out.
+        method = (data.get("payment_method") or "cash").strip().lower()
+        if method not in ("cash", "gcash", "bank_transfer", "cheque"):
+            method = "cash"
+        gross = -diff
+        applied_to_credit = Decimal("0")
+        if orig:
+            outstanding = _sale_outstanding(db, orig)
+            if outstanding > 0:
+                applied_to_credit = min(gross, outstanding)
+        cash_out = gross - applied_to_credit
+
         ex.amount_tendered = Decimal("0")
-        ex.change_amount = _money(-diff)  # cash refunded to customer
-        ex.payment_method = "Cash refund"
+        ex.change_amount = cash_out  # only the leftover, if any, paid out to customer
+        ex.payment_method = (
+            ("Applied to credit" if cash_out <= 0 else METHOD_LABELS[method] + " refund + credit applied")
+            if applied_to_credit > 0 else METHOD_LABELS[method] + " refund"
+        )
+        if applied_to_credit > 0:
+            pending_credit_note = applied_to_credit
     else:
         ex.payment_method = "Even exchange"
 
     db.flush()
     # Same idea as refunds: point the exchange at the invoice it came from.
-    ex.invoice_no = _linked_ref(db, "EXC", orig) or f"EXC-{ex.id:06d}"
+    ex.invoice_no = typed_invoice or _linked_ref(db, "EXC", orig) or f"EXC-{ex.id:06d}"
+    if pending_cheque:
+        db.add(models.PostDatedCheque(
+            direction="received", amount=_money(pending_cheque["amount"]),
+            bank=pending_cheque["bank"], cheque_no=pending_cheque["cheque_no"],
+            cheque_date=pending_cheque["cheque_date"],
+            sale_id=ex.id, customer_id=ex.customer_id, created_by=user.id,
+        ))
+    if pending_credit_note:
+        db.add(models.ReceivableSettlement(
+            sale_id=orig.id, method="credit_note", amount=pending_credit_note,
+            source_sale_id=ex.id, cashier_id=user.id,
+        ))
     db.commit()
     return {"ok": True, "sale_id": ex.id, "invoice_no": ex.invoice_no}
 

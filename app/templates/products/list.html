@@ -36,6 +36,7 @@
 <div class="tabs">
   <a class="tab {{ '' if alert else 'active' }}" href="/products">All Products</a>
   <a class="tab {{ 'active' if alert }}" href="/products?alert=1">⚠ Price Review Needed</a>
+  <a class="tab" href="/products/pricing">Selling Price</a>
 </div>
 
 {% set qs_base = ('q=' ~ q ~ '&' if q) ~ ('alert=1&' if alert) %}

@@ -2,13 +2,20 @@
 {% block title %}Sales history · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1 class="page-title">Sales</h1>
+  <h1 class="page-title">
+    {% if tab == 'returns' %}Sales Returns
+    {%- elif tab == 'exchange' %}Exchange of Items
+    {%- else %}Sales{% endif %}
+  </h1>
 </div>
 
 <div class="tabs">
-  <a class="tab {{ 'active' if tab == 'all' }}" href="/sales">All Sales</a>
-  <a class="tab {{ 'active' if tab == 'receivables' }}" href="/sales/receivables">Receivables (Credits)</a>
-  <a class="tab" href="/quotations">Quotations</a>
+  <a class="tab {{ 'active' if tab == 'all' }}" href="/sales">Cash Sales</a>
+  <a class="tab {{ 'active' if tab == 'receivables' }}" href="/sales/receivables">Credit Sales (Accounts Receivable)</a>
+  <a class="tab" href="/quotations">Sales Quotation</a>
+  <a class="tab" href="/sales/returns">Sales Returns</a>
+  <a class="tab" href="/sales/exchanges">Exchange of Items</a>
+  <a class="tab" href="/customers">Customers</a>
 </div>
 
 <div class="stat-row">
@@ -67,7 +74,7 @@
       {% for s in sales %}
       <tr>
         <td class="strong">{{ s.invoice_no }}</td>
-        <td><span class="txn txn-{{ s.txn_type }}">{{ s.txn_type|capitalize }}</span></td>
+        <td><span class="txn txn-{{ s.txn_type }}">{{ types.get(s.txn_type, s.txn_type|capitalize) }}</span></td>
         <td>{{ s.created_at.strftime('%b %d, %Y %I:%M %p') if s.created_at else '' }}</td>
         <td>{{ s.customer_name or 'Walk-in' }}</td>
         <td>{{ s.payment_method or '—' }}</td>

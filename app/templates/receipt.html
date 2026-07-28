@@ -36,6 +36,9 @@
     td { padding:7px 0; vertical-align:top; }
     .num { text-align:right; font-variant-numeric:tabular-nums; }
     .r-item small { color:var(--muted); display:block; font-size:11.5px; }
+    .r-section-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:#1d4ed8; margin:14px 0 2px; }
+    .r-section-label.returned { color:#b91c1c; }
+    .r-section-label:first-child { margin-top:0; }
     .r-tot { border-top:1px dashed var(--line); margin-top:10px; padding-top:10px; }
     .r-tot .row { display:flex; justify-content:space-between; font-size:13px; padding:3px 0; color:var(--muted); }
     .r-tot .row b { color:var(--ink); }
@@ -134,9 +137,49 @@
     </div>
     {% endfor %}
 
+    {% set returned_lines = sale.lines|selectattr('qty', 'lt', 0)|list %}
+    {% set sold_lines = sale.lines|selectattr('qty', 'ge', 0)|list %}
+
+    {% if sale.txn_type == 'exchange' and returned_lines and sold_lines %}
+    {# Exchange: keep what was bought and what was returned clearly apart. #}
+    {% if sold_lines %}
+    <div class="r-section-label">Items Purchased</div>
+    <table>
+      <thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Amount</th></tr></thead>
+      <tbody>
+        {% for l in sold_lines %}
+        <tr>
+          <td class="r-item">{{ l.product_name }}
+            <small>{{ l.qty|qty }} {{ l.unit_name }}{% if l.price_tier in ('markup', 'margin') %} ({{ l.price_tier|title }}){% endif %} × {{ l.unit_price|peso }}{% if l.discount and l.discount > 0 %} − {{ l.discount|peso }}{% endif %}</small>
+          </td>
+          <td class="num">{{ l.qty|qty }}</td>
+          <td class="num">{{ l.line_total|peso }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    {% if returned_lines %}
+    <div class="r-section-label returned">Items Returned</div>
+    <table>
+      <thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Amount</th></tr></thead>
+      <tbody>
+        {% for l in returned_lines %}
+        <tr>
+          <td class="r-item">{{ l.product_name }}
+            <small>{{ (-l.qty)|qty }} {{ l.unit_name }} × {{ l.unit_price|peso }}</small>
+          </td>
+          <td class="num">{{ (-l.qty)|qty }}</td>
+          <td class="num">{{ (-l.line_total)|peso }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    {% else %}
     <table>
       <thead>
-        <tr><th>Item</th><th class="num">Qty</th><th class="num">Amount</th></tr>
+        <tr><th>{{ 'Item returned' if sale.txn_type == 'refund' else 'Item' }}</th><th class="num">Qty</th><th class="num">Amount</th></tr>
       </thead>
       <tbody>
         {% for l in sale.lines %}
@@ -150,6 +193,7 @@
         {% endfor %}
       </tbody>
     </table>
+    {% endif %}
 
     <div class="r-tot">
       <div class="row"><span>Subtotal</span><b>{{ sale.subtotal|peso }}</b></div>
@@ -196,9 +240,6 @@
     <a class="btn back" href="/quotations/{{ quote }}">← Back to Quotation</a>
     {% else %}
     <a class="btn back" href="/pos">← New sale</a>
-    {% endif %}
-    {% if sale.txn_type == 'sale' %}
-    <a class="btn back" href="/deliveries/new?sale_id={{ sale.id }}">📦 Schedule Delivery</a>
     {% endif %}
     {% if thermal %}
     <a class="btn back" href="/pos/receipt/{{ sale.id }}?from={{ from }}&cust={{ cust }}&quote={{ quote }}">🧾 Full-page view</a>

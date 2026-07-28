@@ -82,16 +82,12 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 3h3l2.4 12.3a1.5 1.5 0 0 0 1.5 1.2h8.2a1.5 1.5 0 0 0 1.5-1.2L22 7H6"/></svg>
         <span>POS</span>
       </a>
-      <a class="nav-item {{ 'active' if path.startswith('/deliveries') }}" href="/deliveries">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M2 8h11v8H2z"/><path d="M13 11h4l3 3v2h-7z"/><circle cx="6.5" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/></svg>
-        <span>Deliveries</span>
-      </a>
       {% if is_admin %}
       <a class="nav-item {{ 'active' if path.startswith('/sales') or path.startswith('/quotations') }}" href="/sales">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 4h16v4H4z"/><path d="M4 8v12h16V8"/><path d="M9 12h6"/><path d="M9 16h6"/></svg>
         <span>Sales</span>
       </a>
-      <a class="nav-item {{ 'active' if path.startswith('/suppliers') or path.startswith('/purchases') }}" href="/suppliers">
+      <a class="nav-item {{ 'active' if path.startswith('/suppliers') or path.startswith('/purchases') }}" href="/purchases/new">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 9h13v8H3z"/><path d="M16 12h3.5l1.5 3v2h-5"/><circle cx="7" cy="18" r="1.6"/><circle cx="17.5" cy="18" r="1.6"/></svg>
         <span>Suppliers</span>
       </a>
@@ -117,10 +113,6 @@
         </div>
       </details>
       {% endif %}
-      <a class="nav-item {{ 'active' if path.startswith('/customers') }}" href="/customers">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="8" r="3.2"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>
-        <span>Customers</span>
-      </a>
       <a class="nav-item {{ 'active' if path.startswith('/credits') }}" href="/credits">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 9.5h19"/></svg>
         <span>Credits</span>

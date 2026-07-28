@@ -419,22 +419,33 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
                 )
             original_purchase_id = original.id
 
-    # Simple, one-step logging: a receive is stocked, costed and paid all at
-    # once (no pending/confirmed staging) — same as a return taking effect
-    # immediately. Cheque still opens a Post-Dated Cheque record to track
-    # separately, but the purchase itself is considered settled either way.
+    # Stocked and costed in one step either way — that part never waits.
+    # Payment is usually settled the same time (Cash/Bank Transfer/Cheque/
+    # GCash/Other), but "Payable (Unpaid)" leaves it owed to the supplier
+    # instead, same as the old confirmed-but-unpaid stage — it just shows up
+    # under Payables now rather than being a separate step to get there.
     payment_method = None
+    is_payable = False
     if txn_type == "receive":
-        payment_method = (data.get("payment_method") or "cash").strip().lower()
-        if payment_method not in dict(PAYMENT_METHODS):
-            payment_method = "cash"
+        raw_method = (data.get("payment_method") or "cash").strip().lower()
+        if raw_method == "payable":
+            is_payable = True
+        else:
+            payment_method = raw_method if raw_method in dict(PAYMENT_METHODS) else "cash"
+
+    supplier = db.get(models.Supplier, supplier_id)
+    due_date = None
+    if is_payable:
+        days = supplier.payment_days if supplier and supplier.payment_days is not None else 30
+        due_date = date.today() + timedelta(days=int(days))
 
     purchase = models.Purchase(
         txn_type=txn_type,
-        status="confirmed" if txn_type == "return" else "paid",
+        status="confirmed" if (txn_type == "return" or is_payable) else "paid",
         confirmed_at=func.now(),
-        paid_at=func.now() if txn_type == "receive" else None,
+        paid_at=func.now() if (txn_type == "receive" and not is_payable) else None,
         payment_method=payment_method,
+        due_date=due_date,
         supplier_id=supplier_id,
         original_purchase_id=original_purchase_id,
         invoice_no=(data.get("invoice_no") or "").strip() or None,
@@ -527,6 +538,53 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
 
     db.commit()
     return {"ok": True, "purchase_id": purchase.id, "ref_no": purchase.ref_no}
+
+
+@router.post("/purchases/{purchase_id:int}/mark-paid")
+async def mark_purchase_paid(purchase_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Settle a payable — the only step left for a receive that was logged
+    as unpaid at the time. Stock and cost already moved when it was created;
+    this just closes out what's owed."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+    purchase = db.get(models.Purchase, purchase_id)
+    if not purchase or purchase.txn_type != "receive" or purchase.status != "confirmed":
+        return RedirectResponse(f"/purchases/{purchase_id}", status_code=http_status.HTTP_302_FOUND)
+
+    form = await request.form()
+    method = (form.get("payment_method") or "cash").strip().lower()
+    if method not in dict(PAYMENT_METHODS):
+        method = "cash"
+
+    if method == "cheque":
+        raw_date = (form.get("cheque_date") or "").strip()
+        try:
+            cheque_date = date.fromisoformat(raw_date)
+        except ValueError:
+            return RedirectResponse(
+                f"/purchases/{purchase_id}?error=Enter+a+valid+cheque+date.", status_code=http_status.HTTP_302_FOUND
+            )
+        db.add(models.PostDatedCheque(
+            direction="issued", amount=purchase.total,
+            bank=(form.get("bank") or "").strip() or None,
+            cheque_no=(form.get("cheque_no") or "").strip() or None,
+            cheque_date=cheque_date,
+            purchase_id=purchase.id, supplier_id=purchase.supplier_id,
+            created_by=user.id,
+        ))
+
+    purchase.status = "paid"
+    purchase.payment_method = method
+    purchase.paid_at = func.now()
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="purchase",
+        entity_id=purchase.id, entity_label=purchase.ref_no,
+        summary=f"Marked {purchase.ref_no} as paid via {dict(PAYMENT_METHODS)[method]}",
+    )
+    db.commit()
+    return RedirectResponse(f"/purchases/{purchase_id}", status_code=http_status.HTTP_302_FOUND)
 
 
 @router.post("/purchases/{purchase_id:int}/cancel")
@@ -622,5 +680,5 @@ def view_purchase(
         {"request": request, "app_name": request.app.title, "user": user,
          "purchase": purchase, "rows": rows, "alerts": alerts,
          "linked_returns": linked_returns, "error": error, "pending_pdc": pending_pdc,
-         "today": date.today()},
+         "today": date.today(), "payment_methods": PAYMENT_METHODS},
     )

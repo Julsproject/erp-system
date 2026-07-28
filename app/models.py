@@ -198,7 +198,10 @@ class Sale(Base):
 
     lines = relationship("SaleLine", back_populates="sale", cascade="all, delete-orphan")
     payments = relationship("Payment", back_populates="sale", cascade="all, delete-orphan")
-    settlements = relationship("ReceivableSettlement", back_populates="sale", cascade="all, delete-orphan")
+    settlements = relationship(
+        "ReceivableSettlement", back_populates="sale", cascade="all, delete-orphan",
+        foreign_keys="ReceivableSettlement.sale_id",
+    )
     cashier = relationship("User")
     customer = relationship("Customer")
 
@@ -315,15 +318,20 @@ class ReceivableSettlement(Base):
 
     id = Column(Integer, primary_key=True)
     sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False)
-    method = Column(String(20), nullable=False)  # cash | gcash | card | bank_transfer | cheque
+    method = Column(String(20), nullable=False)  # cash | gcash | card | bank_transfer | cheque | credit_note
     amount = Column(Numeric(12, 2), nullable=False, server_default="0")
     bank = Column(String(60))          # for cheque
     cheque_no = Column(String(40))     # for cheque
     cheque_date = Column(String(20))   # for cheque (kept as text for now)
+    # Set only when method is "credit_note" — the return/exchange sale whose
+    # value was applied here instead of paid in cash, so a customer's
+    # statement can point at exactly which transaction did it.
+    source_sale_id = Column(Integer, ForeignKey("sales.id"), nullable=True)
     cashier_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    sale = relationship("Sale", back_populates="settlements")
+    sale = relationship("Sale", back_populates="settlements", foreign_keys=[sale_id])
+    source_sale = relationship("Sale", foreign_keys=[source_sale_id])
 
 
 class PostDatedCheque(Base):

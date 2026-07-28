@@ -20,7 +20,7 @@ router = APIRouter()
 
 SETTLE_METHODS = [("cash", "Cash"), ("gcash", "GCash"), ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque")]
 PAGE_SIZE = 20
-TYPE_LABELS = {"sale": "Sale", "refund": "Refund", "exchange": "Exchange"}
+TYPE_LABELS = {"sale": "Sale", "refund": "Return", "exchange": "Sale x Exchange"}
 
 
 def _parse_date(s: str):
@@ -85,7 +85,11 @@ def _filtered_sales_query(db: Session, q: str, type_filter: str, date_from, date
     if q:
         like = f"%{q}%"
         query = query.filter(or_(models.Sale.invoice_no.ilike(like), models.Sale.customer_name.ilike(like)))
-    if type_filter in TYPE_LABELS:
+    if type_filter == "sale":
+        # An exchange is labeled "Sale x Exchange" precisely because it
+        # includes a sale — filtering to "Sale" should catch those too.
+        query = query.filter(models.Sale.txn_type.in_(("sale", "exchange")))
+    elif type_filter in TYPE_LABELS:
         query = query.filter(models.Sale.txn_type == type_filter)
     if date_from:
         query = query.filter(_local_date(models.Sale.created_at) >= date_from)
@@ -128,10 +132,13 @@ def sales_history(
         .all()
     )
     totals = {"count": total_count, "sales": Decimal(str(total_sales or 0))}
+    # The Sales Returns / Exchange of Items tabs are this same list, just
+    # pre-filtered by type — so the right tab highlights when they're used.
+    tab = {"refund": "returns", "exchange": "exchange"}.get(type_filter, "all")
     return templates.TemplateResponse(
         "sales/list.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "sales": sales_page, "totals": totals, "tab": "all", "q": q,
+         "sales": sales_page, "totals": totals, "tab": tab, "q": q,
          "type_filter": type_filter, "date_from": date_from, "date_to": date_to,
          "types": TYPE_LABELS, "page": page, "pages": pages},
     )
@@ -196,6 +203,64 @@ def export_sales(
         content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/sales/returns", response_class=HTMLResponse)
+def sales_returns(request: Request, page: int = 1, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Straight, unfiltered listing of what product was actually returned on
+    each refund — the search/type/date Filters panel belongs on Cash Sales,
+    not here; this is meant to be glanced at, not sliced."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+    page = max(page, 1)
+
+    query = (
+        db.query(models.SaleLine, models.Sale)
+        .join(models.Sale, models.Sale.id == models.SaleLine.sale_id)
+        .filter(models.Sale.txn_type == "refund")
+        .order_by(models.Sale.id.desc(), models.SaleLine.id.asc())
+    )
+    total_count = query.count()
+    pages = max((total_count + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+    page = min(page, pages)
+    rows = query.offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE).all()
+
+    return templates.TemplateResponse(
+        "sales/returns.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "rows": rows, "total_count": total_count, "page": page, "pages": pages},
+    )
+
+
+@router.get("/sales/exchanges", response_class=HTMLResponse)
+def sales_exchanges(request: Request, page: int = 1, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Same idea as Sales Returns, but for exchanges — each row is one
+    product moved, tagged with which direction it moved (given back vs
+    taken), so it reads as "what did they actually exchange" at a glance."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+    page = max(page, 1)
+
+    query = (
+        db.query(models.SaleLine, models.Sale)
+        .join(models.Sale, models.Sale.id == models.SaleLine.sale_id)
+        .filter(models.Sale.txn_type == "exchange")
+        .order_by(models.Sale.id.desc(), models.SaleLine.id.asc())
+    )
+    total_count = query.count()
+    pages = max((total_count + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+    page = min(page, pages)
+    rows = query.offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE).all()
+
+    return templates.TemplateResponse(
+        "sales/exchanges.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "rows": rows, "total_count": total_count, "page": page, "pages": pages},
     )
 
 

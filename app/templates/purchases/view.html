@@ -28,6 +28,12 @@
     {{ purchase.confirmed_at.strftime('%b %d, %Y %I:%M %p') if purchase.confirmed_at else '' }},
     settled via {{ purchase.payment_method|replace('_',' ')|title }}.
   </div>
+  {% elif purchase.status == 'confirmed' %}
+  <div class="quo-status-banner" style="background:#fef3c7;border-color:#fcd34d;color:#92400e;">
+    <strong>Payable — not yet paid.</strong> Stock was added and cost updated on
+    {{ purchase.confirmed_at.strftime('%b %d, %Y %I:%M %p') if purchase.confirmed_at else '' }}.
+    {% if purchase.due_date %}Due {{ purchase.due_date.strftime('%b %d, %Y') }}.{% endif %}
+  </div>
   {% else %}
   <div class="quo-status-banner cancelled">
     <strong>Cancelled</strong>{% if purchase.cancelled_at %} on {{ purchase.cancelled_at.strftime('%b %d, %Y %I:%M %p') }}{% endif %}.
@@ -145,6 +151,28 @@
   <a class="btn-link" href="/pdc/{{ pending_pdc.id }}">View the cheque →</a>
 </section>
 {% endif %}
+{% endif %}
+
+{% if purchase.txn_type == 'receive' and purchase.status == 'confirmed' %}
+<section class="card" style="padding:20px;margin-top:6px;max-width:480px;">
+  <h3 class="card-title">Mark as paid</h3>
+  <p class="muted" style="margin-top:0;">Settle the {{ purchase.total|peso }} owed to {{ purchase.supplier.name if purchase.supplier else 'the supplier' }}.</p>
+  <form method="post" action="/purchases/{{ purchase.id }}/mark-paid" onsubmit="return document.getElementById('payMethod').value !== 'cheque' || document.getElementById('payChequeDate').value !== '';">
+    <label class="pos-customer">Payment method
+      <select name="payment_method" id="payMethod" onchange="document.getElementById('payChequeFields').style.display = this.value === 'cheque' ? 'grid' : 'none';">
+        {% for value, label in payment_methods %}
+        <option value="{{ value }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div id="payChequeFields" class="cheque-grid" style="display:none;margin-top:10px;">
+      <label>Bank<input name="bank" type="text" placeholder="e.g. BDO"></label>
+      <label>Cheque #<input name="cheque_no" type="text" placeholder="000123"></label>
+      <label>Cheque date<input name="cheque_date" id="payChequeDate" type="date"></label>
+    </div>
+    <button class="btn" type="submit" style="margin-top:14px;">Mark Paid</button>
+  </form>
+</section>
 {% endif %}
 
 {% if purchase.status != 'cancelled' %}

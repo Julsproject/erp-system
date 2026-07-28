@@ -9,6 +9,15 @@
   <a class="btn" href="/customers/new">+ Add customer</a>
 </div>
 
+<div class="tabs">
+  <a class="tab" href="/sales">Cash Sales</a>
+  <a class="tab" href="/sales/receivables">Credit Sales (Accounts Receivable)</a>
+  <a class="tab" href="/quotations">Sales Quotation</a>
+  <a class="tab" href="/sales/returns">Sales Returns</a>
+  <a class="tab" href="/sales/exchanges">Exchange of Items</a>
+  <a class="tab active" href="/customers">Customers</a>
+</div>
+
 {% if (user.role or '')|lower == 'admin' %}
 <div class="stat-row">
   <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>Customer{{ '' if total == 1 else 's' }}</span></div>

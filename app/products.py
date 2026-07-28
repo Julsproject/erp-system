@@ -16,7 +16,7 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from fastapi import APIRouter, Depends, File, Request, UploadFile, status
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -245,10 +245,16 @@ def _save_from_form(product: models.Product, db: Session, form):
     product.category = _get_or_create_category(db, form.get("category"))
     product.unit_type = _get_or_create_unit_type(db, form.get("unit_type"))
     product.cost_price = _to_decimal(form.get("cost_price"))
-    product.selling_price = _to_decimal(form.get("selling_price"))   # the fixed price
-    # The other two prices are derived from cost, so they refresh whenever the
-    # cost or either percentage is edited.
-    pricing.apply_to(product, product.cost_price, form.get("markup_pct"), form.get("margin_pct"))
+    # Selling prices are set on the Add-product form and from then on only
+    # through the dedicated Selling Price tab (see /products/pricing) — the
+    # edit form here doesn't carry these fields, so leave the fixed price and
+    # both percentages untouched. Markup/margin prices still get refreshed
+    # against whatever the cost is now, so they don't go stale if it changed.
+    markup_pct = form.get("markup_pct") if "markup_pct" in form else product.markup_pct
+    margin_pct = form.get("margin_pct") if "margin_pct" in form else product.margin_pct
+    if "selling_price" in form:
+        product.selling_price = _to_decimal(form.get("selling_price"))   # the fixed price
+    pricing.apply_to(product, product.cost_price, markup_pct, margin_pct)
     product.beginning_stock = _to_decimal(form.get("beginning_stock"))
     product.stock_qty = _to_decimal(form.get("stock_qty"))
     product.reorder_level = _to_decimal(form.get("reorder_level"))
@@ -336,6 +342,73 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
             ))
     db.commit()
     return RedirectResponse("/products", status_code=status.HTTP_302_FOUND)
+
+
+@router.get("/products/pricing", response_class=HTMLResponse)
+def pricing_tool(request: Request, user=Depends(get_current_user)):
+    """A fast search-and-save screen for touching up just the selling
+    price(s) of an existing product — the full edit form no longer carries
+    these fields, since this is the quicker path for the day-to-day 'raise
+    this one price a bit' case."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    return templates.TemplateResponse("products/pricing.html", {"request": request, "app_name": request.app.title, "user": user})
+
+
+@router.get("/products/price-search")
+def price_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    q = (q or "").strip()
+    query = db.query(models.Product).filter(models.Product.is_active.is_(True))
+    if q:
+        barcode_hit = query.filter(models.Product.barcode == q).first()
+        products = [barcode_hit] if barcode_hit else (
+            query.filter(models.Product.name.ilike(f"%{q}%")).order_by(models.Product.name).limit(20).all()
+        )
+    else:
+        products = query.order_by(models.Product.name).limit(20).all()
+    return {"products": [
+        {
+            "id": p.id, "name": p.name, "barcode": p.barcode,
+            "cost_price": float(p.cost_price or 0),
+            "selling_price": float(p.selling_price or 0),
+            "markup_pct": float(p.markup_pct or 0),
+            "margin_pct": float(p.margin_pct or 0),
+        }
+        for p in products
+    ]}
+
+
+@router.post("/products/{product_id:int}/pricing")
+async def update_pricing(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    product = db.get(models.Product, product_id)
+    if not product:
+        return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
+    data = await request.json()
+    before = _product_snapshot(product)
+    product.selling_price = _to_decimal(data.get("selling_price"))
+    pricing.apply_to(product, product.cost_price, data.get("markup_pct"), data.get("margin_pct"))
+    db.flush()
+    after = _product_snapshot(product)
+    changes = audit.diff(before, after)
+    if changes:
+        audit.record(
+            db, user=user, request=request, action="update",
+            entity_type="product", entity_id=product.id, entity_label=product.name,
+            summary=f"Updated selling price for “{product.name}”",
+            changes=changes,
+        )
+    db.commit()
+    return {
+        "ok": True,
+        "cost_price": float(product.cost_price or 0),
+        "selling_price": float(product.selling_price or 0),
+        "markup_pct": float(product.markup_pct or 0),
+        "margin_pct": float(product.margin_pct or 0),
+    }
 
 
 @router.post("/products/{product_id:int}/archive")

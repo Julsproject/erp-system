@@ -7,9 +7,7 @@
 </div>
 
 <div class="pos-modes">
-  <button type="button" class="mode-btn active" data-m="payment" onclick="setMode('payment')">Payment</button>
-  <button type="button" class="mode-btn" data-m="refund" onclick="setMode('refund')">Refund</button>
-  <button type="button" class="mode-btn" data-m="exchange" onclick="setMode('exchange')">Exchange</button>
+  <button type="button" class="mode-btn active" data-m="payment" onclick="setMode('payment')">Sale</button>
   <button type="button" class="mode-btn" data-m="quotation" onclick="setMode('quotation')">Quotation</button>
 </div>
 
@@ -20,7 +18,46 @@
     <div id="posResults" class="pos-results">
       <p class="pos-hint">Type a product name to begin.</p>
     </div>
+    <button type="button" class="btn-secondary np-open" id="npOpenBtn" onclick="showNewProduct()">＋ Not in inventory? Create product</button>
   </section>
+
+  <!-- POPUP: create a product not yet in inventory. No selling-price fields —
+       that's the owner's call, not a cashier's; this sale's price is typed
+       directly on the cart line after adding it. -->
+  <div id="npOverlay" class="modal-overlay" style="display:none;" onclick="if (event.target === this) hideNewProduct();">
+    <div class="modal-box np-panel">
+      <h3 class="np-title">New product</h3>
+      <label>Product name
+        <input id="npName" type="text" autocomplete="off">
+      </label>
+      <label>Category
+        <input id="npCategory" type="text" list="np-cats" placeholder="optional" autocomplete="off">
+      </label>
+      <label>Unit type
+        <input id="npUnit" type="text" list="np-units" placeholder="Piece" autocomplete="off">
+      </label>
+      <label>Cost (₱) <span class="muted">— optional</span>
+        <input id="npCost" type="number" step="0.01" min="0" placeholder="0.00">
+      </label>
+      <label>Beginning stock <span class="muted">— optional</span>
+        <input id="npBeginning" type="number" step="0.001" min="0" placeholder="0">
+      </label>
+      <label>Stock qty <span class="muted">— optional</span>
+        <input id="npStockQty" type="number" step="0.001" min="0" placeholder="0">
+      </label>
+      <label>Low stock alert at <span class="muted">— optional</span>
+        <input id="npReorder" type="number" step="0.001" min="0" placeholder="0">
+      </label>
+      <div class="np-actions">
+        <button type="button" class="btn" onclick="createProduct()">Create &amp; add to cart</button>
+        <button type="button" class="btn-secondary" onclick="hideNewProduct()">Cancel</button>
+      </div>
+      <div id="npError" class="alert" style="display:none;margin:10px 0 0;"></div>
+      <p class="hint np-hint">No selling price here — type whatever this sale charges directly on the new cart line.</p>
+    </div>
+  </div>
+  <datalist id="np-cats">{% for c in categories %}<option value="{{ c.name }}">{% endfor %}</datalist>
+  <datalist id="np-units">{% for u in unit_types %}<option value="{{ u.name }}">{% endfor %}</datalist>
 
   <!-- RIGHT: cart -->
   <section class="card pos-cart-panel">
@@ -34,37 +71,84 @@
       </label>
     </div>
 
-    <div class="table-wrap">
-      <table class="grid cart-table">
-        <thead>
-          <tr><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Disc</th><th class="num">Total</th><th></th></tr>
-        </thead>
-        <tbody id="cartBody">
-          <tr><td colspan="7" class="empty">Cart is empty — add products from the left.</td></tr>
-        </tbody>
-      </table>
+    <div id="cartAndTotals">
+      <div class="table-wrap">
+        <table class="grid cart-table">
+          <thead>
+            <tr><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Disc</th><th class="num">Total</th><th></th></tr>
+          </thead>
+          <tbody id="cartBody">
+            <tr><td colspan="7" class="empty">Cart is empty — add products from the left.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="totals">
+        <div class="totals-row"><span>Subtotal</span><span id="tSubtotal">₱0.00</span></div>
+        <div class="totals-row">
+          <span>Discount</span>
+          <span class="disc-cell">
+            <button type="button" class="disc-toggle" id="overallDiscTypeBtn" onclick="toggleOverallDiscType()">₱</button>
+            <input id="overallDiscount" class="disc-input" type="number" step="0.01" min="0" value="0" oninput="computeTotals()">
+          </span>
+        </div>
+        <div class="totals-row" id="rowVatToggle">
+          <span><label class="vat-label"><input type="checkbox" id="vatOn" onchange="computeTotals()"> VAT (12%) · included</label></span>
+          <span id="tVat">₱0.00</span>
+        </div>
+        <div class="totals-row" id="rowNetVat" style="display:none;"><span class="muted">Net of VAT</span><span id="tNetVat">₱0.00</span></div>
+        <div class="totals-row grand" id="rowTotalSale"><span>Total Sale</span><span id="tTotal">₱0.00</span></div>
+      </div>
     </div>
 
-    <div class="totals">
-      <div class="totals-row"><span>Subtotal</span><span id="tSubtotal">₱0.00</span></div>
-      <div class="totals-row">
-        <span>Discount</span>
-        <span class="disc-cell">
-          <button type="button" class="disc-toggle" id="overallDiscTypeBtn" onclick="toggleOverallDiscType()">₱</button>
-          <input id="overallDiscount" class="disc-input" type="number" step="0.01" min="0" value="0" oninput="computeTotals()">
-        </span>
-      </div>
-      <div class="totals-row">
-        <span><label class="vat-label"><input type="checkbox" id="vatOn" onchange="computeTotals()"> VAT (12%) · included</label></span>
-        <span id="tVat">₱0.00</span>
-      </div>
-      <div class="totals-row" id="rowNetVat" style="display:none;"><span class="muted">Net of VAT</span><span id="tNetVat">₱0.00</span></div>
-      <div class="totals-row grand"><span>Total</span><span id="tTotal">₱0.00</span></div>
+    <div class="ret-toggle-row">
+      <label class="checkbox"><input type="checkbox" id="chkReturn" onchange="onTxnTypeCheck('return')"> Return</label>
+      <label class="checkbox"><input type="checkbox" id="chkExchange" onchange="onTxnTypeCheck('exchange')"> Exchange</label>
+      <span class="txn-type-badge" id="txnTypeBadge">Sale</span>
     </div>
 
-    <div class="pay">
+    <!-- RETURN / EXCHANGE — one shared process. Checking either one keeps
+         whatever's already in the cart above as-is and just stops further
+         additions to it; the search box adds to this return list instead.
+         Total Amount Due nets Total Sale against Total Return/Exchange. -->
+    <div id="returnSection" style="display:none;margin-top:4px;">
+      <h3 class="ex-h">Return / Exchange</h3>
+      <div id="returnInvoiceBox">
+        <div class="lookup-bar">
+          <input id="returnInvoice" type="text" placeholder="Invoice # being returned…" autocomplete="off">
+          <button type="button" class="btn-secondary" onclick="lookupReturn()">Find</button>
+        </div>
+        <button type="button" class="btn-link no-invoice-link" onclick="toggleReturnManual(true)">Can't find the invoice? Search inventory instead →</button>
+      </div>
+      <div id="returnManualBox" style="display:none;">
+        <div class="notice no-invoice-notice">
+          <strong>No invoice</strong> — search for the item using the product search on the left,
+          confirm the price the customer paid. This is flagged for the owner to review.
+          <button type="button" class="btn-link" onclick="toggleReturnManual(false)">← Back to invoice lookup</button>
+        </div>
+        <div class="seg" id="searchTargetSeg" style="display:none;margin-top:8px;">
+          <button type="button" class="seg-btn active" id="segTargetReturn" onclick="setSearchTarget('return')">Searching: Return item</button>
+          <button type="button" class="seg-btn" id="segTargetSale" onclick="setSearchTarget('sale')">Searching: New item</button>
+        </div>
+      </div>
+      <div id="returnInfo" class="lookup-info"></div>
+      <div class="table-wrap" id="returnItemsWrap" style="display:none;margin:12px 0;">
+        <table class="grid">
+          <thead><tr><th></th><th>Item</th><th class="num">Qty</th><th>Unit</th><th class="num">Price</th><th></th></tr></thead>
+          <tbody id="returnItems"></tbody>
+        </table>
+      </div>
+      <div class="totals-row grand"><span id="returnTotalLabel">Total Return/Exchange</span><span id="returnTotal">₱0.00</span></div>
+    </div>
+
+    <div class="totals-row" id="rowReturnVat" style="display:none;"><span class="muted">VAT</span><span id="returnVat">₱0.00</span></div>
+    <div class="totals-row grand" id="rowGrandTotal" style="display:none;">
+      <span>Total Amount Due</span><span id="tGrandTotal">₱0.00</span>
+    </div>
+
+    <div class="pay" id="salePayBlock">
       <div class="pay-head">
-        <span class="pay-title">Payment</span>
+        <span class="pay-title">Mode of Payment</span>
         <div class="seg">
           <button type="button" class="seg-btn active" id="segFull" onclick="setPaymentMode('full')">Full</button>
           <button type="button" class="seg-btn" id="segSplit" onclick="setPaymentMode('split')">Split</button>
@@ -72,14 +156,13 @@
       </div>
 
       <div id="fullPay">
-        <label class="pay-full-method">Method
+        <label class="pay-full-method">Mode
           <select id="fullMethod" onchange="onFullMethodChange()">
             <option value="cash">Cash</option>
-            <option value="gcash">GCash</option>
-            <option value="card">Card (Debit/Credit)</option>
             <option value="bank_transfer">Bank Transfer</option>
+            <option value="receivable">Credits</option>
+            <option value="gcash">GCash</option>
             <option value="cheque">Cheque</option>
-            <option value="receivable">Receivable (Credit)</option>
           </select>
         </label>
         <div class="cheque-fields" id="fullChequeFields" style="display:none;">
@@ -87,6 +170,9 @@
           <label>Bank <input id="fullChequeBank" type="text" placeholder="Optional"></label>
           <label>Cheque # <input id="fullChequeNo" type="text" placeholder="Optional"></label>
         </div>
+        <label class="pay-full-method" id="fullTenderedWrap" style="display:none;">Amount received <span class="muted">— optional, for change</span>
+          <input id="fullTendered" type="number" step="0.01" min="0" oninput="computeTotals()">
+        </label>
       </div>
 
       <div id="splitPay" style="display:none;">
@@ -101,113 +187,52 @@
       <div class="pay-warn" id="payWarn" style="display:none;"></div>
     </div>
 
+    <!-- Shown instead of the block above whenever Return/Exchange is active —
+         same look as the normal Sale payment block. Split just shows a
+         notice for now (the amount here nets to one payment either way). -->
+    <div class="pay" id="returnPayBlock" style="display:none;">
+      <div class="pay-head">
+        <span class="pay-title">Mode of Payment</span>
+        <div class="seg">
+          <button type="button" class="seg-btn active" id="retSegFull" onclick="setRetPaymentMode('full')">Full</button>
+          <button type="button" class="seg-btn" id="retSegSplit" onclick="setRetPaymentMode('split')">Split</button>
+        </div>
+      </div>
+
+      <div id="retFullPay">
+        <label class="pay-full-method" id="retPayWrap" style="display:none;">Mode
+          <select id="retMethod" onchange="onRetMethodChange()">
+            <option value="cash">Cash</option>
+            <option value="bank_transfer">Bank Transfer</option>
+            <option value="receivable" id="retMethodReceivableOpt">Credits</option>
+            <option value="gcash">GCash</option>
+            <option value="cheque">Cheque</option>
+          </select>
+        </label>
+        <div class="cheque-fields" id="retChequeFields" style="display:none;">
+          <label>Cheque date <input id="retChequeDate" type="date" oninput="computeTotals()"></label>
+          <label>Bank <input id="retChequeBank" type="text" placeholder="Optional"></label>
+          <label>Cheque # <input id="retChequeNo" type="text" placeholder="Optional"></label>
+        </div>
+        <label class="pay-full-method" id="retTenderedWrap" style="display:none;">Amount received <span class="muted">— optional, for change</span>
+          <input id="retTendered" type="number" step="0.01" min="0" oninput="computeTotals()">
+        </label>
+        <div class="totals-row change" id="retChangeRow" style="display:none;"><span>Change</span><span id="retChange">₱0.00</span></div>
+        <div class="totals-row receivable" id="retReceivableRow" style="display:none;"><span>Credits (Receivable)</span><span id="retReceivableAmt">₱0.00</span></div>
+        <div class="totals-row" id="retRefundRow" style="display:none;"><span>Refund to customer</span><span id="retRefundAmt">₱0.00</span></div>
+      </div>
+
+      <div id="retSplitNotice" class="notice" style="display:none;">
+        Splitting a return/exchange payment isn't available yet — switch back to <strong>Full</strong> to pick the method.
+      </div>
+    </div>
+
     <div class="pos-actions">
       <button class="btn-secondary" onclick="clearCart()">Clear</button>
       <button class="btn pos-complete" id="completeBtn" onclick="checkout()" disabled>Complete Sale</button>
     </div>
     <div id="posError" class="alert" style="display:none;margin-top:14px;"></div>
   </section>
-</div>
-
-<!-- REFUND -->
-<div id="refundView" style="display:none;">
-  <div class="card">
-    <div id="refundInvoiceBox">
-      <div class="lookup-bar">
-        <input id="refundInvoice" type="text" placeholder="Enter invoice # to refund…" autocomplete="off">
-        <button type="button" class="btn" onclick="lookupRefund()">Find sale</button>
-      </div>
-      <button type="button" class="btn-link no-invoice-link" onclick="toggleRefundManual(true)">Can't find the invoice? Search inventory instead →</button>
-    </div>
-    <div id="refundManualBox" style="display:none;">
-      <div class="notice no-invoice-notice">
-        <strong>No invoice</strong> — pick the item(s) being returned and confirm the price the customer paid.
-        This is flagged for the owner to review.
-        <button type="button" class="btn-link" onclick="toggleRefundManual(false)">← Back to invoice lookup</button>
-      </div>
-      <label class="pos-customer" style="max-width:320px;margin-bottom:10px;">Customer name <span class="muted">(optional)</span>
-        <input id="refundManualCustomer" type="text" autocomplete="off">
-      </label>
-      <input id="refundManualSearch" class="search pos-search" type="search" placeholder="Search product to return…" autocomplete="off">
-      <div id="refundManualResults" class="pos-results" style="max-height:22vh;"><p class="pos-hint">Type a product name to begin.</p></div>
-    </div>
-    <div id="refundInfo" class="lookup-info"></div>
-    <div class="table-wrap" id="refundItemsWrap" style="display:none; margin-top:14px;">
-      <table class="grid">
-        <thead><tr><th></th><th>Item</th><th>Unit</th><th class="num">Sold Qty</th><th class="num">Refund Qty</th><th class="num">Price</th><th class="num">Amount</th><th></th></tr></thead>
-        <tbody id="refundItems"></tbody>
-      </table>
-    </div>
-    <div class="refund-foot" id="refundFoot" style="display:none;">
-      <div class="totals-row grand"><span>Refund total (cash out) <small class="muted" id="refundVatNote"></small></span><span id="refundTotal">₱0.00</span></div>
-      <button class="btn pos-complete" id="refundBtn" onclick="doRefund()" disabled>Complete Refund</button>
-    </div>
-    <div id="refundError" class="alert" style="display:none;margin-top:12px;"></div>
-  </div>
-</div>
-
-<!-- EXCHANGE -->
-<div id="exchangeView" style="display:none;">
-  <div class="pos-grid">
-    <section class="card">
-      <h3 class="ex-h">Returned items</h3>
-      <div id="exInvoiceBox">
-        <div class="lookup-bar">
-          <input id="exInvoice" type="text" placeholder="Invoice # to exchange from…" autocomplete="off">
-          <button type="button" class="btn-secondary" onclick="lookupExchange()">Find</button>
-        </div>
-        <button type="button" class="btn-link no-invoice-link" onclick="toggleExManual(true)">Can't find the invoice? Search inventory instead →</button>
-      </div>
-      <div id="exManualBox" style="display:none;">
-        <div class="notice no-invoice-notice">
-          <strong>No invoice</strong> — pick the item(s) being returned and confirm the price the customer paid.
-          This is flagged for the owner to review.
-          <button type="button" class="btn-link" onclick="toggleExManual(false)">← Back to invoice lookup</button>
-        </div>
-        <input id="exManualSearch" class="search pos-search" type="search" placeholder="Search product to return…" autocomplete="off">
-        <div id="exManualResults" class="pos-results" style="max-height:20vh;"><p class="pos-hint">Type a product name to begin.</p></div>
-      </div>
-      <div id="exInfo" class="lookup-info"></div>
-      <div class="table-wrap" id="exReturnWrap" style="display:none; margin:12px 0;">
-        <table class="grid">
-          <thead><tr><th></th><th>Item</th><th class="num">Sold</th><th class="num">Return Qty</th><th class="num">Price</th><th class="num">Amount</th><th></th></tr></thead>
-          <tbody id="exReturnItems"></tbody>
-        </table>
-      </div>
-      <div class="totals-row"><span>Returned value</span><span id="exReturnedTotal">₱0.00</span></div>
-    </section>
-    <section class="card">
-      <h3 class="ex-h">New items</h3>
-      <input id="exSearch" class="search pos-search" type="search" placeholder="Search product to add…" autocomplete="off">
-      <div id="exResults" class="pos-results" style="max-height:24vh; margin-bottom:12px;"></div>
-      <div class="table-wrap">
-        <table class="grid cart-table">
-          <thead><tr><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Total</th><th></th></tr></thead>
-          <tbody id="exCartBody"><tr><td colspan="6" class="empty">No new items.</td></tr></tbody>
-        </table>
-      </div>
-      <div class="totals">
-        <div class="totals-row"><span>New items total</span><span id="exNewTotal">₱0.00</span></div>
-        <div class="totals-row">
-          <span><label class="vat-label"><input type="checkbox" id="exVatOn" onchange="exCompute()"> VAT (12%) · included in new items</label></span>
-          <span id="exVat">₱0.00</span>
-        </div>
-        <div class="totals-row grand"><span id="exDiffLabel">Customer pays</span><span id="exDiff">₱0.00</span></div>
-        <label class="pay-full-method" id="exPayWrap" style="display:none;">Payment method
-          <select id="exMethod" onchange="exOnMethodChange()">
-            <option value="cash">Cash</option><option value="gcash">GCash</option>
-            <option value="card">Card</option><option value="bank_transfer">Bank Transfer</option>
-          </select>
-        </label>
-        <label class="pay-full-method" id="exTenderedWrap" style="display:none;">Cash tendered
-          <input id="exTendered" type="number" step="0.01" min="0" oninput="exCompute()">
-        </label>
-        <div class="totals-row change" id="exChangeRow" style="display:none;"><span>Change</span><span id="exChange">₱0.00</span></div>
-        <button class="btn pos-complete" id="exBtn" onclick="doExchange()" disabled>Complete Exchange</button>
-        <div id="exError" class="alert" style="display:none;margin-top:12px;"></div>
-      </div>
-    </section>
-  </div>
 </div>
 
 <!-- QUOTATION -->
@@ -265,7 +290,7 @@
 <script>
 const peso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const VAT_DIV = 1.12, VAT_RATE = 0.12;
-const METHODS = [['cash','Cash'],['gcash','GCash'],['card','Card'],['bank_transfer','Bank Transfer'],['cheque','Cheque'],['receivable','Receivable (Credit)']];
+const METHODS = [['cash','Cash'],['bank_transfer','Bank Transfer'],['receivable','Credits'],['gcash','GCash'],['cheque','Cheque']];
 let cart = [];
 let payments = [{ method: 'cash', amount: '' }];
 let paymentMode = 'full';   // 'full' | 'split'
@@ -308,7 +333,7 @@ searchBox.addEventListener('keydown', async (e) => {
   const data = await res.json();
   const products = data.products || [];
   if (products.length === 1) {
-    addToCart(products[0]);
+    addFoundProduct(products[0]);
     searchBox.value = '';
     renderResults([]);
     document.getElementById('posResults').innerHTML = '<p class="pos-hint">Type a product name to begin.</p>';
@@ -316,6 +341,15 @@ searchBox.addEventListener('keydown', async (e) => {
     renderResults(products);
   }
 });
+
+// One shared search box: normally adds to the Sale cart, but while
+// Return/Exchange has it targeted at the return side (searchTarget), the
+// same search instead adds to the returned-items list.
+let searchTarget = 'sale';   // 'sale' | 'return'
+function addFoundProduct(p) {
+  if (searchTarget === 'return') returnManualAdd(p);
+  else addToCart(p);
+}
 invoiceBox.addEventListener('input', computeTotals);
 
 /* ---- customer lookup ---- */
@@ -353,8 +387,6 @@ function hideCustResults() { custResults.style.display = 'none'; }
 function setMode(m) {
   document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.m === m));
   document.getElementById('saleView').style.display = m === 'payment' ? '' : 'none';
-  document.getElementById('refundView').style.display = m === 'refund' ? 'block' : 'none';
-  document.getElementById('exchangeView').style.display = m === 'exchange' ? 'block' : 'none';
   document.getElementById('quotationView').style.display = m === 'quotation' ? 'block' : 'none';
 }
 
@@ -368,8 +400,21 @@ function setPaymentMode(m) {
 }
 
 function onFullMethodChange() {
-  document.getElementById('fullChequeFields').style.display =
-    document.getElementById('fullMethod').value === 'cheque' ? 'flex' : 'none';
+  const method = document.getElementById('fullMethod').value;
+  document.getElementById('fullChequeFields').style.display = method === 'cheque' ? 'flex' : 'none';
+  document.getElementById('fullTenderedWrap').style.display = method === 'cash' ? 'flex' : 'none';
+  computeTotals();
+}
+
+function onRetMethodChange() { computeTotals(); }
+
+let retPaymentMode = 'full';   // 'full' | 'split' (split is a notice for now — see returnPayBlock)
+function setRetPaymentMode(m) {
+  retPaymentMode = m;
+  document.getElementById('retSegFull').classList.toggle('active', m === 'full');
+  document.getElementById('retSegSplit').classList.toggle('active', m === 'split');
+  document.getElementById('retFullPay').style.display = m === 'full' ? 'block' : 'none';
+  document.getElementById('retSplitNotice').style.display = m === 'split' ? 'block' : 'none';
   computeTotals();
 }
 
@@ -386,7 +431,7 @@ function renderResults(products) {
   box.innerHTML = '';
   products.forEach(p => {
     const el = document.createElement('button');
-    el.type = 'button'; el.className = 'pos-item'; el.onclick = () => addToCart(p);
+    el.type = 'button'; el.className = 'pos-item'; el.onclick = () => addFoundProduct(p);
     el.innerHTML =
       '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span>' +
       (p.is_vat ? '<span class="pill">VAT</span>' : '') + '</div>' +
@@ -400,7 +445,8 @@ function renderResults(products) {
   });
 }
 
-function addToCart(p) { cart.push({ product: p, unitIndex: 0, qty: 1, discount: 0, discType: 'amt' }); renderCart(); }
+function addToCart(p, customPrice) { cart.push({ product: p, unitIndex: 0, qty: 1, discount: 0, discType: 'amt', customPrice: !!customPrice }); renderCart(); }
+function setCustomPrice(i, v) { cart[i].product.units[cart[i].unitIndex].price = parseFloat(v) || 0; refreshCartComputed(); }
 
 function baseNeededByProduct() {
   const m = {};
@@ -427,9 +473,9 @@ function renderCart() {
     tr.innerHTML =
       '<td class="strong">' + escapeHtml(line.product.name) +
         (over ? ' <span class="warn-tag" title="Selling beyond stock (allowed)">⚠ over stock</span>' : '') + '</td>' +
-      '<td><select class="cart-unit" onchange="setUnit(' + i + ', this.value)">' + opts + '</select></td>' +
+      '<td>' + (line.customPrice ? escapeHtml(unit.name) : '<select class="cart-unit" onchange="setUnit(' + i + ', this.value)">' + opts + '</select>') + '</td>' +
       '<td class="num"><input class="cart-qty' + (over ? ' over' : '') + '" type="number" step="0.001" min="0" value="' + fmtQty(line.qty) + '" oninput="setQty(' + i + ', this.value)"></td>' +
-      '<td class="num">' + peso(unit.price) + '</td>' +
+      '<td class="num"><input class="cart-price" type="number" step="0.01" min="0" value="' + unit.price.toFixed(2) + '" oninput="setCustomPrice(' + i + ', this.value)"></td>' +
       '<td class="num"><div class="disc-cell"><button type="button" class="disc-toggle" onclick="toggleLineDiscType(' + i + ')">' + (line.discType === 'pct' ? '%' : '₱') + '</button><input class="cart-disc" type="number" step="0.01" min="0" value="' + line.discount + '" oninput="setDisc(' + i + ', this.value)"></div></td>' +
       '<td class="num strong">' + peso(total) + '</td>' +
       '<td><button class="btn-link danger" onclick="removeLine(' + i + ')">✕</button></td>';
@@ -460,6 +506,39 @@ function refreshCartComputed() {
   });
   computeTotals();
 }
+/* ---- create a product that isn't in inventory yet (popup, no pricing) ---- */
+function showNewProduct() {
+  document.getElementById('npOverlay').style.display = 'flex';
+  document.getElementById('npName').value = searchBox.value.trim();
+  document.getElementById('npName').focus();
+}
+function hideNewProduct() {
+  document.getElementById('npOverlay').style.display = 'none';
+  document.getElementById('npError').style.display = 'none';
+}
+async function createProduct() {
+  const name = document.getElementById('npName').value.trim();
+  const err = document.getElementById('npError');
+  if (!name) { err.textContent = 'Product name is required.'; err.style.display = 'block'; return; }
+  const payload = {
+    name: name,
+    category: document.getElementById('npCategory').value,
+    unit_type: document.getElementById('npUnit').value,
+    cost_price: document.getElementById('npCost').value,
+    beginning_stock: document.getElementById('npBeginning').value,
+    stock_qty: document.getElementById('npStockQty').value,
+    reorder_level: document.getElementById('npReorder').value,
+  };
+  const res = await fetch('/pos/quick-product', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+  const data = await res.json();
+  if (!data.ok) { err.textContent = data.error || 'Could not create the product.'; err.style.display = 'block'; return; }
+  addToCart(data.product, true);
+  hideNewProduct();
+  document.getElementById('npName').value = ''; document.getElementById('npCategory').value = '';
+  document.getElementById('npUnit').value = ''; document.getElementById('npCost').value = '';
+  document.getElementById('npBeginning').value = ''; document.getElementById('npStockQty').value = ''; document.getElementById('npReorder').value = '';
+}
+
 function clearCart() {
   cart = []; payments = [{ method: 'cash', amount: '' }];
   document.getElementById('overallDiscount').value = 0; customerBox.value = ''; invoiceBox.value = '';
@@ -531,7 +610,12 @@ function fillExact(i) {
 function computeGrand() {
   let subtotal = 0;
   cart.forEach(line => { subtotal += lineTotalOf(line); });
-  return Math.max(subtotal - overallDiscAmt(subtotal), 0);  // VAT already inside
+  return Math.max(subtotal - overallDiscAmt(subtotal), 0);  // VAT already inside — Total Sale only
+}
+
+function toggleRow(rowId, show, valId, val) {
+  document.getElementById(rowId).style.display = show ? 'flex' : 'none';
+  if (show) document.getElementById(valId).textContent = peso(val);
 }
 
 function computeTotals() {
@@ -539,10 +623,130 @@ function computeTotals() {
   cart.forEach(line => { subtotal += lineTotalOf(line); });
   // VAT is INCLUSIVE: total ÷ 1.12 = net of VAT, total − net = VAT.
   // Ticking VAT does not change what the customer pays.
-  const grand = Math.max(subtotal - overallDiscAmt(subtotal), 0);
-  const vat = document.getElementById('vatOn').checked ? grand * VAT_RATE / VAT_DIV : 0;
+  const saleTotal = Math.max(subtotal - overallDiscAmt(subtotal), 0);
+  const vat = document.getElementById('vatOn').checked ? saleTotal * VAT_RATE / VAT_DIV : 0;
 
-  // A cheque, like Receivable, isn't cash in hand yet — it doesn't count as "paid".
+  document.getElementById('tSubtotal').textContent = peso(subtotal);
+  document.getElementById('tVat').textContent = peso(vat);
+  document.getElementById('tTotal').textContent = peso(saleTotal);
+  toggleRow('rowNetVat', vat > 0, 'tNetVat', saleTotal - vat);
+
+  document.getElementById('rowGrandTotal').style.display = returnActive ? 'flex' : 'none';
+  document.getElementById('rowReturnVat').style.display = (returnActive && !returnManualMode) ? 'flex' : 'none';
+  document.getElementById('salePayBlock').style.display = returnActive ? 'none' : 'block';
+  document.getElementById('returnPayBlock').style.display = returnActive ? 'block' : 'none';
+
+  // VAT (12%) · included sits right above the final total either way — next
+  // to Total Sale normally, but moved down next to Total Amount Due while a
+  // return/exchange is active so it's visible alongside the number it feeds.
+  const rowVatToggle = document.getElementById('rowVatToggle');
+  const rowNetVat = document.getElementById('rowNetVat');
+  const rowGrandTotal = document.getElementById('rowGrandTotal');
+  const rowTotalSale = document.getElementById('rowTotalSale');
+  if (returnActive) {
+    rowGrandTotal.parentNode.insertBefore(rowVatToggle, rowGrandTotal);
+    rowGrandTotal.parentNode.insertBefore(rowNetVat, rowGrandTotal);
+  } else {
+    rowTotalSale.parentNode.insertBefore(rowVatToggle, rowTotalSale);
+    rowTotalSale.parentNode.insertBefore(rowNetVat, rowTotalSale);
+  }
+
+  document.getElementById('returnTotalLabel').textContent =
+    document.getElementById('chkExchange').checked ? 'Total Exchange' : 'Total Return';
+
+  if (returnActive) {
+    const r = returnTotals();
+    const retVat = r.vatBase * VAT_RATE / VAT_DIV;
+    document.getElementById('returnVat').textContent = peso(retVat);
+    const diff = saleTotal - r.net;   // >0 customer still pays, <0 refund to customer
+    const gt = document.getElementById('tGrandTotal');
+    gt.textContent = (diff < 0 ? '− ' : '') + peso(Math.abs(diff));
+
+    // VAT (12%) · included applies to the amount actually due now (the
+    // difference), not the gross Total Sale — that's the number on the
+    // receipt the customer is being charged or refunded.
+    const dueVat = document.getElementById('vatOn').checked ? Math.abs(diff) * VAT_RATE / VAT_DIV : 0;
+    document.getElementById('tVat').textContent = peso(dueVat);
+    toggleRow('rowNetVat', dueVat > 0, 'tNetVat', Math.abs(diff) - dueVat);
+
+    const payWrap = document.getElementById('retPayWrap');
+    const tenderedWrap = document.getElementById('retTenderedWrap');
+    const changeRow = document.getElementById('retChangeRow');
+    const refundRow = document.getElementById('retRefundRow');
+    const receivableRow = document.getElementById('retReceivableRow');
+    const chequeFields = document.getElementById('retChequeFields');
+    const method = document.getElementById('retMethod').value;
+    const hasTxn = (r.net > 0 || subtotal > 0);
+    let ok = hasTxn;
+    let warn = '';
+
+    // Mode of payment is always pickable, same as a normal sale — even when
+    // nothing is due either way — not just when money is actually moving.
+    payWrap.style.display = hasTxn ? 'flex' : 'none';
+    // Credits only makes sense when the customer still owes — there's no
+    // balance of theirs to apply it against in the refund direction.
+    const receivableOpt = document.getElementById('retMethodReceivableOpt');
+    receivableOpt.disabled = !(diff > 0);
+    if (diff <= 0 && method === 'receivable') document.getElementById('retMethod').value = 'cash';
+
+    tenderedWrap.style.display = 'none';
+    changeRow.style.display = 'none';
+    refundRow.style.display = 'none';
+    receivableRow.style.display = 'none';
+    receivableRow.querySelector('span').textContent = 'Credits (Receivable)';
+    chequeFields.style.display = 'none';
+
+    if (diff > 0) {
+      const m = document.getElementById('retMethod').value;
+      if (m === 'receivable') {
+        receivableRow.style.display = 'flex';
+        document.getElementById('retReceivableAmt').textContent = peso(diff);
+        if (!customerBox.value.trim()) { ok = false; warn = 'Credits needs a customer name above.'; }
+      } else if (m === 'cheque') {
+        chequeFields.style.display = 'flex';
+        receivableRow.style.display = 'flex';
+        document.getElementById('retReceivableAmt').textContent = peso(diff);
+        if (!customerBox.value.trim()) { ok = false; warn = 'Cheque needs a customer name above.'; }
+        else if (!document.getElementById('retChequeDate').value) { ok = false; warn = 'Enter the cheque date (the date printed on the cheque).'; }
+      } else if (m === 'cash') {
+        tenderedWrap.style.display = 'flex';
+        // Optional — if left blank (or less than what's owed), it's just
+        // taken as an exact payment with no change.
+        const tendered = parseFloat(document.getElementById('retTendered').value) || 0;
+        const change = Math.max(tendered - diff, 0);
+        document.getElementById('retChange').textContent = peso(change);
+        changeRow.style.display = change > 0.001 ? 'flex' : 'none';
+      }
+    } else if (diff < 0) {
+      // If the matched invoice still has a credit balance, this refund
+      // applies to that first (see checkout()) — no cash channel needed for
+      // that part. Mode of Payment only comes back if the refund is worth
+      // more than what was still owed, for whatever's left over.
+      const owed = (returnSale && returnSale.outstanding > 0) ? returnSale.outstanding : 0;
+      const creditApplied = Math.min(-diff, owed);
+      const leftover = -diff - creditApplied;
+      if (creditApplied > 0) {
+        receivableRow.style.display = 'flex';
+        receivableRow.querySelector('span').textContent = 'Applied to credit';
+        document.getElementById('retReceivableAmt').textContent = peso(creditApplied);
+      }
+      if (leftover > 0.009) {
+        refundRow.style.display = 'flex';
+        document.getElementById('retRefundAmt').textContent = peso(leftover);
+        payWrap.style.display = 'flex';
+      } else {
+        payWrap.style.display = 'none';
+      }
+    }
+    if (retPaymentMode === 'split') { ok = false; warn = 'Switch back to Full to pick a payment method.'; }
+    const w = document.getElementById('payWarn');
+    if (warn) { w.textContent = warn; w.style.display = 'block'; } else { w.style.display = 'none'; }
+    document.getElementById('completeBtn').disabled = !ok;
+    return;
+  }
+
+  // ---- normal Sale-only payment ----
+  const grand = saleTotal;
   let paid = 0, receivable = 0, chequeAmt = 0, chequeDateMissing = false;
   if (paymentMode === 'full') {
     const method = document.getElementById('fullMethod').value;
@@ -550,7 +754,14 @@ function computeTotals() {
     else if (method === 'cheque') {
       chequeAmt = grand;
       if (!document.getElementById('fullChequeDate').value) chequeDateMissing = true;
-    } else paid = grand;
+    } else {
+      paid = grand;
+      if (method === 'cash') {
+        // Optional — only matters if it's more than the total, for change.
+        const tendered = parseFloat(document.getElementById('fullTendered').value) || 0;
+        if (tendered > paid) paid = tendered;
+      }
+    }
   } else {
     payments.forEach(p => {
       const a = parseFloat(p.amount) || 0;
@@ -564,11 +775,7 @@ function computeTotals() {
   const change = Math.max(paid - dueNow, 0);
   const remaining = Math.max(dueNow - paid, 0);
 
-  document.getElementById('tSubtotal').textContent = peso(subtotal);
-  document.getElementById('tVat').textContent = peso(vat);
-  document.getElementById('tTotal').textContent = peso(grand);
   document.getElementById('tPaid').textContent = peso(paid);
-  toggleRow('rowNetVat', vat > 0, 'tNetVat', grand - vat);
   toggleRow('rowCheque', chequeAmt > 0, 'tCheque', chequeAmt);
   toggleRow('rowReceivable', receivable > 0, 'tReceivable', receivable);
   toggleRow('rowChange', change > 0.001, 'tChange', change);
@@ -587,51 +794,127 @@ function computeTotals() {
   document.getElementById('completeBtn').disabled = !ok;
 }
 
-function toggleRow(rowId, show, valId, val) {
-  document.getElementById(rowId).style.display = show ? 'flex' : 'none';
-  if (show) document.getElementById(valId).textContent = peso(val);
-}
-
 async function checkout() {
-  if (cart.length === 0) return;
+  const isReturn = document.getElementById('chkReturn').checked;
+  const isExchange = document.getElementById('chkExchange').checked;
   const btn = document.getElementById('completeBtn');
-  btn.disabled = true; btn.textContent = 'Processing…';
-  let payList;
-  if (paymentMode === 'full') {
-    const method = document.getElementById('fullMethod').value;
-    const row = { method, amount: computeGrand() };
-    if (method === 'cheque') {
-      row.cheque_date = document.getElementById('fullChequeDate').value;
-      row.bank = document.getElementById('fullChequeBank').value;
-      row.cheque_no = document.getElementById('fullChequeNo').value;
+
+  if (!isReturn && !isExchange) {
+    if (cart.length === 0) return;
+    btn.disabled = true; btn.textContent = 'Processing…';
+    let payList;
+    if (paymentMode === 'full') {
+      const method = document.getElementById('fullMethod').value;
+      let amt = computeGrand();
+      if (method === 'cash') {
+        const tendered = parseFloat(document.getElementById('fullTendered').value) || 0;
+        if (tendered > amt) amt = tendered;
+      }
+      const row = { method, amount: amt };
+      if (method === 'cheque') {
+        row.cheque_date = document.getElementById('fullChequeDate').value;
+        row.bank = document.getElementById('fullChequeBank').value;
+        row.cheque_no = document.getElementById('fullChequeNo').value;
+      }
+      payList = [row];
+    } else {
+      payList = payments.map(p => {
+        const row = { method: p.method, amount: parseFloat(p.amount) || 0 };
+        if (p.method === 'cheque') { row.cheque_date = p.cheque_date || ''; row.bank = p.bank || ''; row.cheque_no = p.cheque_no || ''; }
+        return row;
+      }).filter(p => p.amount > 0);
     }
-    payList = [row];
-  } else {
-    payList = payments.map(p => {
-      const row = { method: p.method, amount: parseFloat(p.amount) || 0 };
-      if (p.method === 'cheque') { row.cheque_date = p.cheque_date || ''; row.bank = p.bank || ''; row.cheque_no = p.cheque_no || ''; }
-      return row;
-    }).filter(p => p.amount > 0);
+    let subtotal = 0; cart.forEach(l => subtotal += lineTotalOf(l));
+    const payload = {
+      invoice_no: invoiceBox.value,
+      customer_name: customerBox.value,
+      vat_applied: document.getElementById('vatOn').checked,
+      discount_total: overallDiscAmt(subtotal),
+      payments: payList,
+      lines: cart.map(line => {
+        const unit = line.product.units[line.unitIndex];
+        return { product_id: line.product.id, unit_name: unit.name, factor: unit.factor,
+                 qty: line.qty, unit_price: unit.price, discount: lineDiscAmt(line),
+                 tier: unit.tier || '' };
+      })
+    };
+    try {
+      const res = await fetch('/pos/checkout', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+      const data = await res.json();
+      if (data.ok) { window.location = '/pos/receipt/' + data.sale_id; }
+      else { showError(data.error || 'Checkout failed.'); btn.disabled = false; btn.textContent = 'Complete Sale'; }
+    } catch (e) {
+      showError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Complete Sale';
+    }
+    return;
   }
-  let subtotal = 0; cart.forEach(l => subtotal += lineTotalOf(l));
+
+  // ---- Return / Exchange: one shared submission, branching on whether
+  // there are also new items in the cart above — the cart isn't blocked
+  // or cleared when Return is checked, so items still there (added before
+  // checking, or just not removed) still get sold, netted against the
+  // return. Only an empty cart submits as a plain return. ----
+  const items = [];
+  document.querySelectorAll('#returnItems tr').forEach(tr => {
+    const cb = tr.querySelector('input[type=checkbox]');
+    if (!cb.checked) return;
+    const i = parseInt(cb.dataset.i);
+    const l = returnLines[i];
+    const qty = parseFloat(tr.querySelector('.ret-qty').value) || 0;
+    const priceInput = tr.querySelector('.ret-price');
+    const price = priceInput ? (parseFloat(priceInput.value) || 0) : l.unit_price;
+    if (qty > 0) items.push({ product_id: l.product_id, name: l.name, unit_name: l.unit_name, factor: l.factor, qty: qty, unit_price: price, is_vat: effectiveIsVat(l) });
+  });
+  if (!items.length) return;
+  btn.disabled = true; btn.textContent = 'Processing…';
+
+  if (cart.length === 0) {
+    const payload = { items: items, payment_method: document.getElementById('retMethod').value, invoice_no: invoiceBox.value };
+    // Keyed off whether an invoice was actually matched, not the manual-mode
+    // toggle — items can land in the return list via the main search box
+    // (search always targets "return" while active) without ever flipping
+    // that toggle, so relying on it here left returnSale.sale_id crashing
+    // on null and the button stuck on "Processing…".
+    if (returnSale) { payload.sale_id = returnSale.sale_id; }
+    else { payload.customer_name = customerBox.value; }
+    try {
+      const res = await fetch('/pos/refund', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+      const data = await res.json();
+      if (data.ok) { window.location = '/pos/receipt/' + data.sale_id; }
+      else { showError(data.error || 'Return failed.'); btn.disabled = false; btn.textContent = 'Complete Sale'; }
+    } catch (e) {
+      showError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Complete Sale';
+    }
+    return;
+  }
+
+  // Exchange — returned items AND new cart items together.
+  const new_lines = cart.map(line => {
+    const u = line.product.units[line.unitIndex];
+    return { product_id: line.product.id, name: line.product.name, unit_name: u.name, factor: u.factor,
+             qty: line.qty, unit_price: u.price, discount: lineDiscAmt(line), is_vat: line.product.is_vat, tier: u.tier || '' };
+  });
   const payload = {
-    invoice_no: invoiceBox.value,
-    customer_name: customerBox.value,
+    sale_id: returnSale ? returnSale.sale_id : null,
+    returned_items: items, new_lines: new_lines,
     vat_applied: document.getElementById('vatOn').checked,
-    discount_total: overallDiscAmt(subtotal),
-    payments: payList,
-    lines: cart.map(line => {
-      const unit = line.product.units[line.unitIndex];
-      return { product_id: line.product.id, unit_name: unit.name, factor: unit.factor,
-               qty: line.qty, unit_price: unit.price, discount: lineDiscAmt(line),
-               tier: unit.tier || '' };
-    })
+    payment_method: document.getElementById('retMethod').value,
+    amount_tendered: document.getElementById('retTendered').value,
+    invoice_no: invoiceBox.value,
   };
+  if (document.getElementById('retMethod').value === 'cheque') {
+    payload.cheque_date = document.getElementById('retChequeDate').value;
+    payload.bank = document.getElementById('retChequeBank').value;
+    payload.cheque_no = document.getElementById('retChequeNo').value;
+  }
+  // Same fix as the refund branch above — key off whether an invoice was
+  // actually matched, not the manual-mode toggle.
+  if (!returnSale) payload.customer_name = customerBox.value;
   try {
-    const res = await fetch('/pos/checkout', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+    const res = await fetch('/pos/exchange', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
     const data = await res.json();
     if (data.ok) { window.location = '/pos/receipt/' + data.sale_id; }
-    else { showError(data.error || 'Checkout failed.'); btn.disabled = false; btn.textContent = 'Complete Sale'; }
+    else { showError(data.error || 'Exchange failed.'); btn.disabled = false; btn.textContent = 'Complete Sale'; }
   } catch (e) {
     showError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Complete Sale';
   }
@@ -642,365 +925,170 @@ function fmtQty(n) { return (Math.round((Number(n) || 0) * 1000) / 1000).toStrin
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function tick() { document.getElementById('clock').textContent = new Date().toLocaleString('en-PH', {dateStyle:'medium', timeStyle:'short'}); }
 
-/* ===== REFUND =====
-   refundLines is the single source of truth for the returned-items table,
-   populated either from a matched invoice (price fixed, read-only) or from a
-   manual product search when there's no invoice (price editable, defaults to
-   the product's current price — see toggleRefundManual). */
-let refundSale = null;
-let refundManualMode = false;
-let refundLines = [];   // {product_id, name, unit_name, factor, qty (sold, null if manual), unit_price, is_vat, editable}
-let refundManualTimer = null;
+/* ===== RETURN / EXCHANGE =====
+   One shared process: returnLines is the returned-items list, populated
+   either from a matched invoice (price fixed) or a manual product search
+   when there's no invoice (price editable, flagged for owner review).
+   Checking Return or Exchange never clears or hides the cart — whatever
+   was already added stays and still counts toward Total Sale. It only
+   stops further additions, by pointing the search box at this return
+   list instead. At submit time: an empty cart is a plain return; a
+   non-empty cart is an exchange — checkout() picks the right backend
+   call for whichever fits what's actually been entered. */
+let returnActive = false;
+let returnSale = null;
+let returnManualMode = false;
+let returnLines = [];   // {product_id, name, unit_name, factor, qty (sold, null if manual), unit_price, is_vat, editable}
+let returnManualTimer = null;
 
-function toggleRefundManual(on) {
-  refundManualMode = on;
-  refundSale = null;
-  refundLines = [];
-  document.getElementById('refundInvoiceBox').style.display = on ? 'none' : 'block';
-  document.getElementById('refundManualBox').style.display = on ? 'block' : 'none';
-  document.getElementById('refundInfo').innerHTML = '';
-  document.getElementById('refundInvoice').value = '';
-  renderRefundLines();
+function effectiveIsVat(l) {
+  return l.is_vat;
 }
-document.getElementById('refundManualSearch').addEventListener('input', () => {
-  clearTimeout(refundManualTimer); refundManualTimer = setTimeout(refundManualSearch, 180);
-});
-async function refundManualSearch() {
-  const q = document.getElementById('refundManualSearch').value.trim();
-  const box = document.getElementById('refundManualResults');
-  if (!q) { box.innerHTML = '<p class="pos-hint">Type a product name to begin.</p>'; return; }
-  const res = await fetch('/pos/search?q=' + encodeURIComponent(q));
-  const data = await res.json();
-  const products = data.products || [];
-  if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
-  box.innerHTML = '';
-  products.forEach(p => {
-    const el = document.createElement('button');
-    el.type = 'button'; el.className = 'pos-item'; el.onclick = () => refundManualAdd(p);
-    el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span></div>' +
-      '<div class="pos-item-sub">' + peso(p.units[0].price) + ' / ' + escapeHtml(p.base_unit) + '</div>';
-    box.appendChild(el);
-  });
+
+function onTxnTypeCheck(which) {
+  const chkReturn = document.getElementById('chkReturn');
+  const chkExchange = document.getElementById('chkExchange');
+  if (which === 'return' && chkReturn.checked) chkExchange.checked = false;
+  if (which === 'exchange' && chkExchange.checked) chkReturn.checked = false;
+
+  const mode = chkReturn.checked ? 'return' : (chkExchange.checked ? 'exchange' : null);
+  returnActive = !!mode;
+  document.getElementById('returnSection').style.display = returnActive ? 'block' : 'none';
+  document.getElementById('txnTypeBadge').textContent =
+    mode === 'return' ? 'Sale x Return' : (mode === 'exchange' ? 'Sale x Exchange' : 'Sale');
+
+  if (!returnActive) {
+    returnSale = null; returnManualMode = false; returnLines = [];
+    document.getElementById('returnInvoice').value = '';
+    document.getElementById('returnInfo').innerHTML = '';
+    document.getElementById('returnInvoiceBox').style.display = 'block';
+    document.getElementById('returnManualBox').style.display = 'none';
+    renderReturnLines();
+    setRetPaymentMode('full');
+    document.getElementById('retMethod').value = 'cash';
+    document.getElementById('retTendered').value = '';
+    document.getElementById('retChequeDate').value = '';
+    document.getElementById('retChequeBank').value = '';
+    document.getElementById('retChequeNo').value = '';
+  }
+
+  if (mode === 'return') {
+    // Whatever's already in the cart (added before this was checked) stays
+    // exactly as-is — only further additions are turned off, by pointing
+    // the one shared search box at return items instead of the cart.
+    document.getElementById('npOpenBtn').style.display = 'none';
+    setSearchTarget('return');
+  } else if (mode === 'exchange') {
+    document.getElementById('npOpenBtn').style.display = 'inline-flex';
+    setSearchTarget('sale');
+  } else {
+    document.getElementById('npOpenBtn').style.display = 'inline-flex';
+    setSearchTarget('sale');
+  }
+  updateSearchTargetSeg();
+  computeTotals();
 }
-function refundManualAdd(p) {
-  refundLines.push({
+
+function setSearchTarget(t) {
+  searchTarget = t;
+  document.getElementById('segTargetReturn').classList.toggle('active', t === 'return');
+  document.getElementById('segTargetSale').classList.toggle('active', t === 'sale');
+  searchBox.placeholder = t === 'return' ? 'Search product to return…' : 'Search product name, or scan a barcode…';
+}
+function updateSearchTargetSeg() {
+  // Only Exchange has the ambiguity (both new items and return items share
+  // the one search box) — Return mode has no cart, so it's never ambiguous.
+  document.getElementById('searchTargetSeg').style.display =
+    (document.getElementById('chkExchange').checked && returnManualMode) ? 'flex' : 'none';
+}
+
+function toggleReturnManual(on) {
+  returnManualMode = on;
+  returnSale = null;
+  returnLines = [];
+  document.getElementById('returnInvoiceBox').style.display = on ? 'none' : 'block';
+  document.getElementById('returnManualBox').style.display = on ? 'block' : 'none';
+  document.getElementById('returnInfo').innerHTML = '';
+  document.getElementById('returnInvoice').value = '';
+  if (document.getElementById('chkExchange').checked) {
+    // Ambiguous in Exchange mode — default to hunting for the return item,
+    // since that's presumably why "search inventory instead" was clicked.
+    setSearchTarget(on ? 'return' : 'sale');
+  }
+  updateSearchTargetSeg();
+  renderReturnLines();
+}
+function returnManualAdd(p) {
+  returnLines.push({
     product_id: p.id, name: p.name, unit_name: p.base_unit, factor: 1,
     qty: null, unit_price: p.units[0].price, is_vat: p.is_vat, editable: true,
   });
-  renderRefundLines();
-  document.getElementById('refundManualSearch').value = '';
-  document.getElementById('refundManualResults').innerHTML = '<p class="pos-hint">' + escapeHtml(p.name) + ' added — search again to add another.</p>';
+  renderReturnLines();
+  searchBox.value = '';
+  document.getElementById('posResults').innerHTML = '<p class="pos-hint">' + escapeHtml(p.name) + ' added to the return — search again to add another.</p>';
 }
-async function lookupRefund() {
-  const inv = document.getElementById('refundInvoice').value.trim();
+async function lookupReturn() {
+  const inv = document.getElementById('returnInvoice').value.trim();
   if (!inv) return;
   const res = await fetch('/pos/lookup?invoice=' + encodeURIComponent(inv));
   const data = await res.json();
-  const info = document.getElementById('refundInfo');
+  const info = document.getElementById('returnInfo');
   if (!data.found) {
-    refundSale = null; refundLines = []; info.innerHTML = '<div class="alert">No sale found for invoice ' + escapeHtml(inv) + '.</div>';
-    renderRefundLines(); return;
+    returnSale = null; returnLines = []; info.innerHTML = '<div class="alert">No sale found for invoice ' + escapeHtml(inv) + '.</div>';
+    renderReturnLines(); return;
   }
-  refundSale = data;
+  returnSale = data;
   info.innerHTML = '<div class="lookup-meta"><span><b>' + escapeHtml(data.invoice_no) + '</b></span><span>' + escapeHtml(data.customer_name || 'Walk-in') + '</span><span>' + escapeHtml(data.date) + '</span></div>';
-  refundLines = data.lines.map(l => ({
+  returnLines = data.lines.map(l => ({
     product_id: l.product_id, name: l.name, unit_name: l.unit_name, factor: l.factor,
     qty: l.qty, unit_price: l.unit_price, is_vat: l.is_vat, editable: false,
   }));
-  renderRefundLines();
+  renderReturnLines();
 }
-function renderRefundLines() {
-  const body = document.getElementById('refundItems');
+function renderReturnLines() {
+  const body = document.getElementById('returnItems');
   body.innerHTML = '';
-  refundLines.forEach((l, i) => {
+  returnLines.forEach((l, i) => {
     const tr = document.createElement('tr');
     const maxAttr = l.qty !== null ? ' max="' + l.qty + '"' : '';
     const startQty = l.qty !== null ? fmtQty(l.qty) : '1';
     tr.innerHTML =
-      '<td><input type="checkbox" data-i="' + i + '" checked onchange="calcRefund()"></td>' +
+      '<td><input type="checkbox" data-i="' + i + '" checked onchange="calcReturn()"></td>' +
       '<td class="strong">' + escapeHtml(l.name) + '</td>' +
+      '<td class="num"><input class="cart-qty ret-qty" type="number" step="0.001" min="0"' + maxAttr + ' value="' + startQty + '" data-i="' + i + '" oninput="calcReturn()"></td>' +
       '<td>' + escapeHtml(l.unit_name || '') + '</td>' +
-      '<td class="num">' + (l.qty !== null ? fmtQty(l.qty) : '—') + '</td>' +
-      '<td class="num"><input class="cart-qty rf-qty" type="number" step="0.001" min="0"' + maxAttr + ' value="' + startQty + '" data-i="' + i + '" oninput="calcRefund()"></td>' +
       '<td class="num">' + (l.editable
-        ? '<input class="cart-disc rf-price" type="number" step="0.01" min="0" value="' + l.unit_price.toFixed(2) + '" data-i="' + i + '" oninput="calcRefund()">'
+        ? '<input class="cart-price ret-price" type="number" step="0.01" min="0" value="' + l.unit_price.toFixed(2) + '" data-i="' + i + '" oninput="calcReturn()">'
         : peso(l.unit_price)) + '</td>' +
-      '<td class="num rf-amt">' + peso((l.qty !== null ? l.qty : 1) * l.unit_price) + '</td>' +
-      '<td>' + (l.editable ? '<button type="button" class="btn-link danger" onclick="refundRemoveLine(' + i + ')">✕</button>' : '') + '</td>';
+      '<td>' + (l.editable ? '<button type="button" class="btn-link danger" onclick="returnRemoveLine(' + i + ')">✕</button>' : '') + '</td>';
     body.appendChild(tr);
   });
-  document.getElementById('refundItemsWrap').style.display = refundLines.length ? 'block' : 'none';
-  document.getElementById('refundFoot').style.display = refundLines.length ? 'block' : 'none';
-  calcRefund();
+  document.getElementById('returnItemsWrap').style.display = returnLines.length ? 'block' : 'none';
+  calcReturn();
 }
-function refundRemoveLine(i) { refundLines.splice(i, 1); renderRefundLines(); }
-function calcRefund() {
-  let net = 0, vatBase = 0, any = false;
-  document.querySelectorAll('#refundItems tr').forEach(tr => {
+function returnRemoveLine(i) { returnLines.splice(i, 1); renderReturnLines(); }
+function returnTotals() {
+  let net = 0, vatBase = 0;
+  document.querySelectorAll('#returnItems tr').forEach(tr => {
     const cb = tr.querySelector('input[type=checkbox]');
     const i = parseInt(cb.dataset.i);
-    const l = refundLines[i];
-    const qtyInput = tr.querySelector('.rf-qty');
+    const l = returnLines[i];
+    const qtyInput = tr.querySelector('.ret-qty');
     let qty = parseFloat(qtyInput.value) || 0;
     if (l.qty !== null && qty > l.qty) { qty = l.qty; qtyInput.value = fmtQty(l.qty); }
-    const priceInput = tr.querySelector('.rf-price');
+    const priceInput = tr.querySelector('.ret-price');
     const price = priceInput ? (parseFloat(priceInput.value) || 0) : l.unit_price;
     const val = qty * price;
-    tr.querySelector('.rf-amt').textContent = peso(val);
-    if (cb.checked && qty > 0) { net += val; if (l.is_vat) vatBase += val; any = true; }
-  });
-  // Prices already include VAT, so refund exactly what was paid and show the
-  // VAT portion contained in it.
-  const vat = vatBase * VAT_RATE / VAT_DIV;
-  const total = net;
-  document.getElementById('refundTotal').textContent = peso(total);
-  document.getElementById('refundVatNote').textContent = vat > 0 ? '· incl. VAT ' + peso(vat) : '';
-  document.getElementById('refundBtn').disabled = !any || total <= 0;
-}
-async function doRefund() {
-  if (!refundLines.length) return;
-  const items = [];
-  document.querySelectorAll('#refundItems tr').forEach(tr => {
-    const cb = tr.querySelector('input[type=checkbox]');
-    if (!cb.checked) return;
-    const i = parseInt(cb.dataset.i);
-    const l = refundLines[i];
-    const qty = parseFloat(tr.querySelector('.rf-qty').value) || 0;
-    const priceInput = tr.querySelector('.rf-price');
-    const price = priceInput ? (parseFloat(priceInput.value) || 0) : l.unit_price;
-    if (qty > 0) items.push({ product_id: l.product_id, name: l.name, unit_name: l.unit_name, factor: l.factor, qty: qty, unit_price: price, is_vat: l.is_vat });
-  });
-  if (!items.length) return;
-  const btn = document.getElementById('refundBtn'); btn.disabled = true; btn.textContent = 'Processing…';
-  const payload = { items: items };
-  if (refundManualMode) { payload.customer_name = document.getElementById('refundManualCustomer').value; }
-  else { payload.sale_id = refundSale.sale_id; }
-  const res = await fetch('/pos/refund', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
-  const data = await res.json();
-  if (data.ok) { window.location = '/pos/receipt/' + data.sale_id; }
-  else { const e = document.getElementById('refundError'); e.textContent = data.error || 'Refund failed.'; e.style.display = 'block'; btn.disabled = false; btn.textContent = 'Complete Refund'; }
-}
-
-/* ===== EXCHANGE =====
-   exReturnLines mirrors refundLines: populated either from a matched invoice
-   (price fixed) or a manual product search when there's no invoice (price
-   editable — see toggleExManual). */
-let exSale = null, exCart = [], exTimer = null;
-let exManualMode = false;
-let exReturnLines = [];   // {product_id, name, unit_name, factor, qty (sold, null if manual), unit_price, is_vat, editable}
-let exManualTimer = null;
-document.getElementById('exSearch').addEventListener('input', () => { clearTimeout(exTimer); exTimer = setTimeout(exRunSearch, 180); });
-
-function toggleExManual(on) {
-  exManualMode = on;
-  exSale = null;
-  exReturnLines = [];
-  document.getElementById('exInvoiceBox').style.display = on ? 'none' : 'block';
-  document.getElementById('exManualBox').style.display = on ? 'block' : 'none';
-  document.getElementById('exInfo').innerHTML = '';
-  document.getElementById('exInvoice').value = '';
-  renderExReturnLines();
-}
-document.getElementById('exManualSearch').addEventListener('input', () => {
-  clearTimeout(exManualTimer); exManualTimer = setTimeout(exManualSearch, 180);
-});
-async function exManualSearch() {
-  const q = document.getElementById('exManualSearch').value.trim();
-  const box = document.getElementById('exManualResults');
-  if (!q) { box.innerHTML = '<p class="pos-hint">Type a product name to begin.</p>'; return; }
-  const res = await fetch('/pos/search?q=' + encodeURIComponent(q));
-  const data = await res.json();
-  const products = data.products || [];
-  if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
-  box.innerHTML = '';
-  products.forEach(p => {
-    const el = document.createElement('button');
-    el.type = 'button'; el.className = 'pos-item'; el.onclick = () => exManualAdd(p);
-    el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span></div>' +
-      '<div class="pos-item-sub">' + peso(p.units[0].price) + ' / ' + escapeHtml(p.base_unit) + '</div>';
-    box.appendChild(el);
-  });
-}
-function exManualAdd(p) {
-  exReturnLines.push({
-    product_id: p.id, name: p.name, unit_name: p.base_unit, factor: 1,
-    qty: null, unit_price: p.units[0].price, is_vat: p.is_vat, editable: true,
-  });
-  renderExReturnLines();
-  document.getElementById('exManualSearch').value = '';
-  document.getElementById('exManualResults').innerHTML = '<p class="pos-hint">' + escapeHtml(p.name) + ' added — search again to add another.</p>';
-}
-async function lookupExchange() {
-  const inv = document.getElementById('exInvoice').value.trim();
-  if (!inv) return;
-  const res = await fetch('/pos/lookup?invoice=' + encodeURIComponent(inv));
-  const data = await res.json();
-  const info = document.getElementById('exInfo');
-  if (!data.found) { exSale = null; exReturnLines = []; info.innerHTML = '<div class="alert">No sale found.</div>'; renderExReturnLines(); return; }
-  exSale = data;
-  info.innerHTML = '<div class="lookup-meta"><span><b>' + escapeHtml(data.invoice_no) + '</b></span><span>' + escapeHtml(data.customer_name || 'Walk-in') + '</span></div>';
-  exReturnLines = data.lines.map(l => ({
-    product_id: l.product_id, name: l.name, unit_name: l.unit_name, factor: l.factor,
-    qty: l.qty, unit_price: l.unit_price, is_vat: l.is_vat, editable: false,
-  }));
-  renderExReturnLines();
-}
-function renderExReturnLines() {
-  const body = document.getElementById('exReturnItems');
-  body.innerHTML = '';
-  exReturnLines.forEach((l, i) => {
-    const tr = document.createElement('tr');
-    const maxAttr = l.qty !== null ? ' max="' + l.qty + '"' : '';
-    const startQty = l.qty !== null ? fmtQty(l.qty) : '1';
-    tr.innerHTML =
-      '<td><input type="checkbox" data-i="' + i + '" checked onchange="exCompute()"></td>' +
-      '<td class="strong">' + escapeHtml(l.name) + '</td>' +
-      '<td class="num">' + (l.qty !== null ? fmtQty(l.qty) : '—') + '</td>' +
-      '<td class="num"><input class="cart-qty ex-rqty" type="number" step="0.001" min="0"' + maxAttr + ' value="' + startQty + '" data-i="' + i + '" oninput="exCompute()"></td>' +
-      '<td class="num">' + (l.editable
-        ? '<input class="cart-disc ex-rprice" type="number" step="0.01" min="0" value="' + l.unit_price.toFixed(2) + '" data-i="' + i + '" oninput="exCompute()">'
-        : peso(l.unit_price)) + '</td>' +
-      '<td class="num ex-ramt">' + peso((l.qty !== null ? l.qty : 1) * l.unit_price) + '</td>' +
-      '<td>' + (l.editable ? '<button type="button" class="btn-link danger" onclick="exReturnRemove(' + i + ')">✕</button>' : '') + '</td>';
-    body.appendChild(tr);
-  });
-  document.getElementById('exReturnWrap').style.display = exReturnLines.length ? 'block' : 'none';
-  exCompute();
-}
-function exReturnRemove(i) { exReturnLines.splice(i, 1); renderExReturnLines(); }
-async function exRunSearch() {
-  const q = document.getElementById('exSearch').value.trim();
-  const res = await fetch('/pos/search?q=' + encodeURIComponent(q));
-  const data = await res.json();
-  const box = document.getElementById('exResults'); const products = data.products || [];
-  if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
-  box.innerHTML = '';
-  products.forEach(p => {
-    const el = document.createElement('button'); el.type = 'button'; el.className = 'pos-item'; el.onclick = () => exAdd(p);
-    el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span></div><div class="pos-item-sub">' + peso(p.units[0].price) + ' / ' + escapeHtml(p.base_unit) + '</div>';
-    box.appendChild(el);
-  });
-}
-function exAdd(p) { exCart.push({ product: p, unitIndex: 0, qty: 1 }); exRenderCart(); }
-function exRenderCart() {
-  const body = document.getElementById('exCartBody');
-  if (!exCart.length) { body.innerHTML = '<tr><td colspan="6" class="empty">No new items.</td></tr>'; exCompute(); return; }
-  body.innerHTML = '';
-  exCart.forEach((line, i) => {
-    const unit = line.product.units[line.unitIndex];
-    const opts = line.product.units.map((u, ui) => '<option value="' + ui + '"' + (ui === line.unitIndex ? ' selected' : '') + '>' + escapeHtml(u.label || u.name) + ' (' + peso(u.price) + ')</option>').join('');
-    const tr = document.createElement('tr');
-    tr.innerHTML =
-      '<td class="strong">' + escapeHtml(line.product.name) + '</td>' +
-      '<td><select class="cart-unit" onchange="exSetUnit(' + i + ', this.value)">' + opts + '</select></td>' +
-      '<td class="num"><input class="cart-qty" type="number" step="0.001" min="0" value="' + fmtQty(line.qty) + '" oninput="exSetQty(' + i + ', this.value)"></td>' +
-      '<td class="num">' + peso(unit.price) + '</td>' +
-      '<td class="num strong">' + peso(line.qty * unit.price) + '</td>' +
-      '<td><button class="btn-link danger" onclick="exRemove(' + i + ')">✕</button></td>';
-    body.appendChild(tr);
-  });
-  exCompute();
-}
-function exSetUnit(i, v) { exCart[i].unitIndex = parseInt(v); exRenderCart(); }
-function exSetQty(i, v) { exCart[i].qty = parseFloat(v) || 0; exRefreshComputed(); }
-function exRemove(i) { exCart.splice(i, 1); exRenderCart(); }
-
-// Update new-item totals without rebuilding the qty inputs (keeps focus).
-function exRefreshComputed() {
-  const rows = document.querySelectorAll('#exCartBody tr');
-  exCart.forEach((line, i) => {
-    const tr = rows[i];
-    if (!tr) return;
-    const unit = line.product.units[line.unitIndex];
-    tr.children[4].textContent = peso(line.qty * unit.price);
-  });
-  exCompute();
-}
-// Returned side: net value plus the part of it that carried VAT when sold.
-function exReturnedTotals() {
-  let net = 0, vatBase = 0;
-  document.querySelectorAll('#exReturnItems tr').forEach(tr => {
-    const cb = tr.querySelector('input[type=checkbox]');
-    const i = parseInt(cb.dataset.i);
-    const l = exReturnLines[i];
-    let qty = parseFloat(tr.querySelector('.ex-rqty').value) || 0;
-    if (l.qty !== null && qty > l.qty) qty = l.qty;
-    const priceInput = tr.querySelector('.ex-rprice');
-    const price = priceInput ? (parseFloat(priceInput.value) || 0) : l.unit_price;
-    const val = qty * price;
-    tr.querySelector('.ex-ramt').textContent = peso(val);
-    if (cb.checked && qty > 0) { net += val; if (l.is_vat) vatBase += val; }
+    if (cb.checked && qty > 0) { net += val; if (effectiveIsVat(l)) vatBase += val; }
   });
   return { net: net, vatBase: vatBase };
 }
-function exNewTotal() { let t = 0; exCart.forEach(l => t += l.qty * l.product.units[l.unitIndex].price); return t; }
-function exOnMethodChange() { exCompute(); }
-function exCompute() {
-  const r = exReturnedTotals();
-  const nt = exNewTotal();
-  // Both sides already include VAT, so compare them directly and just show the
-  // VAT contained in the new items.
-  const newVat = document.getElementById('exVatOn').checked ? nt * VAT_RATE / VAT_DIV : 0;
-  const diff = nt - r.net;
-
-  document.getElementById('exReturnedTotal').textContent = peso(r.net);
-  document.getElementById('exNewTotal').textContent = peso(nt);
-  document.getElementById('exVat').textContent = peso(newVat);
-  const label = document.getElementById('exDiffLabel'), diffEl = document.getElementById('exDiff');
-  const tenderedWrap = document.getElementById('exTenderedWrap');
-  const changeRow = document.getElementById('exChangeRow');
-  let ok = (r.net > 0 || nt > 0);
-
-  if (diff >= 0) {
-    label.textContent = 'Customer pays'; diffEl.textContent = peso(diff);
-    document.getElementById('exPayWrap').style.display = diff > 0 ? 'flex' : 'none';
-    // Only cash has a real "hand over more, get change back" scenario — GCash/
-    // Card/Bank Transfer are exact-amount transfers.
-    const isCash = document.getElementById('exMethod').value === 'cash';
-    if (diff > 0 && isCash) {
-      tenderedWrap.style.display = 'flex';
-      const tenderedInput = document.getElementById('exTendered');
-      if (!tenderedInput.value || parseFloat(tenderedInput.value) < diff) tenderedInput.value = diff.toFixed(2);
-      const tendered = parseFloat(tenderedInput.value) || 0;
-      const change = Math.max(tendered - diff, 0);
-      document.getElementById('exChange').textContent = peso(change);
-      changeRow.style.display = change > 0.001 ? 'flex' : 'none';
-      if (tendered < diff - 0.001) ok = false;
-    } else {
-      tenderedWrap.style.display = 'none';
-      changeRow.style.display = 'none';
-    }
-  } else {
-    label.textContent = 'Refund to customer (cash)'; diffEl.textContent = peso(-diff);
-    document.getElementById('exPayWrap').style.display = 'none';
-    tenderedWrap.style.display = 'none';
-    changeRow.style.display = 'none';
-  }
-  document.getElementById('exBtn').disabled = !ok;
-}
-async function doExchange() {
-  const returned = [];
-  document.querySelectorAll('#exReturnItems tr').forEach(tr => {
-    const cb = tr.querySelector('input[type=checkbox]');
-    if (!cb.checked) return;
-    const i = parseInt(cb.dataset.i);
-    const l = exReturnLines[i];
-    const qty = parseFloat(tr.querySelector('.ex-rqty').value) || 0;
-    const priceInput = tr.querySelector('.ex-rprice');
-    const price = priceInput ? (parseFloat(priceInput.value) || 0) : l.unit_price;
-    if (qty > 0) returned.push({ product_id: l.product_id, name: l.name, unit_name: l.unit_name, factor: l.factor, qty: qty, unit_price: price, is_vat: l.is_vat });
-  });
-  const new_lines = exCart.map(l => { const u = l.product.units[l.unitIndex]; return { product_id: l.product.id, name: l.product.name, unit_name: u.name, factor: u.factor, qty: l.qty, unit_price: u.price, discount: 0, is_vat: l.product.is_vat, tier: u.tier || '' }; });
-  if (!returned.length && !new_lines.length) return;
-  const btn = document.getElementById('exBtn'); btn.disabled = true; btn.textContent = 'Processing…';
-  const payload = { sale_id: exSale ? exSale.sale_id : null, returned_items: returned, new_lines: new_lines,
-                    vat_applied: document.getElementById('exVatOn').checked,
-                    payment_method: document.getElementById('exMethod').value,
-                    amount_tendered: document.getElementById('exTendered').value };
-  const res = await fetch('/pos/exchange', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
-  const data = await res.json();
-  if (data.ok) { window.location = '/pos/receipt/' + data.sale_id; }
-  else { const e = document.getElementById('exError'); e.textContent = data.error || 'Exchange failed.'; e.style.display = 'block'; btn.disabled = false; btn.textContent = 'Complete Exchange'; }
+function calcReturn() {
+  const r = returnTotals();
+  const vat = r.vatBase * VAT_RATE / VAT_DIV;
+  document.getElementById('returnVat').textContent = peso(vat);
+  document.getElementById('returnTotal').textContent = peso(r.net);
+  computeTotals();
 }
 
 /* ===== QUOTATION ===== */
@@ -1132,5 +1220,6 @@ tick(); setInterval(tick, 30000);
 renderPayments();
 renderCart();
 quoRenderCart();
+onFullMethodChange();
 </script>
 {% endblock %}

@@ -23,7 +23,10 @@
         <td>{{ c.tin or '—' }}</td>
         <td>{{ c.address or '—' }}</td>
         <td class="num {{ 'owed' if outstanding.get(c.id, 0) > 0 }}">{{ outstanding.get(c.id, 0)|peso }}</td>
-        <td class="row-actions"><a class="btn-pay" href="/credits/{{ c.id }}">View statement</a></td>
+        <td class="row-actions">
+          <a class="btn-pay" href="/credits/{{ c.id }}">View statement</a>
+          {% if outstanding.get(c.id, 0) > 0 %}<a class="btn-pay" href="/credits/{{ c.id }}/pay-full">Pay Full</a>{% endif %}
+        </td>
       </tr>
       {% else %}
       <tr><td colspan="5" class="empty">No customers with credit yet. Credit purchases from POS appear here.</td></tr>

@@ -80,11 +80,43 @@
 
     <div class="s-balance">Outstanding balance: <b class="owed">{{ out_total|peso }}</b></div>
 
+    {% if settlements %}
+    <div class="s-title" style="margin:26px 0 8px;">Payments &amp; Returns Applied</div>
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Invoice #</th><th>Description</th><th class="num">Amount</th></tr>
+      </thead>
+      <tbody>
+        {% for st in settlements %}
+        <tr>
+          <td>{{ st.created_at.strftime('%b %d, %Y') if st.created_at else '' }}</td>
+          <td>{{ st.sale.invoice_no }}</td>
+          <td>
+            {% if st.method == 'credit_note' %}
+              ↩ Return/Exchange applied{% if st.source_sale %} — Invoice {{ st.source_sale.invoice_no }}{% endif %}
+              {% set items = returned_items.get(st.id) %}
+              {% if items %}
+              <div style="color:var(--muted);font-size:12px;margin-top:2px;">
+                {% for it in items %}{{ it.qty|qty }} {{ it.unit or '' }} {{ it.name }}{{ ', ' if not loop.last }}{% endfor %}
+              </div>
+              {% endif %}
+            {% else %}
+              Payment via {{ st.method|replace('_',' ')|title }}
+            {% endif %}
+          </td>
+          <td class="num">{{ st.amount|peso }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
     <div class="s-foot">This statement reflects credit purchases and payments recorded in {{ app_name }}.</div>
   </div>
 
   <div class="actions">
     <a class="btn back" href="/credits">← Back</a>
+    {% if out_total > 0 %}<a class="btn back" href="/credits/{{ customer.id }}/pay-full">Pay Full</a>{% endif %}
     <button class="btn print" onclick="window.print()">🖨 Print</button>
   </div>
 </body>
