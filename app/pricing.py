@@ -29,21 +29,27 @@ def _money(value: Decimal) -> Decimal:
 
 
 def markup_price(cost, pct) -> Decimal:
-    """cost + a percentage of the cost."""
+    """cost + a percentage of the cost. A negative markup (selling below
+    cost, typed directly into the price cell and solved back to a %) is a
+    real, representable state — it only bottoms out at price 0."""
     cost, pct = _dec(cost), _dec(pct)
-    if cost <= 0 or pct < 0:
+    if cost <= 0:
         return Decimal("0")
-    return _money(cost * (Decimal("1") + pct / Decimal("100")))
+    price = cost * (Decimal("1") + pct / Decimal("100"))
+    return _money(max(price, Decimal("0")))
 
 
 def margin_price(cost, pct) -> Decimal:
-    """A price where `pct` percent of it is profit."""
+    """A price where `pct` percent of it is profit. Negative pct (selling
+    below cost) works the same as positive — it just can't reach exactly 0
+    at any finite pct (the curve is asymptotic), so "make this free" should
+    go through the Fixed price row instead."""
     cost, pct = _dec(cost), _dec(pct)
-    if cost <= 0 or pct < 0:
+    if cost <= 0:
         return Decimal("0")
     if pct > MAX_MARGIN:
         pct = MAX_MARGIN
-    return _money(cost / (Decimal("1") - pct / Decimal("100")))
+    return _money(max(cost / (Decimal("1") - pct / Decimal("100")), Decimal("0")))
 
 
 def profit(price, cost) -> Decimal:

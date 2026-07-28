@@ -55,15 +55,15 @@
           </tr>
           <tr>
             <td><strong>Markup</strong><small class="muted" style="display:block;">% on top of cost</small></td>
-            <td class="num"><input id="peMarkupPct" type="number" step="0.01" min="0" class="pct-in" oninput="peRecalc()"></td>
-            <td class="num"><input id="peMarkupPrice" type="number" class="readonly" readonly tabindex="-1"></td>
+            <td class="num"><input id="peMarkupPct" type="number" step="0.01" class="pct-in" oninput="peRecalc()"></td>
+            <td class="num"><input id="peMarkupPrice" type="number" step="0.01" inputmode="decimal" oninput="peMarkupPriceInput()"></td>
             <td class="num" id="peMarkupProfit">—</td>
             <td class="num" id="peMarkupMargin">—</td>
           </tr>
           <tr>
             <td><strong>Margin</strong><small class="muted" style="display:block;">% of the selling price</small></td>
-            <td class="num"><input id="peMarginPct" type="number" step="0.01" min="0" max="99.99" class="pct-in" oninput="peRecalc()"></td>
-            <td class="num"><input id="peMarginPrice" type="number" class="readonly" readonly tabindex="-1"></td>
+            <td class="num"><input id="peMarginPct" type="number" step="0.01" max="99.99" class="pct-in" oninput="peRecalc()"></td>
+            <td class="num"><input id="peMarginPrice" type="number" step="0.01" inputmode="decimal" oninput="peMarginPriceInput()"></td>
             <td class="num" id="peMarginProfit">—</td>
             <td class="num" id="peMarginMargin">—</td>
           </tr>
@@ -194,7 +194,7 @@ function peCancel() {
 var MIN_MARGIN_PCT = {{ mmp if mmp is not none else 'null' }};
 
 function peShowRow(price, cost, priceEl, profitEl, marginEl) {
-  if (priceEl) priceEl.value = price > 0 ? price.toFixed(2) : '';
+  if (priceEl) priceEl.value = price.toFixed(2);
   if (cost <= 0) {
     // No cost on file — profit/margin against an unknown cost is meaningless.
     profitEl.textContent = '—'; profitEl.className = 'num muted';
@@ -225,15 +225,46 @@ function peRecalc() {
   var gPct = parseFloat(document.getElementById('peMarginPct').value) || 0;
   if (gPct > 99.99) { gPct = 99.99; document.getElementById('peMarginPct').value = gPct; }
 
-  var markup = cost > 0 ? Math.round(cost * (1 + mPct / 100) * 100) / 100 : 0;
-  var margin = cost > 0 ? Math.round(cost / (1 - gPct / 100) * 100) / 100 : 0;
+  // Negative % (selling below cost) is valid — only the resulting price is
+  // floored at 0, same as app/pricing.py's markup_price/margin_price.
+  var markup = cost > 0 ? Math.max(Math.round(cost * (1 + mPct / 100) * 100) / 100, 0) : 0;
+  var margin = cost > 0 ? Math.max(Math.round(cost / (1 - gPct / 100) * 100) / 100, 0) : 0;
 
   peShowRow(markup, cost, document.getElementById('peMarkupPrice'), document.getElementById('peMarkupProfit'), document.getElementById('peMarkupMargin'));
   peShowRow(margin, cost, document.getElementById('peMarginPrice'), document.getElementById('peMarginProfit'), document.getElementById('peMarginMargin'));
 
   hint.textContent = (cost > 0)
-    ? 'Markup and margin are calculated from the Cost of Sales above — edit it and everything recalculates instantly.'
+    ? 'Markup and margin are calculated from the Cost of Sales above — edit it and everything recalculates instantly. You can also type straight into a Selling price cell to solve back to its %.'
     : 'Enter a Cost of Sales — Markup, Margin and profit all need one to work. The Fixed price still saves fine.';
+}
+
+function peMarkupPriceInput() {
+  // Solve price = cost*(1+pct/100) backwards for pct, then let the normal
+  // recalc redrive the price from that % — an exact round trip, since
+  // markup can represent any price down to and including 0.
+  var cost = parseFloat(document.getElementById('peCost').value) || 0;
+  var price = parseFloat(document.getElementById('peMarkupPrice').value);
+  if (cost > 0 && !isNaN(price)) {
+    var pct = (price - cost) / cost * 100;
+    document.getElementById('peMarkupPct').value = pct.toFixed(2);
+  }
+  peRecalc();
+}
+
+function peMarginPriceInput() {
+  // Same idea, but margin's curve is asymptotic — it can get arbitrarily
+  // close to 0 but never reach it at any finite %. If someone types 0 (or
+  // less) here, there's no % to solve for; leave the % alone and let recalc
+  // restore the closest price that % actually represents. Use the Fixed
+  // price row to sell something for exactly ₱0.
+  var cost = parseFloat(document.getElementById('peCost').value) || 0;
+  var price = parseFloat(document.getElementById('peMarginPrice').value);
+  if (price > 0 && !isNaN(price)) {
+    var pct = (price - cost) / price * 100;
+    if (pct > 99.99) pct = 99.99;
+    document.getElementById('peMarginPct').value = pct.toFixed(2);
+  }
+  peRecalc();
 }
 
 async function peSave() {
