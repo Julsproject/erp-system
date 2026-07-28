@@ -67,7 +67,7 @@
             <td><strong>Markup</strong><small class="muted" style="display:block;">% on top of cost</small></td>
             <td class="num"><input id="markupPct" name="markup_pct" type="number" step="0.01" class="pct-in"
                    value="0.00" oninput="recalcPrices()"></td>
-            <td class="num"><input id="markupPrice" type="number" step="0.01" inputmode="decimal" oninput="markupPriceInput()"></td>
+            <td class="num"><input id="markupPrice" type="number" step="0.01" inputmode="decimal" oninput="markupPriceInput()" onblur="recalcPrices()"></td>
             <td class="num" id="markupProfit">—</td>
             <td class="num" id="markupMargin">—</td>
           </tr>
@@ -75,7 +75,7 @@
             <td><strong>Margin</strong><small class="muted" style="display:block;">% of the selling price</small></td>
             <td class="num"><input id="marginPct" name="margin_pct" type="number" step="0.01" max="99.99" class="pct-in"
                    value="0.00" oninput="recalcPrices()"></td>
-            <td class="num"><input id="marginPrice" type="number" step="0.01" inputmode="decimal" oninput="marginPriceInput()"></td>
+            <td class="num"><input id="marginPrice" type="number" step="0.01" inputmode="decimal" oninput="marginPriceInput()" onblur="recalcPrices()"></td>
             <td class="num" id="marginProfit">—</td>
             <td class="num" id="marginMargin">—</td>
           </tr>
@@ -215,7 +215,7 @@
     marginEl.title = belowTarget ? ('Below your ' + MIN_MARGIN_PCT + '% minimum margin target') : '';
   }
 
-  function recalcPrices() {
+  function recalcPrices(skipPriceId) {
     // Not present on the edit form — selling price lives on its own tab there.
     if (!document.getElementById('fixedPrice')) return;
     var cost = costValue();
@@ -234,9 +234,12 @@
     var markup = cost > 0 ? Math.max(Math.round(cost * (1 + mPct / 100) * 100) / 100, 0) : 0;
     var margin = cost > 0 ? Math.max(Math.round(cost / (1 - gPct / 100) * 100) / 100, 0) : 0;
 
-    showRow(markup, cost, document.getElementById('markupPrice'),
+    // Skip rewriting whichever price cell the user is actively typing into —
+    // otherwise every keystroke gets clobbered by the reformatted value the
+    // instant it's typed, and you can never get past the first digit.
+    showRow(markup, cost, skipPriceId === 'markupPrice' ? null : document.getElementById('markupPrice'),
             document.getElementById('markupProfit'), document.getElementById('markupMargin'));
-    showRow(margin, cost, document.getElementById('marginPrice'),
+    showRow(margin, cost, skipPriceId === 'marginPrice' ? null : document.getElementById('marginPrice'),
             document.getElementById('marginProfit'), document.getElementById('marginMargin'));
 
     var targetNote = MIN_MARGIN_PCT !== null ? (' Rows marked ⚠ fall below your ' + MIN_MARGIN_PCT + '% minimum margin target.') : '';
@@ -252,7 +255,7 @@
     if (cost > 0 && !isNaN(price)) {
       document.getElementById('markupPct').value = ((price - cost) / cost * 100).toFixed(2);
     }
-    recalcPrices();
+    recalcPrices('markupPrice');
   }
 
   function marginPriceInput() {
@@ -268,7 +271,7 @@
       if (pct > 99.99) pct = 99.99;
       document.getElementById('marginPct').value = pct.toFixed(2);
     }
-    recalcPrices();
+    recalcPrices('marginPrice');
   }
 
   document.querySelector('input[name="cost_price"]').addEventListener('input', recalcPrices);

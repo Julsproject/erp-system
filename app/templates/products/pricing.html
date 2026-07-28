@@ -56,14 +56,14 @@
           <tr>
             <td><strong>Markup</strong><small class="muted" style="display:block;">% on top of cost</small></td>
             <td class="num"><input id="peMarkupPct" type="number" step="0.01" class="pct-in" oninput="peRecalc()"></td>
-            <td class="num"><input id="peMarkupPrice" type="number" step="0.01" inputmode="decimal" oninput="peMarkupPriceInput()"></td>
+            <td class="num"><input id="peMarkupPrice" type="number" step="0.01" inputmode="decimal" oninput="peMarkupPriceInput()" onblur="peRecalc()"></td>
             <td class="num" id="peMarkupProfit">—</td>
             <td class="num" id="peMarkupMargin">—</td>
           </tr>
           <tr>
             <td><strong>Margin</strong><small class="muted" style="display:block;">% of the selling price</small></td>
             <td class="num"><input id="peMarginPct" type="number" step="0.01" max="99.99" class="pct-in" oninput="peRecalc()"></td>
-            <td class="num"><input id="peMarginPrice" type="number" step="0.01" inputmode="decimal" oninput="peMarginPriceInput()"></td>
+            <td class="num"><input id="peMarginPrice" type="number" step="0.01" inputmode="decimal" oninput="peMarginPriceInput()" onblur="peRecalc()"></td>
             <td class="num" id="peMarginProfit">—</td>
             <td class="num" id="peMarginMargin">—</td>
           </tr>
@@ -213,7 +213,7 @@ function peShowRow(price, cost, priceEl, profitEl, marginEl) {
   marginEl.title = belowTarget ? ('Below your ' + MIN_MARGIN_PCT + '% minimum margin target') : '';
 }
 
-function peRecalc() {
+function peRecalc(skipPriceId) {
   if (!peSelectedId) return;
   var cost = parseFloat(document.getElementById('peCost').value) || 0;
   var hint = document.getElementById('peHint');
@@ -230,8 +230,11 @@ function peRecalc() {
   var markup = cost > 0 ? Math.max(Math.round(cost * (1 + mPct / 100) * 100) / 100, 0) : 0;
   var margin = cost > 0 ? Math.max(Math.round(cost / (1 - gPct / 100) * 100) / 100, 0) : 0;
 
-  peShowRow(markup, cost, document.getElementById('peMarkupPrice'), document.getElementById('peMarkupProfit'), document.getElementById('peMarkupMargin'));
-  peShowRow(margin, cost, document.getElementById('peMarginPrice'), document.getElementById('peMarginProfit'), document.getElementById('peMarginMargin'));
+  // Skip rewriting whichever price cell the user is actively typing into —
+  // otherwise every keystroke gets clobbered by the reformatted value the
+  // instant it's typed, and you can never get past the first digit.
+  peShowRow(markup, cost, skipPriceId === 'peMarkupPrice' ? null : document.getElementById('peMarkupPrice'), document.getElementById('peMarkupProfit'), document.getElementById('peMarkupMargin'));
+  peShowRow(margin, cost, skipPriceId === 'peMarginPrice' ? null : document.getElementById('peMarginPrice'), document.getElementById('peMarginProfit'), document.getElementById('peMarginMargin'));
 
   hint.textContent = (cost > 0)
     ? 'Markup and margin are calculated from the Cost of Sales above — edit it and everything recalculates instantly. You can also type straight into a Selling price cell to solve back to its %.'
@@ -240,15 +243,17 @@ function peRecalc() {
 
 function peMarkupPriceInput() {
   // Solve price = cost*(1+pct/100) backwards for pct, then let the normal
-  // recalc redrive the price from that % — an exact round trip, since
-  // markup can represent any price down to and including 0.
+  // recalc redrive everything else — an exact round trip, since markup can
+  // represent any price down to and including 0. The price cell itself is
+  // left untouched while typing (see peRecalc's skipPriceId) and only
+  // reformatted to 2 decimals on blur.
   var cost = parseFloat(document.getElementById('peCost').value) || 0;
   var price = parseFloat(document.getElementById('peMarkupPrice').value);
   if (cost > 0 && !isNaN(price)) {
     var pct = (price - cost) / cost * 100;
     document.getElementById('peMarkupPct').value = pct.toFixed(2);
   }
-  peRecalc();
+  peRecalc('peMarkupPrice');
 }
 
 function peMarginPriceInput() {
@@ -264,7 +269,7 @@ function peMarginPriceInput() {
     if (pct > 99.99) pct = 99.99;
     document.getElementById('peMarginPct').value = pct.toFixed(2);
   }
-  peRecalc();
+  peRecalc('peMarginPrice');
 }
 
 async function peSave() {
