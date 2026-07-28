@@ -194,22 +194,25 @@
   }
   function showRow(price, cost, priceEl, profitEl, marginEl) {
     if (priceEl) priceEl.value = price > 0 ? price.toFixed(2) : '';
-    var profit = price - cost;
-    if (price > 0 && cost > 0) {
-      var marginPct = profit / price * 100;
-      profitEl.textContent = '₱' + profit.toFixed(2);
-      profitEl.className = 'num ' + (profit < 0 ? 'neg' : '');
-      // Below cost is always an error (red, existing behaviour). Profitable
-      // but under the shop's own minimum-margin target is a softer amber
-      // nudge — the price isn't wrong, just thinner than the standard.
-      var belowTarget = MIN_MARGIN_PCT !== null && profit >= 0 && marginPct < MIN_MARGIN_PCT;
-      marginEl.textContent = marginPct.toFixed(1) + '%' + (belowTarget ? ' ⚠' : '');
-      marginEl.className = 'num ' + (profit < 0 ? 'neg' : (belowTarget ? 'thin-margin' : ''));
-      marginEl.title = belowTarget ? ('Below your ' + MIN_MARGIN_PCT + '% minimum margin target') : '';
-    } else {
+    if (cost <= 0) {
+      // No cost on file — profit/margin against an unknown cost is meaningless.
       profitEl.textContent = '—'; profitEl.className = 'num muted';
       marginEl.textContent = '—'; marginEl.className = 'num muted'; marginEl.title = '';
+      return;
     }
+    var profit = price - cost;
+    // price === 0 is a real, meaningful state (unpriced or free): a full loss
+    // of the cost, i.e. -100% margin — not "no data" and NOT 0% profit.
+    var marginPct = price > 0 ? (profit / price * 100) : -100;
+    profitEl.textContent = '₱' + profit.toFixed(2);
+    profitEl.className = 'num ' + (profit < 0 ? 'neg' : '');
+    // Below cost is always an error (red, existing behaviour). Profitable
+    // but under the shop's own minimum-margin target is a softer amber
+    // nudge — the price isn't wrong, just thinner than the standard.
+    var belowTarget = MIN_MARGIN_PCT !== null && profit >= 0 && marginPct < MIN_MARGIN_PCT;
+    marginEl.textContent = marginPct.toFixed(1) + '%' + (belowTarget ? ' ⚠' : '');
+    marginEl.className = 'num ' + (profit < 0 ? 'neg' : (belowTarget ? 'thin-margin' : ''));
+    marginEl.title = belowTarget ? ('Below your ' + MIN_MARGIN_PCT + '% minimum margin target') : '';
   }
 
   function recalcPrices() {

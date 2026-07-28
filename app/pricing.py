@@ -46,12 +46,24 @@ def margin_price(cost, pct) -> Decimal:
     return _money(cost / (Decimal("1") - pct / Decimal("100")))
 
 
+def profit(price, cost) -> Decimal:
+    """Straight profit — works fine at any price, including 0 or negative."""
+    return _money(_dec(price) - _dec(cost))
+
+
 def true_margin(price, cost) -> Decimal:
     """What share of `price` is actually profit — the number the Gross Profit
-    reports will show, whichever way the price was set."""
+    reports will show, whichever way the price was set.
+
+    An unpriced/free item (price <= 0) isn't "0% margin" — margin/price is
+    undefined at price=0, but the shop still spent `cost` and got nothing
+    back, i.e. a full loss on that cost: -100%. (A margin-against-cost read
+    of -cost/cost gives the same -100%, so there's no ambiguity here.) An
+    item with no cost either is truly neutral: nothing spent, nothing lost.
+    """
     price, cost = _dec(price), _dec(cost)
     if price <= 0:
-        return Decimal("0")
+        return Decimal("-100") if cost > 0 else Decimal("0")
     return _money((price - cost) / price * Decimal("100"))
 
 
@@ -61,3 +73,23 @@ def apply_to(product, cost, markup_pct, margin_pct) -> None:
     product.margin_pct = _dec(margin_pct)
     product.markup_price = markup_price(cost, product.markup_pct)
     product.margin_price = margin_price(cost, product.margin_pct)
+
+
+def needs_review(price, cost, min_margin_pct=None):
+    """Whether a product's pricing needs attention, and why. Three triggers:
+      1. No selling price set (price <= 0).
+      2. Selling at or below cost (zero or negative profit).
+      3. Profitable, but the true margin falls under the shop's target
+         (only checked when a target is configured).
+    Returns (bool, reason | None).
+    """
+    price, cost = _dec(price), _dec(cost)
+    if price <= 0:
+        return True, "No selling price set"
+    if cost > 0 and price <= cost:
+        return True, "Selling at or below cost"
+    if min_margin_pct is not None and cost > 0 and price > cost:
+        tm = true_margin(price, cost)
+        if tm < _dec(min_margin_pct):
+            return True, f"Margin below {min_margin_pct:g}% target"
+    return False, None

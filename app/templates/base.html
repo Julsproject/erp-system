@@ -158,7 +158,7 @@
   <main class="main">
     <div class="content">
       {% if user and price_alerts and path.startswith('/products') %}
-      <a class="alert-bar" href="/products?alert=1">
+      <a class="alert-bar" href="/products/pricing?review=1">
         <span class="alert-bar-icon">⚠</span>
         <span class="alert-bar-text">
           <strong>{{ price_alerts }} item{{ '' if price_alerts == 1 else 's' }} selling at or below cost.</strong>

@@ -625,6 +625,7 @@ table.grid tr:last-child td { border-bottom: none; }
 .pos-complete:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; transform: none; }
 
 @media (max-width: 900px) { .pos-grid { grid-template-columns: 1fr; } .pos-search-panel { position: static; } }
+@media (max-width: 900px) { .pricing-split { grid-template-columns: 1fr; } .pricing-right { position: static; } }
 
 /* ---------- Discount type toggle ---------- */
 .disc-cell { display: inline-flex; align-items: center; gap: 4px; justify-content: flex-end; }
@@ -1017,6 +1018,35 @@ table.grid tr:last-child td { border-bottom: none; }
 /* Profitable, but under the shop's minimum-margin target — a softer nudge
    than the red "below cost" state, which stays a hard error. */
 .thin-margin { color: var(--warn); font-weight: 600; }
+
+/* ---- Unified Selling Price tab: split-screen list + editable panel ---- */
+.pricing-split { display: grid; grid-template-columns: 0.85fr 1.4fr; gap: 20px; align-items: start; }
+.pricing-left { padding: 16px; }
+.pricing-right { padding: 20px; position: sticky; top: 20px; }
+.review-toggle {
+  display: flex; align-items: center; gap: 9px; padding: 4px 2px 14px; margin-bottom: 10px;
+  cursor: pointer; font-size: 13.5px; font-weight: 600; color: var(--ink);
+  border-bottom: 1px solid var(--line);
+}
+.review-toggle input { width: 17px; height: 17px; accent-color: var(--danger); flex: none; }
+.review-badge {
+  background: var(--danger); color: #fff; font-size: 11px; font-weight: 700;
+  padding: 1px 7px; border-radius: 999px; min-width: 18px; text-align: center;
+}
+.price-list { display: flex; flex-direction: column; gap: 7px; max-height: 68vh; overflow-y: auto; }
+.price-item {
+  text-align: left; width: 100%; background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); padding: 11px 13px; cursor: pointer;
+  transition: background .14s var(--ease), border-color .14s, box-shadow .14s;
+}
+.price-item:hover { background: var(--brand-tint); border-color: #d6d9fb; }
+.price-item.selected { background: var(--brand-tint); border-color: var(--brand); box-shadow: 0 0 0 2px rgba(79,70,229,.14); }
+.price-item-name { font-weight: 600; font-size: 14px; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.price-item-sub { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+.pe-cost-input { width: 140px; padding: 9px 11px; border: 1px solid var(--line-2); border-radius: 8px; font-size: 15px; font-weight: 700; background: var(--surface); color: var(--ink); font-variant-numeric: tabular-nums; }
+.pe-cost-input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
+.pe-cost-row { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.pe-review-flag { font-size: 12px; font-weight: 700; color: var(--danger); background: var(--danger-tint); padding: 3px 9px; border-radius: 999px; }
 
 /* compact variant inside the purchase form's quick-create panel */
 .np-prices { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }

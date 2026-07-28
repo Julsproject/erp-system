@@ -17,10 +17,10 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from fastapi import APIRouter, Depends, File, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
-from . import audit, models, pricing
+from . import audit, models, pricing, settings_store
 from .database import get_db
 from .deps import get_current_user, is_admin
 from .templating import templates
@@ -105,6 +105,18 @@ def _get_or_create_unit_type(db: Session, name: str):
     db.add(unit)
     db.flush()
     return unit
+
+
+def _needs_review_expr(min_margin):
+    """SQL version of pricing.needs_review — same three triggers, for
+    filtering/counting at the database level instead of in Python."""
+    price = models.Product.selling_price
+    cost = models.Product.cost_price
+    conditions = [price <= 0, and_(cost > 0, price <= cost)]
+    if min_margin is not None:
+        margin_expr = (price - cost) / price * 100
+        conditions.append(and_(cost > 0, price > cost, margin_expr < min_margin))
+    return or_(*conditions)
 
 
 @router.get("/products", response_class=HTMLResponse)
@@ -345,39 +357,65 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
 
 
 @router.get("/products/pricing", response_class=HTMLResponse)
-def pricing_tool(request: Request, user=Depends(get_current_user)):
-    """A fast search-and-save screen for touching up just the selling
-    price(s) of an existing product — the full edit form no longer carries
-    these fields, since this is the quicker path for the day-to-day 'raise
-    this one price a bit' case."""
+def pricing_tool(request: Request, review: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """The single unified costing + pricing workflow: search or browse on
+    the left (with a 'Price Review Needed' filter folded in as a toggle,
+    not a separate tab), edit cost + the 3-row pricing matrix on the right."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    return templates.TemplateResponse("products/pricing.html", {"request": request, "app_name": request.app.title, "user": user})
+    min_margin = settings_store.min_margin_pct()
+    review_count = db.query(func.count(models.Product.id)).filter(
+        models.Product.is_active.is_(True), _needs_review_expr(min_margin)
+    ).scalar() or 0
+    return templates.TemplateResponse(
+        "products/pricing.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "review_count": review_count,
+            "initial_review": bool(review),
+        },
+    )
 
 
 @router.get("/products/price-search")
-def price_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+def price_search(
+    q: str = "",
+    review: int = 0,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     q = (q or "").strip()
+    min_margin = settings_store.min_margin_pct()
+
+    review_count = db.query(func.count(models.Product.id)).filter(
+        models.Product.is_active.is_(True), _needs_review_expr(min_margin)
+    ).scalar() or 0
+
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
+    if review:
+        query = query.filter(_needs_review_expr(min_margin))
     if q:
         barcode_hit = query.filter(models.Product.barcode == q).first()
         products = [barcode_hit] if barcode_hit else (
-            query.filter(models.Product.name.ilike(f"%{q}%")).order_by(models.Product.name).limit(20).all()
+            query.filter(models.Product.name.ilike(f"%{q}%")).order_by(models.Product.name).limit(100).all()
         )
     else:
-        products = query.order_by(models.Product.name).limit(20).all()
-    return {"products": [
-        {
+        products = query.order_by(models.Product.name).limit(200 if review else 60).all()
+
+    rows = []
+    for p in products:
+        flagged, reason = pricing.needs_review(p.selling_price, p.cost_price, min_margin)
+        rows.append({
             "id": p.id, "name": p.name, "barcode": p.barcode,
             "cost_price": float(p.cost_price or 0),
             "selling_price": float(p.selling_price or 0),
             "markup_pct": float(p.markup_pct or 0),
             "margin_pct": float(p.margin_pct or 0),
-        }
-        for p in products
-    ]}
+            "needs_review": flagged, "review_reason": reason,
+        })
+    return {"products": rows, "review_count": review_count}
 
 
 @router.post("/products/{product_id:int}/pricing")
@@ -389,6 +427,8 @@ async def update_pricing(product_id: int, request: Request, db: Session = Depend
         return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
     data = await request.json()
     before = _product_snapshot(product)
+    if "cost_price" in data:
+        product.cost_price = _to_decimal(data.get("cost_price"))
     product.selling_price = _to_decimal(data.get("selling_price"))
     pricing.apply_to(product, product.cost_price, data.get("markup_pct"), data.get("margin_pct"))
     db.flush()
@@ -402,12 +442,15 @@ async def update_pricing(product_id: int, request: Request, db: Session = Depend
             changes=changes,
         )
     db.commit()
+    min_margin = settings_store.min_margin_pct()
+    flagged, reason = pricing.needs_review(product.selling_price, product.cost_price, min_margin)
     return {
         "ok": True,
         "cost_price": float(product.cost_price or 0),
         "selling_price": float(product.selling_price or 0),
         "markup_pct": float(product.markup_pct or 0),
         "margin_pct": float(product.margin_pct or 0),
+        "needs_review": flagged, "review_reason": reason,
     }
 
 

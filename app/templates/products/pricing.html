@@ -4,152 +4,218 @@
 <div class="page-head">
   <div>
     <h1 class="page-title">Selling Price</h1>
-    <p class="muted">Search a product, adjust its price, save — no need to open the full edit form.</p>
+    <p class="muted">Search or browse on the left, edit cost and pricing on the right — saves instantly.</p>
   </div>
 </div>
 
 <div class="tabs">
   <a class="tab" href="/products">All Products</a>
-  <a class="tab" href="/products?alert=1">⚠ Price Review Needed</a>
   <a class="tab active" href="/products/pricing">Selling Price</a>
 </div>
 
-<div class="card" style="padding:20px;max-width:680px;margin-top:16px;">
-  <input id="priceSearch" class="search" type="search" placeholder="Search product name or scan a barcode…" autocomplete="off" autofocus style="width:100%;max-width:none;">
-  <div id="priceResults" class="pos-results" style="margin-top:10px;"></div>
-</div>
+<div class="pricing-split" style="margin-top:16px;">
+  <div class="card pricing-left">
+    <input id="priceSearch" class="search" type="search" placeholder="Search product name or scan a barcode…" autocomplete="off" style="width:100%;max-width:none;margin-bottom:12px;" autofocus>
 
-<div class="card" id="priceEditCard" style="padding:20px;max-width:680px;margin-top:16px;display:none;">
-  <h3 class="card-title" id="peName" style="margin-top:0;">—</h3>
-  <p class="muted">Cost of Sales: <strong id="peCost">₱0.00</strong></p>
+    <label class="review-toggle">
+      <input type="checkbox" id="reviewToggle" onchange="peToggleReview()">
+      <span>⚠️ Show Only Price Review Needed</span>
+      <span class="review-badge" id="reviewBadge">{{ review_count }}</span>
+    </label>
 
-  <div class="table-wrap">
-    <table class="grid price-table">
-      <thead>
-        <tr><th>Price</th><th class="num">%</th><th class="num">Selling price (₱)</th><th class="num">Profit</th><th class="num">True margin</th></tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><strong>Fixed</strong><small class="muted" style="display:block;">typed in — POS uses this</small></td>
-          <td class="num muted">—</td>
-          <td class="num"><input id="peFixedPrice" type="number" step="0.01" min="0" inputmode="decimal" oninput="peRecalc()"></td>
-          <td class="num" id="peFixedProfit">—</td>
-          <td class="num" id="peFixedMargin">—</td>
-        </tr>
-        <tr>
-          <td><strong>Markup</strong><small class="muted" style="display:block;">% on top of cost</small></td>
-          <td class="num"><input id="peMarkupPct" type="number" step="0.01" min="0" class="pct-in" oninput="peRecalc()"></td>
-          <td class="num"><input id="peMarkupPrice" type="number" class="readonly" readonly tabindex="-1"></td>
-          <td class="num" id="peMarkupProfit">—</td>
-          <td class="num" id="peMarkupMargin">—</td>
-        </tr>
-        <tr>
-          <td><strong>Margin</strong><small class="muted" style="display:block;">% of the selling price</small></td>
-          <td class="num"><input id="peMarginPct" type="number" step="0.01" min="0" max="99.99" class="pct-in" oninput="peRecalc()"></td>
-          <td class="num"><input id="peMarginPrice" type="number" class="readonly" readonly tabindex="-1"></td>
-          <td class="num" id="peMarginProfit">—</td>
-          <td class="num" id="peMarginMargin">—</td>
-        </tr>
-      </tbody>
-    </table>
+    <div id="priceList" class="price-list"></div>
   </div>
-  <p class="hint" id="peHint"></p>
 
-  <div class="form-actions" style="margin-top:14px;">
-    <button class="btn" type="button" onclick="peSave()">Save price</button>
-    <button class="btn-secondary" type="button" onclick="peCancel()">Search another</button>
+  <div class="card pricing-right" id="priceEditCard" style="display:none;">
+    <div class="price-item-name" style="font-size:17px;margin-bottom:2px;">
+      <span id="peName">—</span>
+      <span class="pe-review-flag" id="peFlag" style="display:none;"></span>
+    </div>
+    <p class="muted" id="peBarcode" style="margin:0 0 14px;font-size:12.5px;"></p>
+
+    <div class="pe-cost-row">
+      <label style="display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--muted);font-weight:600;">
+        Cost of Sales
+        <input id="peCost" class="pe-cost-input" type="number" step="0.01" min="0" inputmode="decimal" oninput="peRecalc()">
+      </label>
+    </div>
+
+    <div class="table-wrap">
+      <table class="grid price-table">
+        <thead>
+          <tr><th>Price</th><th class="num">%</th><th class="num">Selling price (₱)</th><th class="num">Profit</th><th class="num">True margin</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Fixed</strong><small class="muted" style="display:block;">typed in — POS uses this</small></td>
+            <td class="num muted">—</td>
+            <td class="num"><input id="peFixedPrice" type="number" step="0.01" min="0" inputmode="decimal" oninput="peRecalc()"></td>
+            <td class="num" id="peFixedProfit">—</td>
+            <td class="num" id="peFixedMargin">—</td>
+          </tr>
+          <tr>
+            <td><strong>Markup</strong><small class="muted" style="display:block;">% on top of cost</small></td>
+            <td class="num"><input id="peMarkupPct" type="number" step="0.01" min="0" class="pct-in" oninput="peRecalc()"></td>
+            <td class="num"><input id="peMarkupPrice" type="number" class="readonly" readonly tabindex="-1"></td>
+            <td class="num" id="peMarkupProfit">—</td>
+            <td class="num" id="peMarkupMargin">—</td>
+          </tr>
+          <tr>
+            <td><strong>Margin</strong><small class="muted" style="display:block;">% of the selling price</small></td>
+            <td class="num"><input id="peMarginPct" type="number" step="0.01" min="0" max="99.99" class="pct-in" oninput="peRecalc()"></td>
+            <td class="num"><input id="peMarginPrice" type="number" class="readonly" readonly tabindex="-1"></td>
+            <td class="num" id="peMarginProfit">—</td>
+            <td class="num" id="peMarginMargin">—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="hint" id="peHint"></p>
+
+    <div class="form-actions" style="margin-top:14px;">
+      <button class="btn" type="button" onclick="peSave()">Save price</button>
+      <button class="btn-secondary" type="button" onclick="peCancel()">Close</button>
+    </div>
+    <div id="peMsg" class="alert" style="display:none;margin-top:12px;"></div>
   </div>
-  <div id="peMsg" class="alert" style="display:none;margin-top:12px;"></div>
+
+  <div class="card pricing-right" id="priceEmptyCard" style="padding:40px 20px;text-align:center;color:var(--muted);">
+    Select an item on the left to edit its cost and pricing.
+  </div>
 </div>
 
 <script>
-let peProduct = null;
+let peProducts = [];
+let peSelectedId = null;
+let peReviewOnly = {{ 'true' if initial_review else 'false' }};
+
 const peSearchBox = document.getElementById('priceSearch');
 let peTimer = null;
-peSearchBox.addEventListener('input', () => { clearTimeout(peTimer); peTimer = setTimeout(peRunSearch, 200); });
-peSearchBox.addEventListener('keydown', async (e) => {
+peSearchBox.addEventListener('input', () => { clearTimeout(peTimer); peTimer = setTimeout(peLoadList, 200); });
+peSearchBox.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter') return;
   e.preventDefault();
   clearTimeout(peTimer);
-  const q = peSearchBox.value.trim();
-  if (!q) return;
-  const res = await fetch('/products/price-search?q=' + encodeURIComponent(q));
-  const data = await res.json();
-  const products = data.products || [];
-  if (products.length === 1) { peSelect(products[0]); }
-  else { peRenderResults(products); }
+  peLoadList();
 });
 
-async function peRunSearch() {
-  const q = peSearchBox.value.trim();
-  if (!q) { document.getElementById('priceResults').innerHTML = ''; return; }
-  const res = await fetch('/products/price-search?q=' + encodeURIComponent(q));
-  const data = await res.json();
-  peRenderResults(data.products || []);
-}
-
-function peRenderResults(products) {
-  const box = document.getElementById('priceResults');
-  if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
-  box.innerHTML = '';
-  products.forEach(p => {
-    const el = document.createElement('button');
-    el.type = 'button'; el.className = 'pos-item'; el.onclick = () => peSelect(p);
-    el.innerHTML =
-      '<div class="pos-item-main"><span class="pos-item-name">' + peEsc(p.name) + '</span></div>' +
-      '<div class="pos-item-sub">Cost ' + peMoney(p.cost_price) + ' · Selling ' + peMoney(p.selling_price) + '</div>';
-    box.appendChild(el);
-  });
-}
+document.getElementById('reviewToggle').checked = peReviewOnly;
 
 function peEsc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function peMoney(v) { return '₱' + (Number(v) || 0).toFixed(2); }
 
-function peSelect(p) {
-  peProduct = p;
+async function peLoadList() {
+  const q = peSearchBox.value.trim();
+  const res = await fetch('/products/price-search?q=' + encodeURIComponent(q) + '&review=' + (peReviewOnly ? 1 : 0));
+  const data = await res.json();
+  peProducts = data.products || [];
+  document.getElementById('reviewBadge').textContent = data.review_count || 0;
+  peRenderList();
+
+  // If exactly one barcode/name match came back from an Enter/scan, jump
+  // straight to editing it — same fast path the old search-only tool had.
+  if (peProducts.length === 1 && q) {
+    peSelectProduct(peProducts[0].id);
+    return;
+  }
+  // Keep the current selection if it's still in the list; otherwise select
+  // the first row so there's always something ready to edit (especially
+  // useful landing here from "Review now →" with the filter already on).
+  if (peSelectedId && peProducts.some(p => p.id === peSelectedId)) {
+    peSelectProduct(peSelectedId, true);
+  } else if (peProducts.length) {
+    peSelectProduct(peProducts[0].id);
+  } else {
+    peSelectedId = null;
+    document.getElementById('priceEditCard').style.display = 'none';
+    document.getElementById('priceEmptyCard').style.display = 'block';
+    document.getElementById('priceEmptyCard').textContent =
+      peReviewOnly ? 'Nothing needs review right now. 🎉' : 'No products found.';
+  }
+}
+
+function peToggleReview() {
+  peReviewOnly = document.getElementById('reviewToggle').checked;
+  peLoadList();
+}
+
+function peRenderList() {
+  const box = document.getElementById('priceList');
+  box.innerHTML = '';
+  peProducts.forEach(p => {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'price-item' + (p.id === peSelectedId ? ' selected' : '');
+    el.onclick = () => peSelectProduct(p.id);
+    el.innerHTML =
+      '<div class="price-item-name"><span>' + peEsc(p.name) + '</span>' +
+      (p.needs_review ? '<span class="warn-tag">⚠</span>' : '') + '</div>' +
+      '<div class="price-item-sub">Cost ' + peMoney(p.cost_price) + ' · Selling ' + peMoney(p.selling_price) +
+      (p.needs_review ? '<br><span style="color:var(--danger);">' + peEsc(p.review_reason || 'Needs review') + '</span>' : '') +
+      '</div>';
+    box.appendChild(el);
+  });
+}
+
+function peSelectProduct(id, skipScroll) {
+  const p = peProducts.find(x => x.id === id);
+  if (!p) return;
+  peSelectedId = id;
+  peRenderList();
+
+  document.getElementById('priceEmptyCard').style.display = 'none';
+  document.getElementById('priceEditCard').style.display = 'block';
+
   document.getElementById('peName').textContent = p.name;
-  document.getElementById('peCost').textContent = peMoney(p.cost_price);
+  document.getElementById('peBarcode').textContent = p.barcode ? ('Barcode: ' + p.barcode) : '';
+  const flag = document.getElementById('peFlag');
+  if (p.needs_review) { flag.style.display = 'inline-block'; flag.textContent = '⚠ ' + (p.review_reason || 'Needs review'); }
+  else { flag.style.display = 'none'; }
+
+  document.getElementById('peCost').value = (p.cost_price || 0).toFixed(2);
   document.getElementById('peFixedPrice').value = (p.selling_price || 0).toFixed(2);
   document.getElementById('peMarkupPct').value = (p.markup_pct || 0).toFixed(2);
   document.getElementById('peMarginPct').value = (p.margin_pct || 0).toFixed(2);
   document.getElementById('peMsg').style.display = 'none';
-  document.getElementById('priceEditCard').style.display = 'block';
   peRecalc();
-  document.getElementById('priceEditCard').scrollIntoView({behavior: 'smooth', block: 'start'});
+  if (!skipScroll) document.getElementById('priceEditCard').scrollIntoView({behavior: 'smooth', block: 'nearest'});
 }
 
 function peCancel() {
-  peProduct = null;
+  peSelectedId = null;
   document.getElementById('priceEditCard').style.display = 'none';
-  peSearchBox.value = '';
-  document.getElementById('priceResults').innerHTML = '';
-  peSearchBox.focus();
+  document.getElementById('priceEmptyCard').style.display = 'block';
+  document.getElementById('priceEmptyCard').textContent = 'Select an item on the left to edit its cost and pricing.';
+  peRenderList();
 }
 
-/* Mirrors app/pricing.py and the product edit form's own calculation. */
+/* Mirrors app/pricing.py's markup_price / margin_price / true_margin. */
 {% set mmp = min_margin_pct() %}
 var MIN_MARGIN_PCT = {{ mmp if mmp is not none else 'null' }};
 
 function peShowRow(price, cost, priceEl, profitEl, marginEl) {
   if (priceEl) priceEl.value = price > 0 ? price.toFixed(2) : '';
-  var profit = price - cost;
-  if (price > 0 && cost > 0) {
-    var marginPct = profit / price * 100;
-    profitEl.textContent = '₱' + profit.toFixed(2);
-    profitEl.className = 'num ' + (profit < 0 ? 'neg' : '');
-    var belowTarget = MIN_MARGIN_PCT !== null && profit >= 0 && marginPct < MIN_MARGIN_PCT;
-    marginEl.textContent = marginPct.toFixed(1) + '%' + (belowTarget ? ' ⚠' : '');
-    marginEl.className = 'num ' + (profit < 0 ? 'neg' : (belowTarget ? 'thin-margin' : ''));
-    marginEl.title = belowTarget ? ('Below your ' + MIN_MARGIN_PCT + '% minimum margin target') : '';
-  } else {
+  if (cost <= 0) {
+    // No cost on file — profit/margin against an unknown cost is meaningless.
     profitEl.textContent = '—'; profitEl.className = 'num muted';
     marginEl.textContent = '—'; marginEl.className = 'num muted'; marginEl.title = '';
+    return;
   }
+  var profit = price - cost;
+  // price === 0 is a real, meaningful state (unpriced or free): a full loss
+  // of the cost, i.e. -100% margin — not "no data" and NOT 0% profit.
+  var marginPct = price > 0 ? (profit / price * 100) : -100;
+  profitEl.textContent = '₱' + profit.toFixed(2);
+  profitEl.className = 'num ' + (profit < 0 ? 'neg' : '');
+  var belowTarget = MIN_MARGIN_PCT !== null && profit >= 0 && marginPct < MIN_MARGIN_PCT;
+  marginEl.textContent = marginPct.toFixed(1) + '%' + (belowTarget ? ' ⚠' : '');
+  marginEl.className = 'num ' + (profit < 0 ? 'neg' : (belowTarget ? 'thin-margin' : ''));
+  marginEl.title = belowTarget ? ('Below your ' + MIN_MARGIN_PCT + '% minimum margin target') : '';
 }
 
 function peRecalc() {
-  if (!peProduct) return;
-  var cost = Number(peProduct.cost_price) || 0;
+  if (!peSelectedId) return;
+  var cost = parseFloat(document.getElementById('peCost').value) || 0;
   var hint = document.getElementById('peHint');
 
   var fixed = parseFloat(document.getElementById('peFixedPrice').value) || 0;
@@ -166,30 +232,33 @@ function peRecalc() {
   peShowRow(margin, cost, document.getElementById('peMarginPrice'), document.getElementById('peMarginProfit'), document.getElementById('peMarginMargin'));
 
   hint.textContent = (cost > 0)
-    ? 'Markup and margin are calculated from the Cost of Sales. Note they differ: the same % gives a different price.'
-    : 'This product has no Cost of Sales yet — Markup and Margin need one to work. The Fixed price still saves fine.';
+    ? 'Markup and margin are calculated from the Cost of Sales above — edit it and everything recalculates instantly.'
+    : 'Enter a Cost of Sales — Markup, Margin and profit all need one to work. The Fixed price still saves fine.';
 }
 
 async function peSave() {
-  if (!peProduct) return;
+  if (!peSelectedId) return;
   const payload = {
+    cost_price: document.getElementById('peCost').value,
     selling_price: document.getElementById('peFixedPrice').value,
     markup_pct: document.getElementById('peMarkupPct').value,
     margin_pct: document.getElementById('peMarginPct').value,
   };
   const msg = document.getElementById('peMsg');
   try {
-    const res = await fetch('/products/' + peProduct.id + '/pricing', {
+    const res = await fetch('/products/' + peSelectedId + '/pricing', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
     });
     const data = await res.json();
     if (data.ok) {
-      peProduct.selling_price = data.selling_price;
-      peProduct.markup_pct = data.markup_pct;
-      peProduct.margin_pct = data.margin_pct;
-      peProduct.cost_price = data.cost_price;
+      const savedName = (peProducts.find(x => x.id === peSelectedId) || {}).name || 'item';
+      // Re-fetch so the list, the review badge and this item's flag all
+      // reflect the save — a product can move in or out of "needs review".
+      await peLoadList();
       msg.style.background = '#f0fdf4'; msg.style.borderColor = '#bbf7d0'; msg.style.color = '#15803d';
-      msg.textContent = 'Saved — ' + peProduct.name + ' now sells at ' + peMoney(data.selling_price) + '.';
+      msg.textContent = 'Saved — ' + savedName + ' now sells at ' + peMoney(data.selling_price) + '.';
+      document.getElementById('peMsg').style.display = 'block';
+      return;
     } else {
       msg.style.background = ''; msg.style.borderColor = ''; msg.style.color = '';
       msg.textContent = data.error || 'Save failed.';
@@ -200,5 +269,7 @@ async function peSave() {
   }
   msg.style.display = 'block';
 }
+
+peLoadList();
 </script>
 {% endblock %}
