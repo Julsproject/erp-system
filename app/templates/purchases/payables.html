@@ -9,6 +9,7 @@
   <a class="tab" href="/purchases/new">New Purchase</a>
   <a class="tab" href="/purchases">Purchase History</a>
   <a class="tab active" href="/purchases/payables">Payables</a>
+  <a class="tab" href="/purchases/payables/aging">AP Aging</a>
   <a class="tab" href="/suppliers">Suppliers</a>
 </div>
 
@@ -42,7 +43,7 @@
       <tr><th>Ref #</th><th>Supplier</th><th>Received</th><th>Due</th><th class="num">Amount Owed</th><th></th></tr>
     </thead>
     <tbody>
-      {% for p in rows %}
+      {% for p, outstanding in rows %}
       <tr>
         <td class="strong">{{ p.ref_no }}</td>
         <td>{{ p.supplier.name if p.supplier else '—' }}</td>
@@ -59,7 +60,7 @@
           <span class="muted">—</span>
           {% endif %}
         </td>
-        <td class="num owed">{{ p.total|peso }}</td>
+        <td class="num owed">{{ outstanding|peso }}{% if outstanding != p.total %} <span class="muted" style="font-weight:400;">of {{ p.total|peso }}</span>{% endif %}</td>
         <td class="row-actions"><a class="btn-pay" href="/purchases/{{ p.id }}">View / Pay</a></td>
       </tr>
       {% else %}

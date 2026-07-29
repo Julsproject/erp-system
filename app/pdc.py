@@ -4,9 +4,12 @@ A PDC holds a payment in limbo until the bank actually honors it:
   received (from a customer settling credit) -> clearing creates the
     ReceivableSettlement only now, so the credit balance doesn't drop until
     the cheque is proven good.
-  issued (to pay a supplier) -> clearing marks that Purchase paid only now.
+  issued (to pay a supplier) -> clearing creates a PurchaseSettlement only
+    now, for whatever the cheque was worth (it may only be a partial
+    payment); the purchase flips to "paid" once that brings its balance
+    to zero, not necessarily on this one cheque alone.
 Bouncing a received cheque needs no reversal (nothing was ever applied);
-bouncing an issued one just leaves the purchase unpaid.
+bouncing an issued one just leaves the purchase's balance as it was.
 """
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -124,8 +127,25 @@ def clear_pdc(pdc_id: int, db: Session = Depends(get_db), user=Depends(get_curre
     elif pdc.purchase_id:
         purchase = db.get(models.Purchase, pdc.purchase_id)
         if purchase:
-            purchase.status = "paid"
-            purchase.paid_at = func.now()
+            # Same partial-payment idea as the received side: clearing posts
+            # a PurchaseSettlement for this cheque's amount, and the purchase
+            # only flips to "paid" once that brings the balance to zero —
+            # a cheque might only be covering part of what's owed.
+            db.add(models.PurchaseSettlement(
+                purchase_id=purchase.id, method="cheque", amount=pdc.amount,
+                bank=pdc.bank, cheque_no=pdc.cheque_no, cheque_date=pdc.cheque_date.isoformat(),
+                created_by=user.id,
+            ))
+            db.flush()
+            paid_so_far = (
+                db.query(func.coalesce(func.sum(models.PurchaseSettlement.amount), 0))
+                .filter(models.PurchaseSettlement.purchase_id == purchase.id)
+                .scalar()
+            )
+            if Decimal(str(paid_so_far or 0)) >= (purchase.total or Decimal("0")):
+                purchase.status = "paid"
+                purchase.payment_method = "cheque"
+                purchase.paid_at = func.now()
 
     pdc.status = "cleared"
     pdc.resolved_at = func.now()

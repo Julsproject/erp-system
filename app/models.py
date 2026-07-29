@@ -440,6 +440,26 @@ class Purchase(Base):
     user = relationship("User")
     lines = relationship("PurchaseLine", back_populates="purchase", cascade="all, delete-orphan")
     original_purchase = relationship("Purchase", remote_side=[id])
+    settlements = relationship("PurchaseSettlement", back_populates="purchase", cascade="all, delete-orphan")
+
+
+class PurchaseSettlement(Base):
+    """A payment made against a purchase's outstanding payable — the AP
+    mirror of ReceivableSettlement. Lets a payable be paid off in more than
+    one installment instead of all-or-nothing."""
+    __tablename__ = "purchase_settlements"
+
+    id = Column(Integer, primary_key=True)
+    purchase_id = Column(Integer, ForeignKey("purchases.id"), nullable=False)
+    method = Column(String(20), nullable=False)  # cash | bank_transfer | cheque | gcash | other
+    amount = Column(Numeric(12, 2), nullable=False, server_default="0")
+    bank = Column(String(60))          # for cheque
+    cheque_no = Column(String(40))     # for cheque
+    cheque_date = Column(String(20))   # for cheque (kept as text, same as ReceivableSettlement)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    purchase = relationship("Purchase", back_populates="settlements")
 
 
 class PurchaseLine(Base):
@@ -471,6 +491,14 @@ class StockMovement(Base):
     qty_base = Column(Numeric(14, 3), nullable=False)  # signed: negative = out
     reason = Column(String(30), nullable=False)         # sale | adjustment | ...
     ref = Column(String(30))
+    # Peso valuation — only populated for "adjustment"/"stock_count" movements
+    # (sale/purchase/refund/etc already have their own costing elsewhere, so
+    # valuing them again here would double-count). unit_cost is the product's
+    # cost_price at the moment of the movement; value = qty_base * unit_cost,
+    # so a negative value is shrinkage (loss) and a positive one is a find (gain).
+    unit_cost = Column(Numeric(12, 2), nullable=True)
+    value = Column(Numeric(14, 2), nullable=True)
+    note = Column(String(255), nullable=True)           # reason code, e.g. "Damage / breakage"
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 

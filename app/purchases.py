@@ -197,6 +197,25 @@ def list_purchases(
 DUE_SOON_DAYS = 15   # same window as Receivables (sales.py) and Notifications
 
 
+def _settled_for_purchases(db: Session, purchase_ids):
+    """Total paid so far per purchase — the AP mirror of sales.py's
+    _settled_map, sourced from PurchaseSettlement instead of
+    ReceivableSettlement."""
+    if not purchase_ids:
+        return {}
+    rows = (
+        db.query(models.PurchaseSettlement.purchase_id, func.coalesce(func.sum(models.PurchaseSettlement.amount), 0))
+        .filter(models.PurchaseSettlement.purchase_id.in_(purchase_ids))
+        .group_by(models.PurchaseSettlement.purchase_id)
+        .all()
+    )
+    return {pid: Decimal(amt) for pid, amt in rows}
+
+
+def _purchase_outstanding(purchase, settled_map) -> Decimal:
+    return (purchase.total or Decimal("0")) - settled_map.get(purchase.id, Decimal("0"))
+
+
 @router.get("/purchases/payables", response_class=HTMLResponse)
 def list_payables(
     request: Request,
@@ -206,14 +225,14 @@ def list_payables(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    """What we owe suppliers: every confirmed-but-unpaid receiving, with aging.
+    """What we owe suppliers: every confirmed receiving with a balance still
+    outstanding after any partial payments, with aging.
 
     A 'confirmed' receive-type purchase IS the payable — goods and cost
-    already moved, payment hasn't; 'pending' isn't owed yet (nothing
-    received), 'paid' no longer is. Mirrors Sales -> Receivables, except
-    there's no partial-settlement ledger here (a purchase is paid in full,
-    not collected against over time), so the outstanding amount is just the
-    purchase total.
+    already moved, payment hasn't (fully). Mirrors Sales -> Receivables:
+    PurchaseSettlement tracks partial payments the same way
+    ReceivableSettlement does, so a payable only drops off this list once
+    it's actually paid down to zero, not necessarily in one shot.
     """
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -225,9 +244,20 @@ def list_payables(
     today = date.today()
     horizon = today + timedelta(days=DUE_SOON_DAYS)
 
+    settled_sub = (
+        db.query(
+            models.PurchaseSettlement.purchase_id.label("pid"),
+            func.coalesce(func.sum(models.PurchaseSettlement.amount), 0).label("paid"),
+        )
+        .group_by(models.PurchaseSettlement.purchase_id)
+        .subquery()
+    )
+    outstanding_expr = models.Purchase.total - func.coalesce(settled_sub.c.paid, 0)
     query = (
-        db.query(models.Purchase)
+        db.query(models.Purchase, outstanding_expr.label("outstanding"))
+        .outerjoin(settled_sub, settled_sub.c.pid == models.Purchase.id)
         .filter(models.Purchase.txn_type == "receive", models.Purchase.status == "confirmed")
+        .filter(outstanding_expr > 0)
     )
     if supplier_id:
         query = query.filter(models.Purchase.supplier_id == supplier_id)
@@ -238,19 +268,20 @@ def list_payables(
         )
 
     total_count, total_owed = query.with_entities(
-        func.count(models.Purchase.id), func.coalesce(func.sum(models.Purchase.total), 0)
+        func.count(models.Purchase.id), func.coalesce(func.sum(outstanding_expr), 0)
     ).one()
     pages = max((total_count + PAGE_SIZE - 1) // PAGE_SIZE, 1)
     page = min(page, pages)
-    rows = (
+    page_rows = (
         query.order_by(func.coalesce(models.Purchase.due_date, models.Purchase.confirmed_at).asc())
         .offset((page - 1) * PAGE_SIZE)
         .limit(PAGE_SIZE)
         .all()
     )
+    rows = [(p, Decimal(str(out))) for p, out in page_rows]
 
-    overdue_count = sum(1 for p in rows if p.due_date and p.due_date < today)
-    due_soon_count = sum(1 for p in rows if p.due_date and today <= p.due_date <= horizon)
+    overdue_count = sum(1 for p, _ in rows if p.due_date and p.due_date < today)
+    due_soon_count = sum(1 for p, _ in rows if p.due_date and today <= p.due_date <= horizon)
 
     suppliers = db.query(models.Supplier).order_by(models.Supplier.name).all()
 
@@ -263,6 +294,73 @@ def list_payables(
             "overdue_count": overdue_count, "due_soon_count": due_soon_count,
             "q": q, "supplier_id": supplier_id, "suppliers": suppliers,
             "page": page, "pages": pages,
+        },
+    )
+
+
+@router.get("/purchases/payables/aging", response_class=HTMLResponse)
+def payables_aging(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """AP aging schedule: every outstanding payable bucketed by how overdue
+    it is, grouped by supplier — the report Payables itself doesn't give you
+    (that's just a flat due-date-ordered list)."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    today = date.today()
+    purchases = (
+        db.query(models.Purchase)
+        .filter(models.Purchase.txn_type == "receive", models.Purchase.status == "confirmed")
+        .order_by(models.Purchase.supplier_id, models.Purchase.due_date)
+        .all()
+    )
+    settled = _settled_for_purchases(db, [p.id for p in purchases])
+
+    BUCKETS = ["current", "1_30", "31_60", "61_90", "over_90"]
+    BUCKET_LABELS = {
+        "current": "Current", "1_30": "1–30 days", "31_60": "31–60 days",
+        "61_90": "61–90 days", "over_90": "Over 90 days",
+    }
+
+    def bucket_for(due_date):
+        if not due_date or due_date >= today:
+            return "current"
+        days = (today - due_date).days
+        if days <= 30:
+            return "1_30"
+        if days <= 60:
+            return "31_60"
+        if days <= 90:
+            return "61_90"
+        return "over_90"
+
+    by_supplier = {}
+    grand_totals = {b: Decimal("0") for b in BUCKETS}
+    grand_total = Decimal("0")
+    for p in purchases:
+        outstanding = _purchase_outstanding(p, settled)
+        if outstanding <= 0:
+            continue
+        b = bucket_for(p.due_date)
+        name = p.supplier.name if p.supplier else "—"
+        row = by_supplier.setdefault(name, {b2: Decimal("0") for b2 in BUCKETS})
+        row[b] += outstanding
+        grand_totals[b] += outstanding
+        grand_total += outstanding
+
+    supplier_rows = sorted(
+        ({"supplier": name, **totals, "total": sum(totals.values(), Decimal("0"))} for name, totals in by_supplier.items()),
+        key=lambda r: r["total"], reverse=True,
+    )
+
+    return templates.TemplateResponse(
+        "purchases/aging.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "buckets": BUCKETS, "bucket_labels": BUCKET_LABELS,
+            "supplier_rows": supplier_rows, "grand_totals": grand_totals, "grand_total": grand_total,
+            "today": today,
         },
     )
 
@@ -540,11 +638,11 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
     return {"ok": True, "purchase_id": purchase.id, "ref_no": purchase.ref_no}
 
 
-@router.post("/purchases/{purchase_id:int}/mark-paid")
-async def mark_purchase_paid(purchase_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    """Settle a payable — the only step left for a receive that was logged
-    as unpaid at the time. Stock and cost already moved when it was created;
-    this just closes out what's owed."""
+@router.post("/purchases/{purchase_id:int}/pay")
+async def settle_purchase_pay(purchase_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Settle a payable — in full or in part. Stock and cost already moved
+    when the purchase was created; this only closes out what's owed, same
+    partial-payment idea as a customer's credit (see sales.settle_pay)."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
@@ -553,35 +651,58 @@ async def mark_purchase_paid(purchase_id: int, request: Request, db: Session = D
     if not purchase or purchase.txn_type != "receive" or purchase.status != "confirmed":
         return RedirectResponse(f"/purchases/{purchase_id}", status_code=http_status.HTTP_302_FOUND)
 
+    settled = _settled_for_purchases(db, [purchase.id])
+    outstanding = _purchase_outstanding(purchase, settled)
     form = await request.form()
-    method = (form.get("payment_method") or "cash").strip().lower()
+    method = (form.get("method") or "cash").strip().lower()
     if method not in dict(PAYMENT_METHODS):
         method = "cash"
+    amount = _dec(form.get("amount"))
+
+    def back_with_error(error):
+        return RedirectResponse(
+            f"/purchases/{purchase_id}?error={error}", status_code=http_status.HTTP_302_FOUND
+        )
+
+    if amount <= 0:
+        return back_with_error("Enter+an+amount+greater+than+zero.")
+    if amount > outstanding:
+        amount = outstanding  # never pay more than owed
 
     if method == "cheque":
+        # A post-dated cheque doesn't settle anything yet — same as the AR
+        # side, it just goes into the PDC register until the bank honors it.
         raw_date = (form.get("cheque_date") or "").strip()
         try:
             cheque_date = date.fromisoformat(raw_date)
         except ValueError:
-            return RedirectResponse(
-                f"/purchases/{purchase_id}?error=Enter+a+valid+cheque+date.", status_code=http_status.HTTP_302_FOUND
-            )
-        db.add(models.PostDatedCheque(
-            direction="issued", amount=purchase.total,
+            return back_with_error("Enter+a+valid+cheque+date+%28the+date+printed+on+the+cheque%29.")
+        pdc = models.PostDatedCheque(
+            direction="issued", amount=_money(amount),
             bank=(form.get("bank") or "").strip() or None,
             cheque_no=(form.get("cheque_no") or "").strip() or None,
             cheque_date=cheque_date,
             purchase_id=purchase.id, supplier_id=purchase.supplier_id,
             created_by=user.id,
-        ))
+        )
+        db.add(pdc)
+        db.flush()
+        db.commit()
+        return RedirectResponse(f"/pdc/{pdc.id}", status_code=http_status.HTTP_302_FOUND)
 
-    purchase.status = "paid"
-    purchase.payment_method = method
-    purchase.paid_at = func.now()
+    db.add(models.PurchaseSettlement(
+        purchase_id=purchase.id, method=method, amount=_money(amount), created_by=user.id,
+    ))
+    new_outstanding = outstanding - amount
+    summary = f"Recorded a {dict(PAYMENT_METHODS)[method]} payment of {amount:.2f} on {purchase.ref_no}"
+    if new_outstanding <= 0:
+        purchase.status = "paid"
+        purchase.payment_method = method
+        purchase.paid_at = func.now()
+        summary = f"Paid {purchase.ref_no} in full via {dict(PAYMENT_METHODS)[method]}"
     audit.record(
         db, user=user, request=request, action="update", entity_type="purchase",
-        entity_id=purchase.id, entity_label=purchase.ref_no,
-        summary=f"Marked {purchase.ref_no} as paid via {dict(PAYMENT_METHODS)[method]}",
+        entity_id=purchase.id, entity_label=purchase.ref_no, summary=summary,
     )
     db.commit()
     return RedirectResponse(f"/purchases/{purchase_id}", status_code=http_status.HTTP_302_FOUND)
@@ -675,10 +796,21 @@ def view_purchase(
         .first()
     )
 
+    settlements = (
+        db.query(models.PurchaseSettlement)
+        .filter(models.PurchaseSettlement.purchase_id == purchase.id)
+        .order_by(models.PurchaseSettlement.created_at)
+        .all()
+    )
+    settled_map = _settled_for_purchases(db, [purchase.id])
+    outstanding = _purchase_outstanding(purchase, settled_map)
+
     return templates.TemplateResponse(
         "purchases/view.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "purchase": purchase, "rows": rows, "alerts": alerts,
          "linked_returns": linked_returns, "error": error, "pending_pdc": pending_pdc,
-         "today": date.today(), "payment_methods": PAYMENT_METHODS},
+         "settlements": settlements, "outstanding": outstanding,
+         "today": date.today(), "payment_methods": PAYMENT_METHODS,
+         "payment_method_labels": dict(PAYMENT_METHODS)},
     )

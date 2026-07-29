@@ -1,4 +1,5 @@
 """Supplier profiles and per-supplier purchase history."""
+from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Request, status
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 from . import models
 from .database import get_db
 from .deps import get_current_user, is_admin
+from .purchases import PAYMENT_METHODS, _purchase_outstanding, _settled_for_purchases
 from .templating import templates
 
 router = APIRouter()
@@ -102,10 +104,22 @@ def list_suppliers(
     )
 
     # Site-wide payables snapshot (not scoped to the name search above) —
-    # what's actually owed right now, same basis as the Payables tab.
+    # what's actually still owed right now (net of any partial payments
+    # already recorded), same basis as the Payables tab.
+    settled_sub = (
+        db.query(
+            models.PurchaseSettlement.purchase_id.label("pid"),
+            func.coalesce(func.sum(models.PurchaseSettlement.amount), 0).label("paid"),
+        )
+        .group_by(models.PurchaseSettlement.purchase_id)
+        .subquery()
+    )
+    outstanding_expr = models.Purchase.total - func.coalesce(settled_sub.c.paid, 0)
     payables_owed, payables_count = (
-        db.query(func.coalesce(func.sum(models.Purchase.total), 0), func.count(models.Purchase.id))
+        db.query(func.coalesce(func.sum(outstanding_expr), 0), func.count(models.Purchase.id))
+        .outerjoin(settled_sub, settled_sub.c.pid == models.Purchase.id)
         .filter(models.Purchase.txn_type == "receive", models.Purchase.status == "confirmed")
+        .filter(outstanding_expr > 0)
         .one()
     )
     pending_pos = (
@@ -249,6 +263,24 @@ def supplier_history(supplier_id: int, request: Request, db: Session = Depends(g
                 }
             item_rows[key]["qty_total"] += (ln.qty or Decimal("0")) * (1 if p.txn_type != "return" else -1)
 
+    # Outstanding payables + every payment applied against them — the AP
+    # mirror of a customer's credit statement.
+    payables = [p for p in purchases if p.txn_type == "receive" and p.status == "confirmed"]
+    settled = _settled_for_purchases(db, [p.id for p in payables])
+    payable_rows = []
+    out_total = Decimal("0")
+    for p in payables:
+        outstanding = _purchase_outstanding(p, settled)
+        payable_rows.append({"purchase": p, "outstanding": outstanding})
+        out_total += outstanding
+    settlements = (
+        db.query(models.PurchaseSettlement)
+        .join(models.Purchase, models.Purchase.id == models.PurchaseSettlement.purchase_id)
+        .filter(models.Purchase.supplier_id == supplier_id)
+        .order_by(models.PurchaseSettlement.created_at)
+        .all()
+    )
+
     return templates.TemplateResponse(
         "suppliers/history.html",
         {
@@ -257,5 +289,107 @@ def supplier_history(supplier_id: int, request: Request, db: Session = Depends(g
             "received_total": received_total, "returned_total": returned_total,
             "net_total": received_total - returned_total,
             "items": list(item_rows.values()),
+            "payable_rows": payable_rows, "out_total": out_total, "settlements": settlements,
+            "payment_method_labels": dict(PAYMENT_METHODS),
         },
     )
+
+
+def _outstanding_purchases(db: Session, supplier_id: int):
+    """This supplier's still-owed deliveries, oldest first — the AP mirror
+    of credits._outstanding_sales."""
+    purchases = (
+        db.query(models.Purchase)
+        .filter(models.Purchase.supplier_id == supplier_id, models.Purchase.txn_type == "receive", models.Purchase.status == "confirmed")
+        .order_by(models.Purchase.id)
+        .all()
+    )
+    settled = _settled_for_purchases(db, [p.id for p in purchases])
+    out = []
+    for p in purchases:
+        outstanding = _purchase_outstanding(p, settled)
+        if outstanding > 0:
+            out.append((p, outstanding))
+    return out
+
+
+@router.get("/suppliers/{supplier_id:int}/pay-full", response_class=HTMLResponse)
+def supplier_pay_full_form(supplier_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+    supplier = db.get(models.Supplier, supplier_id)
+    if not supplier:
+        return RedirectResponse("/suppliers", status_code=302)
+    owed = _outstanding_purchases(db, supplier_id)
+    total = sum((o for _, o in owed), Decimal("0"))
+    return templates.TemplateResponse(
+        "suppliers/pay_full.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "supplier": supplier, "owed": owed, "total": total, "methods": PAYMENT_METHODS, "error": None,
+        },
+    )
+
+
+@router.post("/suppliers/{supplier_id:int}/pay-full")
+async def supplier_pay_full_submit(supplier_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+    supplier = db.get(models.Supplier, supplier_id)
+    if not supplier:
+        return RedirectResponse("/suppliers", status_code=302)
+    owed = _outstanding_purchases(db, supplier_id)
+    total = sum((o for _, o in owed), Decimal("0"))
+
+    form = await request.form()
+    method = (form.get("method") or "cash").strip().lower()
+    if method not in dict(PAYMENT_METHODS):
+        method = "cash"
+
+    def rerender(error):
+        return templates.TemplateResponse(
+            "suppliers/pay_full.html",
+            {
+                "request": request, "app_name": request.app.title, "user": user,
+                "supplier": supplier, "owed": owed, "total": total, "methods": PAYMENT_METHODS, "error": error,
+            },
+        )
+
+    if not owed:
+        return RedirectResponse(f"/suppliers/{supplier_id}/history", status_code=status.HTTP_302_FOUND)
+
+    cheque_date = None
+    if method == "cheque":
+        raw_date = (form.get("cheque_date") or "").strip()
+        try:
+            cheque_date = date.fromisoformat(raw_date)
+        except ValueError:
+            return rerender("Enter a valid cheque date (the date printed on the cheque).")
+
+    # Pays every outstanding delivery off in full, oldest first — same
+    # "clear the whole balance" idea as a customer's Pay Full. Cheque opens
+    # one PDC per purchase (each needs its own purchase_id to reconcile),
+    # all from the same physical cheque; it doesn't settle until cleared.
+    for purchase, outstanding in owed:
+        if method == "cheque":
+            db.add(models.PostDatedCheque(
+                direction="issued", amount=outstanding,
+                bank=(form.get("bank") or "").strip() or None,
+                cheque_no=(form.get("cheque_no") or "").strip() or None,
+                cheque_date=cheque_date,
+                purchase_id=purchase.id, supplier_id=supplier.id,
+                created_by=user.id,
+            ))
+        else:
+            db.add(models.PurchaseSettlement(
+                purchase_id=purchase.id, method=method, amount=outstanding, created_by=user.id,
+            ))
+            purchase.status = "paid"
+            purchase.payment_method = method
+            purchase.paid_at = func.now()
+    db.commit()
+    return RedirectResponse(f"/suppliers/{supplier_id}/history", status_code=status.HTTP_302_FOUND)

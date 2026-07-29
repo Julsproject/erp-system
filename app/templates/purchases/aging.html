@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}AP Aging · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Accounts Payable Aging</h1>
+</div>
+
+<div class="tabs">
+  <a class="tab" href="/purchases/new">New Purchase</a>
+  <a class="tab" href="/purchases">Purchase History</a>
+  <a class="tab" href="/purchases/payables">Payables</a>
+  <a class="tab active" href="/purchases/payables/aging">AP Aging</a>
+  <a class="tab" href="/suppliers">Suppliers</a>
+</div>
+
+<p class="muted" style="margin:-6px 0 16px;">
+  Every outstanding payable as of {{ today.strftime('%b %d, %Y') }}, grouped by supplier and how overdue it is.
+</p>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Supplier</th>
+        {% for b in buckets %}<th class="num">{{ bucket_labels[b] }}</th>{% endfor %}
+        <th class="num">Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in supplier_rows %}
+      <tr>
+        <td class="strong">{{ row.supplier }}</td>
+        {% for b in buckets %}
+        <td class="num {{ 'owed' if row[b] > 0 and b != 'current' }}">{{ row[b]|peso if row[b] > 0 else '—' }}</td>
+        {% endfor %}
+        <td class="num strong">{{ row.total|peso }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="{{ buckets|length + 2 }}" class="empty">No outstanding payables. 🎉</td></tr>
+      {% endfor %}
+    </tbody>
+    {% if supplier_rows %}
+    <tfoot>
+      <tr>
+        <td class="strong">Total</td>
+        {% for b in buckets %}<td class="num strong">{{ grand_totals[b]|peso }}</td>{% endfor %}
+        <td class="num strong owed">{{ grand_total|peso }}</td>
+      </tr>
+    </tfoot>
+    {% endif %}
+  </table>
+</div>
+{% endblock %}

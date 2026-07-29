@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Pay Full · {{ supplier.name }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Pay Full — {{ supplier.name }}</h1>
+  <a class="btn-link" href="/suppliers/{{ supplier.id }}/history">← Back to history</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<div class="table-wrap" style="max-width:560px;">
+  <table class="grid">
+    <thead>
+      <tr><th>Ref #</th><th>Date</th><th class="num">Outstanding</th></tr>
+    </thead>
+    <tbody>
+      {% for purchase, outstanding in owed %}
+      <tr>
+        <td class="strong">{{ purchase.ref_no }}</td>
+        <td>{{ purchase.confirmed_at.strftime('%b %d, %Y') if purchase.confirmed_at else '' }}</td>
+        <td class="num owed">{{ outstanding|peso }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="empty">Nothing outstanding — already paid in full.</td></tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr><td colspan="2" class="strong">Total</td><td class="num strong owed">{{ total|peso }}</td></tr>
+    </tfoot>
+  </table>
+</div>
+
+{% if owed %}
+<form class="card form" method="post" action="/suppliers/{{ supplier.id }}/pay-full" style="margin-top:16px;max-width:560px;" id="payFullForm">
+  <label>Method
+    <select name="method" id="method" onchange="toggleCheque()">
+      {% for value, label in methods %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+    </select>
+  </label>
+
+  <div id="chequeFields" class="full" style="display:none;">
+    <div class="cheque-grid">
+      <label>Bank<input name="bank" type="text" placeholder="e.g. BDO"></label>
+      <label>Cheque #<input name="cheque_no" type="text" placeholder="000123"></label>
+      <label>Cheque date<input name="cheque_date" type="date"></label>
+    </div>
+    <p class="hint" style="margin-top:6px;">
+      This won't settle the payables yet — it goes into the <a href="/pdc">Cheques register</a> as pending until it clears, one entry per delivery above.
+    </p>
+  </div>
+
+  <div class="form-actions full">
+    <button class="btn" type="submit" onclick="return confirm('Mark all {{ owed|length }} delivery(ies) totaling {{ total|peso }} as paid in full?');">Pay Full — {{ total|peso }}</button>
+    <a class="btn-secondary" href="/suppliers/{{ supplier.id }}/history">Cancel</a>
+  </div>
+</form>
+{% endif %}
+
+<script>
+  function toggleCheque() {
+    document.getElementById('chequeFields').style.display =
+      document.getElementById('method').value === 'cheque' ? 'block' : 'none';
+  }
+  toggleCheque();
+</script>
+{% endblock %}
