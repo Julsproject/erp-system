@@ -90,11 +90,13 @@
 
   <label>Actual Beginning Stocks
     <input id="beginning" name="beginning_stock" type="number" step="1" min="0" inputmode="decimal"
+           data-original="{{ product.beginning_stock|qty if product else '0' }}"
            value="{{ product.beginning_stock|qty if product else '0' }}" oninput="calcTotal()">
   </label>
 
   <label>Stocks Qty
     <input id="stocks" name="stock_qty" type="number" step="1" min="0" inputmode="decimal"
+           data-original="{{ product.stock_qty|qty if product else '0' }}"
            value="{{ product.stock_qty|qty if product else '0' }}" oninput="calcTotal()">
     <small class="hint">Manual for now — from Supplier tab later.</small>
   </label>
@@ -103,6 +105,26 @@
     <input id="total" type="text" value="0" readonly class="readonly">
     <small class="hint">Beginning + Stocks (auto).</small>
   </label>
+
+  {% if product %}
+  <div id="adjustmentFields" class="full" style="display:none;">
+    <div class="cheque-grid">
+      <label>Reason for stock change
+        <select id="adjustmentReason" name="adjustment_reason">
+          <option value="">Select a reason…</option>
+          {% for value, label in adjustment_reasons %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Note <span class="muted">(optional)</span>
+        <input name="adjustment_note" type="text" placeholder="e.g. shelf 3, delivery mix-up">
+      </label>
+    </div>
+    <p class="hint" style="margin-top:6px;">
+      This change will be valued at current cost and recorded as inventory shrinkage/gain in the
+      <a href="/reports/inventory-adjustments">Inventory Adjustments</a> report and P&amp;L.
+    </p>
+  </div>
+  {% endif %}
 
   <label>Low Stock Alert At
     <input name="reorder_level" type="number" step="1" min="0" inputmode="decimal"
@@ -156,10 +178,19 @@
 
 <script>
   function calcTotal() {
-    var b = parseFloat(document.getElementById('beginning').value) || 0;
-    var s = parseFloat(document.getElementById('stocks').value) || 0;
+    var beginningEl = document.getElementById('beginning');
+    var stocksEl = document.getElementById('stocks');
+    var b = parseFloat(beginningEl.value) || 0;
+    var s = parseFloat(stocksEl.value) || 0;
     var t = b + s;
     document.getElementById('total').value = (Math.round(t * 1000) / 1000).toString();
+
+    var fields = document.getElementById('adjustmentFields');
+    if (fields) {
+      var origB = parseFloat(beginningEl.dataset.original) || 0;
+      var origS = parseFloat(stocksEl.dataset.original) || 0;
+      fields.style.display = (b !== origB || s !== origS) ? 'block' : 'none';
+    }
   }
 
   function updateBaseLabels() {

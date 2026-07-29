@@ -107,12 +107,21 @@ def _pl_data(db: Session, period_start: date, period_end: date):
     )
     total_expenses = sum((r["amount"] for r in expenses_by_category), ZERO)
 
+    inventory_adjustment_total = (
+        db.query(func.coalesce(func.sum(models.StockMovement.value), 0))
+        .filter(models.StockMovement.reason.in_(("adjustment", "stock_count")),
+                _local_date(models.StockMovement.created_at).between(period_start, period_end))
+        .scalar()
+    )
+    inventory_adjustment_total = Decimal(str(inventory_adjustment_total or 0))
+
     return {
         "revenue": revenue,
         "gross_profit": gross_profit,
         "expenses_by_category": expenses_by_category,
         "total_expenses": total_expenses,
-        "net_profit": gross_profit - total_expenses,
+        "inventory_adjustment_total": inventory_adjustment_total,
+        "net_profit": gross_profit - total_expenses + inventory_adjustment_total,
     }
 
 
@@ -182,10 +191,12 @@ def export_profit_loss(
         ws.append([row["name"], float(row["amount"])])
     ws.append(["Total Expenses", float(data["total_expenses"])])
     ws.append([])
-    ws.append(["Net Profit (Gross Profit − Expenses)", float(data["net_profit"])])
+    ws.append(["Inventory Shrinkage / Gain (adjustments & stock counts)", float(data["inventory_adjustment_total"])])
+    ws.append([])
+    ws.append(["Net Profit (Gross Profit − Expenses + Inventory Adjustments)", float(data["net_profit"])])
 
     for cell in ws["A"]:
-        if cell.value in ("Total Expenses", "Net Profit (Gross Profit − Expenses)"):
+        if cell.value in ("Total Expenses", "Net Profit (Gross Profit − Expenses + Inventory Adjustments)"):
             cell.font = Font(bold=True)
     ws.column_dimensions["A"].width = 40
     ws.column_dimensions["B"].width = 18
@@ -490,4 +501,64 @@ def export_inventory_valuation(db: Session = Depends(get_db), user=Depends(get_c
         content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="inventory_valuation_{_today().isoformat()}.xlsx"'},
+    )
+
+
+def _inventory_adjustment_rows(db: Session, period_start: date, period_end: date):
+    """Every manual stock edit or completed stock count in the window,
+    valued at the product's cost at the time — negative value = shrinkage
+    (loss), positive = a find (gain)."""
+    rows = (
+        db.query(models.StockMovement, models.Product)
+        .join(models.Product, models.StockMovement.product_id == models.Product.id)
+        .filter(
+            models.StockMovement.reason.in_(("adjustment", "stock_count")),
+            _local_date(models.StockMovement.created_at).between(period_start, period_end),
+        )
+        .order_by(models.StockMovement.created_at.desc())
+        .all()
+    )
+    out = []
+    for mv, product in rows:
+        out.append({
+            "created_at": mv.created_at,
+            "product_name": product.name,
+            "reason": "Stock count" if mv.reason == "stock_count" else "Manual edit",
+            "note": mv.note or "—",
+            "ref": mv.ref or "—",
+            "qty_base": Decimal(str(mv.qty_base or 0)),
+            "unit_cost": Decimal(str(mv.unit_cost or 0)),
+            "value": Decimal(str(mv.value or 0)),
+        })
+    return out
+
+
+@router.get("/reports/inventory-adjustments", response_class=HTMLResponse)
+def inventory_adjustments(
+    request: Request,
+    days: int = 30,
+    date_from: str = "",
+    date_to: str = "",
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    period_start, period_end, custom = _resolve_period(days, date_from, date_to)
+    rows = _inventory_adjustment_rows(db, period_start, period_end)
+    loss_total = sum((r["value"] for r in rows if r["value"] < 0), ZERO)
+    gain_total = sum((r["value"] for r in rows if r["value"] > 0), ZERO)
+    net_total = loss_total + gain_total
+
+    return templates.TemplateResponse(
+        "reports/inventory_adjustments.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "days": days, "date_from": date_from, "date_to": date_to,
+            "period_start": period_start, "period_end": period_end, "custom": custom,
+            "rows": rows, "loss_total": loss_total, "gain_total": gain_total, "net_total": net_total,
+        },
     )

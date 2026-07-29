@@ -56,13 +56,24 @@
     </tbody>
   </table>
 
+  <h3 class="ex-h" style="margin-top:22px;">Inventory Shrinkage / Gain</h3>
+  <table class="grid" style="box-shadow:none;border:none;">
+    <tbody>
+      <tr>
+        <td>From manual stock edits &amp; stock counts</td>
+        <td class="num {{ 'neg' if inventory_adjustment_total < 0 }}">{{ inventory_adjustment_total|peso }}</td>
+      </tr>
+      <tr><td class="muted" style="padding-left:18px;"><a href="/reports/inventory-adjustments">See breakdown →</a></td><td></td></tr>
+    </tbody>
+  </table>
+
   <table class="grid" style="box-shadow:none;border:none;margin-top:18px;">
     <tbody>
       <tr>
         <td class="strong" style="font-size:16px;border-top:2px solid var(--ink);padding-top:14px;">Net Profit</td>
         <td class="num strong {{ 'neg' if net_profit < 0 }}" style="font-size:16px;border-top:2px solid var(--ink);padding-top:14px;">{{ net_profit|peso }}</td>
       </tr>
-      <tr><td class="muted" style="padding-left:18px;">Gross Profit − Total Expenses</td><td></td></tr>
+      <tr><td class="muted" style="padding-left:18px;">Gross Profit − Total Expenses + Inventory Adjustments</td><td></td></tr>
     </tbody>
   </table>
 </div>

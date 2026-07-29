@@ -37,6 +37,19 @@ BULK_MODES = ("pct", "amount", "markup")
 AUDIT_FIELDS = ["name", "barcode", "cost_price", "selling_price", "beginning_stock", "stock_qty",
                 "reorder_level", "is_vat", "markup_pct", "markup_price", "margin_pct", "margin_price"]
 
+# Why a manual stock quantity changed — required whenever an edit moves
+# Beginning Stock or Stock Qty, so the eventual peso value (qty * cost) has
+# an accountable reason attached, not just a silent number change.
+ADJUSTMENT_REASONS = [
+    ("count_correction", "Count correction"),
+    ("damage", "Damage / breakage"),
+    ("theft", "Theft / loss"),
+    ("expired", "Expired / spoiled"),
+    ("initial_balance", "Initial balance correction"),
+    ("other", "Other"),
+]
+ADJUSTMENT_REASON_LABELS = dict(ADJUSTMENT_REASONS)
+
 
 def _product_snapshot(p: models.Product) -> dict:
     d = audit.snapshot(p, AUDIT_FIELDS)
@@ -220,6 +233,7 @@ def _render_form(request, db, user, product=None, error=None):
             "product": product,
             "categories": categories,
             "unit_types": unit_types,
+            "adjustment_reasons": ADJUSTMENT_REASONS,
             "error": error,
         },
     )
@@ -319,8 +333,14 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
     barcode = (form.get("barcode") or "").strip()
     if barcode and db.query(models.Product).filter(models.Product.barcode == barcode, models.Product.id != product.id).first():
         return _render_form(request, db, user, product=product, error=f"Barcode “{barcode}” is already assigned to another product.")
-    before = _product_snapshot(product)
     old_total = Decimal(str(product.total_qty or 0))
+    new_total_preview = _to_decimal(form.get("beginning_stock")) + _to_decimal(form.get("stock_qty"))
+    adjustment_reason = (form.get("adjustment_reason") or "").strip()
+    if new_total_preview != old_total and not adjustment_reason:
+        return _render_form(request, db, user, product=product,
+                             error="Select a reason for the stock quantity change before saving.")
+
+    before = _product_snapshot(product)
     _save_from_form(product, db, form)
     db.flush()
     after = _product_snapshot(product)
@@ -337,11 +357,17 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
             changes=changes,
         )
         # Record the net stock change as a movement too, so the Stock Card
-        # ledger reconciles — manual edits used to leave no trace here.
+        # ledger reconciles — manual edits used to leave no trace here. Value
+        # it at current cost so it also shows up as shrinkage/gain in P&L.
         delta = new_total - old_total
         if delta != 0:
+            unit_cost = Decimal(str(product.cost_price or 0))
+            reason_label = ADJUSTMENT_REASON_LABELS.get(adjustment_reason, adjustment_reason or "manual edit")
+            note_text = (form.get("adjustment_note") or "").strip()
             db.add(models.StockMovement(
                 product_id=product.id, qty_base=delta, reason="adjustment", ref="manual edit",
+                unit_cost=unit_cost, value=delta * unit_cost,
+                note=f"{reason_label}: {note_text}" if note_text else reason_label,
             ))
     db.commit()
     return RedirectResponse("/products", status_code=status.HTTP_302_FOUND)

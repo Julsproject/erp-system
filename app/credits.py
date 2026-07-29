@@ -96,7 +96,8 @@ def credit_statement(customer_id: int, request: Request, db: Session = Depends(g
         orig = s.receivable_amount or Decimal("0")
         paid = settled.get(s.id, Decimal("0"))
         outstanding = orig - paid
-        rows.append({"sale": s, "orig": orig, "paid": paid, "outstanding": outstanding})
+        sold_items = [{"name": ln.product_name, "qty": ln.qty, "unit": ln.unit_name} for ln in s.lines if (ln.qty or 0) > 0]
+        rows.append({"sale": s, "orig": orig, "paid": paid, "outstanding": outstanding, "sold_items": sold_items})
         orig_total += orig
         paid_total += paid
         out_total += outstanding
@@ -112,16 +113,34 @@ def credit_statement(customer_id: int, request: Request, db: Session = Depends(g
         .all()
     ) if sales else []
 
+    # Older settlements (recorded before source_sale_id was tracked) don't
+    # carry that link — this backfills a candidate list of this customer's
+    # own refund/exchange transactions against these invoices, to match up
+    # by amount below.
+    related_returns = (
+        db.query(models.Sale)
+        .filter(models.Sale.original_sale_id.in_([s.id for s in sales]), models.Sale.txn_type.in_(("refund", "exchange")))
+        .all()
+    ) if sales else []
+
     # For a credit_note settlement, list exactly which product(s) came back —
     # a refund's lines are all returned; an exchange's are mixed, so only the
     # negative-qty side (what went back) counts as "returned" here.
     returned_items = {}
     for st in settlements:
-        if st.method != "credit_note" or not st.source_sale:
+        if st.method != "credit_note":
+            continue
+        source_sale = st.source_sale
+        if not source_sale:
+            source_sale = next(
+                (r for r in related_returns if r.original_sale_id == st.sale_id and abs(r.total or 0) == st.amount),
+                None,
+            )
+        if not source_sale:
             continue
         items = []
-        for ln in st.source_sale.lines:
-            if st.source_sale.txn_type == "refund" or (ln.qty or 0) < 0:
+        for ln in source_sale.lines:
+            if source_sale.txn_type == "refund" or (ln.qty or 0) < 0:
                 items.append({"name": ln.product_name, "qty": abs(ln.qty or 0), "unit": ln.unit_name})
         returned_items[st.id] = items
 

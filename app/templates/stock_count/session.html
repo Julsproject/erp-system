@@ -56,18 +56,23 @@
 </div>
 
 {% if count.status == 'open' %}
-<div class="head-actions" style="margin-top:18px;">
+<div class="head-actions" style="margin-top:18px;align-items:flex-end;">
   <form method="post" action="/stock-count/{{ count.id }}/cancel" onsubmit="return confirm('Cancel this count? Nothing counted so far will be applied.');" style="display:inline;">
     <button class="btn-secondary" type="submit">Cancel count</button>
   </form>
   <form method="post" action="/stock-count/{{ count.id }}/complete"
-        onsubmit="return confirm('Complete this count? Every product with a variance will have its stock corrected to match what was counted. This cannot be undone in bulk.');" style="display:inline;">
+        onsubmit="return confirm('Complete this count? Every product with a variance will have its stock corrected to match what was counted. This cannot be undone in bulk.');" style="display:inline-flex;gap:10px;align-items:flex-end;">
+    <label style="margin:0;">Reason for variances
+      <select name="reason">
+        {% for value, label in adjustment_reasons %}<option value="{{ value }}" {{ 'selected' if value == 'count_correction' }}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
     <button class="btn" type="submit">✓ Complete count &amp; apply corrections</button>
   </form>
 </div>
 {% elif count.status == 'completed' %}
-<p class="muted" style="margin-top:14px;">Every row with a variance above was applied as a stock correction, logged in the
-  <a href="/audit">Activity Log</a> and each product's Stock Card.</p>
+<p class="muted" style="margin-top:14px;">Every row with a variance above was applied as a stock correction, valued at cost and logged in the
+  <a href="/audit">Activity Log</a>, each product's Stock Card, and the <a href="/reports/inventory-adjustments">Inventory Adjustments</a> report.</p>
 {% endif %}
 
 {% if count.status == 'open' %}

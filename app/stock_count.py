@@ -11,7 +11,7 @@ correct even if sales happen elsewhere on the system while counting.
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from . import audit, models
 from .database import get_db
 from .deps import get_current_user, is_admin
+from .products import ADJUSTMENT_REASON_LABELS, ADJUSTMENT_REASONS
 from .templating import templates
 
 router = APIRouter()
@@ -123,7 +124,8 @@ def stock_count_view(count_id: int, request: Request, db: Session = Depends(get_
     return templates.TemplateResponse(
         "stock_count/session.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "count": count, "lines": lines, "variance_count": variance_count},
+         "count": count, "lines": lines, "variance_count": variance_count,
+         "adjustment_reasons": ADJUSTMENT_REASONS},
     )
 
 
@@ -195,7 +197,8 @@ async def stock_count_set_line(count_id: int, line_id: int, request: Request, db
 
 
 @router.post("/stock-count/{count_id:int}/complete")
-def stock_count_complete(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def stock_count_complete(count_id: int, request: Request, reason: str = Form("count_correction"),
+                          db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
@@ -204,6 +207,7 @@ def stock_count_complete(count_id: int, request: Request, db: Session = Depends(
     if not count or count.status != "open":
         return RedirectResponse("/stock-count", status_code=302)
 
+    reason_label = ADJUSTMENT_REASON_LABELS.get(reason, reason)
     for line in count.lines:
         variance = Decimal(str(line.counted_qty or 0)) - Decimal(str(line.system_qty or 0))
         if variance == 0:
@@ -213,8 +217,10 @@ def stock_count_complete(count_id: int, request: Request, db: Session = Depends(
             continue
         before_qty = Decimal(str(product.stock_qty or 0))
         product.stock_qty = before_qty + variance
+        unit_cost = Decimal(str(product.cost_price or 0))
         db.add(models.StockMovement(
             product_id=product.id, qty_base=variance, reason="stock_count", ref=count.ref_no,
+            unit_cost=unit_cost, value=variance * unit_cost, note=reason_label,
         ))
         audit.record(
             db, user=user, request=request, action="stock_count", entity_type="product",

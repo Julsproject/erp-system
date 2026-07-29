@@ -55,7 +55,14 @@
       <tbody>
         {% for r in rows %}
         <tr>
-          <td>{{ r.sale.invoice_no }}</td>
+          <td>
+            {{ r.sale.invoice_no }}
+            {% if r.sold_items %}
+            <div style="color:var(--muted);font-weight:400;font-size:12px;margin-top:2px;">
+              {% for it in r.sold_items %}{{ it.qty|qty }} {{ it.unit or '' }} {{ it.name }}{{ ', ' if not loop.last }}{% endfor %}
+            </div>
+            {% endif %}
+          </td>
           <td>{{ r.sale.created_at.strftime('%b %d, %Y') if r.sale.created_at else '' }}</td>
           <td class="num">{{ r.sale.total|peso }}</td>
           <td class="num">{{ r.orig|peso }}</td>
