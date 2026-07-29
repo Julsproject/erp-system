@@ -553,12 +553,17 @@ def inventory_adjustments(
     gain_total = sum((r["value"] for r in rows if r["value"] > 0), ZERO)
     net_total = loss_total + gain_total
 
+    today = _today()
+    month_start = today.replace(day=1)
+    this_month = custom and period_start == month_start and period_end == today
+
     return templates.TemplateResponse(
         "reports/inventory_adjustments.html",
         {
             "request": request, "app_name": request.app.title, "user": user,
             "days": days, "date_from": date_from, "date_to": date_to,
             "period_start": period_start, "period_end": period_end, "custom": custom,
+            "month_start": month_start, "today": today, "this_month": this_month,
             "rows": rows, "loss_total": loss_total, "gain_total": gain_total, "net_total": net_total,
         },
     )
