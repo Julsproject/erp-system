@@ -17,7 +17,7 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from fastapi import APIRouter, Depends, File, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from sqlalchemy import and_, func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from . import audit, models, pricing, settings_store
@@ -107,16 +107,7 @@ def _get_or_create_unit_type(db: Session, name: str):
     return unit
 
 
-def _needs_review_expr(min_margin):
-    """SQL version of pricing.needs_review — same three triggers, for
-    filtering/counting at the database level instead of in Python."""
-    price = models.Product.selling_price
-    cost = models.Product.cost_price
-    conditions = [price <= 0, and_(cost > 0, price <= cost)]
-    if min_margin is not None:
-        margin_expr = (price - cost) / price * 100
-        conditions.append(and_(cost > 0, price > cost, margin_expr < min_margin))
-    return or_(*conditions)
+_needs_review_expr = pricing.needs_review_expr
 
 
 @router.get("/products", response_class=HTMLResponse)

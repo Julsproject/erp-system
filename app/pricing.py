@@ -81,6 +81,23 @@ def apply_to(product, cost, markup_pct, margin_pct) -> None:
     product.margin_price = margin_price(cost, product.margin_pct)
 
 
+def needs_review_expr(min_margin):
+    """SQL version of needs_review's three triggers, for filtering/counting
+    at the database level — the one place that definition lives, so the
+    sidebar badge, the dashboard widget, and the Selling Price tab's own
+    count and filter never drift apart."""
+    from sqlalchemy import and_, or_
+    from . import models
+
+    price = models.Product.selling_price
+    cost = models.Product.cost_price
+    conditions = [price <= 0, and_(cost > 0, price <= cost)]
+    if min_margin is not None:
+        margin_expr = (price - cost) / price * 100
+        conditions.append(and_(cost > 0, price > cost, margin_expr < min_margin))
+    return or_(*conditions)
+
+
 def needs_review(price, cost, min_margin_pct=None):
     """Whether a product's pricing needs attention, and why. Three triggers:
       1. No selling price set (price <= 0).

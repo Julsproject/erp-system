@@ -62,36 +62,21 @@
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Ref #</th><th>Type</th><th>Status</th><th>Date</th><th>Supplier</th><th>Supplier Invoice</th><th class="num">Amount</th><th></th></tr>
+      <tr><th>Ref #</th><th>Date</th><th>Supplier</th><th>Supplier Invoice</th><th class="num">Amount</th><th>Date Paid</th><th></th></tr>
     </thead>
     <tbody>
       {% for p in purchases %}
       <tr>
         <td class="strong">{{ p.ref_no }}</td>
-        <td>
-          {% if p.txn_type == 'return' %}
-          <span class="txn" style="background:#fee2e2;color:#b91c1c;">Return</span>
-          {% else %}
-          <span class="txn" style="background:#dcfce7;color:#15803d;">Received</span>
-          {% endif %}
-        </td>
-        <td>
-          {% if p.txn_type == 'return' %}
-          <span class="muted">—</span>
-          {% elif p.status == 'paid' %}
-          <span class="txn" style="background:#dcfce7;color:#15803d;">Paid</span>
-          {% else %}
-          <span class="txn" style="background:#f1f5f9;color:#64748b;">Cancelled</span>
-          {% endif %}
-        </td>
         <td>{{ p.created_at.strftime('%b %d, %Y %I:%M %p') if p.created_at else '' }}</td>
         <td>{{ p.supplier.name if p.supplier else '—' }}</td>
         <td>{{ p.invoice_no or '—' }}</td>
         <td class="num strong">{{ p.total|peso }}</td>
+        <td>{{ p.paid_at.strftime('%b %d, %Y') if p.paid_at else '—' }}</td>
         <td class="row-actions"><a class="btn-link" href="/purchases/{{ p.id }}">View</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="8" class="empty">No purchases {{ 'match that filter' if (status_filter or q or date_from or date_to) else 'yet' }}.</td></tr>
+      <tr><td colspan="7" class="empty">No purchases {{ 'match that filter' if (status_filter or q or date_from or date_to) else 'yet' }}.</td></tr>
       {% endfor %}
     </tbody>
   </table>

@@ -26,23 +26,23 @@ def qty(value) -> str:
 
 
 def price_alert_count() -> int:
-    """How many active products are selling at or below cost (or have no price).
+    """How many active products need a pricing review — same three triggers
+    as the Selling Price tab's own count (see pricing.needs_review_expr),
+    so the sidebar badge, dashboard widget, and top banner never disagree
+    with what that tab actually flags.
 
     Exposed to every template so the sidebar can show a live warning badge
     no matter which page the user is on.
     """
-    from . import models
+    from . import models, pricing, settings_store
     from .database import SessionLocal
 
     db = SessionLocal()
     try:
+        min_margin = settings_store.min_margin_pct()
         return (
             db.query(models.Product)
-            .filter(
-                models.Product.is_active.is_(True),
-                models.Product.cost_price > 0,
-                models.Product.selling_price <= models.Product.cost_price,
-            )
+            .filter(models.Product.is_active.is_(True), pricing.needs_review_expr(min_margin))
             .count()
         )
     except Exception:  # never let a badge break a page render
