@@ -23,14 +23,14 @@ from sqlalchemy.orm import Session
 
 from . import audit, models
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_staff
 from .templating import templates
 
 router = APIRouter()
 
 MANILA = ZoneInfo("Asia/Manila")
 ZERO = Decimal("0")
-PAGE_SIZE = 30
+PAGE_SIZE = 15
 
 
 def _now():
@@ -224,7 +224,7 @@ def shift_history(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     from datetime import date as _date

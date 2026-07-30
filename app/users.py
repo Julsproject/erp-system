@@ -12,7 +12,7 @@ from .templating import templates
 
 router = APIRouter()
 
-ROLES = [("cashier", "Cashier"), ("admin", "Admin")]
+ROLES = [("cashier", "Cashier"), ("manager", "Manager"), ("admin", "Admin")]
 
 
 @router.get("/users", response_class=HTMLResponse)

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from . import models
 from .backup import latest_backup
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_staff
 from .templating import templates
 
 router = APIRouter()
@@ -95,7 +95,7 @@ def dashboard(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     today = _today()

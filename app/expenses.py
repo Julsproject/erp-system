@@ -12,12 +12,12 @@ from sqlalchemy.orm import Session
 
 from . import audit, models
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_staff
 from .templating import templates
 
 router = APIRouter()
 
-PAGE_SIZE = 20
+PAGE_SIZE = 15
 PAYMENT_METHODS = [("cash", "Cash"), ("gcash", "GCash"), ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque")]
 
 
@@ -61,7 +61,7 @@ def list_expenses(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     q = (q or "").strip()
     page = max(page, 1)
@@ -124,7 +124,7 @@ def _render_form(request, db, user, expense=None, error=None):
 def new_expense(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     return _render_form(request, db, user)
 
@@ -133,7 +133,7 @@ def new_expense(request: Request, db: Session = Depends(get_db), user=Depends(ge
 def edit_expense(expense_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     expense = db.get(models.Expense, expense_id)
     if not expense:
@@ -158,7 +158,7 @@ def _apply_form(expense: models.Expense, db: Session, form):
 async def create_expense(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     form = await request.form()
     if _dec(form.get("amount")) <= 0:
@@ -181,7 +181,7 @@ async def create_expense(request: Request, db: Session = Depends(get_db), user=D
 async def update_expense(expense_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     expense = db.get(models.Expense, expense_id)
     if not expense:
@@ -208,7 +208,7 @@ async def update_expense(expense_id: int, request: Request, db: Session = Depend
 def void_expense(expense_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     expense = db.get(models.Expense, expense_id)
     if expense:

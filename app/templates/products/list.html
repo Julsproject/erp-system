@@ -33,9 +33,12 @@
 </div>
 {% endif %}
 
+{% set is_admin_user = (user.role or '')|lower in ('admin', 'manager') %}
 <div class="tabs">
   <a class="tab active" href="/products">All Products</a>
+  {% if is_admin_user %}
   <a class="tab" href="/products/pricing">Selling Price{% if price_alert_count() %} <span class="warn-tag">{{ price_alert_count() }}</span>{% endif %}</a>
+  {% endif %}
 </div>
 
 {% set qs_base = ('q=' ~ q ~ '&' if q) ~ ('alert=1&' if alert) %}
@@ -58,7 +61,6 @@
   {% if q or category_id %}<a class="btn-link" href="/products{{ '?alert=1' if alert }}">Clear</a>{% endif %}
 </form>
 
-{% set is_admin_user = (user.role or '')|lower == 'admin' %}
 <form id="bulkForm" method="post">
 <div class="table-wrap">
   <table class="grid">
@@ -70,7 +72,7 @@
         <th>Category</th>
         <th>Unit Type</th>
         <th class="num">Cost of Sales</th>
-        <th class="num">Selling Price</th>
+        {% if is_admin_user %}<th class="num">Selling Price</th>{% endif %}
         <th class="num">Actual Beginning</th>
         <th class="num">Stocks Qty</th>
         <th class="num">Total Qty</th>
@@ -99,10 +101,12 @@
           {% if p.cost_price and p.cost_price > 0 %}{{ p.cost_price|peso }}
           {% else %}<span class="muted">not set</span>{% endif %}
         </td>
+        {% if is_admin_user %}
         <td class="num">
           {% if p.selling_price and p.selling_price > 0 %}{{ p.selling_price|peso }}
           {% else %}<span class="muted">not set</span>{% endif %}
         </td>
+        {% endif %}
         <td class="num">{{ p.beginning_stock|qty }}</td>
         <td class="num">{{ p.stock_qty|qty }}</td>
         <td class="num strong">{{ p.total_qty|qty }}</td>

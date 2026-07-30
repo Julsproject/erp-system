@@ -9,14 +9,14 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_staff
 from .purchases import PAYMENT_METHODS, _purchase_outstanding, _settled_for_purchases
 from .templating import templates
 
 router = APIRouter()
 
 PAYMENT_TERMS = ["COD", "7 days", "15 days", "30 days", "60 days", "50% DP", "Consignment"]
-PAGE_SIZE = 20
+PAGE_SIZE = 15
 
 
 def _next_code(db: Session) -> str:
@@ -34,7 +34,7 @@ def search_suppliers(q: str = "", db: Session = Depends(get_db), user=Depends(ge
     """JSON autocomplete for the purchase form's supplier field."""
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    if not is_admin(user):
+    if not is_staff(user):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     q = (q or "").strip()
     query = db.query(models.Supplier).filter(models.Supplier.is_active.is_(True))
@@ -49,7 +49,7 @@ async def quick_supplier(request: Request, db: Session = Depends(get_db), user=D
     """Create a supplier that isn't on file yet, straight from the purchase form."""
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-    if not is_admin(user):
+    if not is_staff(user):
         return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
 
     data = await request.json()
@@ -86,7 +86,7 @@ def list_suppliers(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     q = (q or "").strip()
     page = max(page, 1)
@@ -149,7 +149,7 @@ def _render_form(request, user, supplier=None, error=None):
 def new_supplier(request: Request, user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     return _render_form(request, user)
 
@@ -158,7 +158,7 @@ def new_supplier(request: Request, user=Depends(get_current_user)):
 def edit_supplier(supplier_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     supplier = db.get(models.Supplier, supplier_id)
     if not supplier:
@@ -187,7 +187,7 @@ def _apply_form(supplier: models.Supplier, form):
 async def create_supplier(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     form = await request.form()
     if not (form.get("name") or "").strip():
@@ -206,7 +206,7 @@ async def create_supplier(request: Request, db: Session = Depends(get_db), user=
 async def update_supplier(supplier_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     supplier = db.get(models.Supplier, supplier_id)
     if not supplier:
@@ -230,7 +230,7 @@ def supplier_history(supplier_id: int, request: Request, db: Session = Depends(g
     """Purchase history: receipts, returns, delivery history and item costs."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     supplier = db.get(models.Supplier, supplier_id)
     if not supplier:
@@ -317,7 +317,7 @@ def _outstanding_purchases(db: Session, supplier_id: int):
 def supplier_pay_full_form(supplier_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     supplier = db.get(models.Supplier, supplier_id)
     if not supplier:
@@ -337,7 +337,7 @@ def supplier_pay_full_form(supplier_id: int, request: Request, db: Session = Dep
 async def supplier_pay_full_submit(supplier_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     supplier = db.get(models.Supplier, supplier_id)
     if not supplier:

@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_staff
 from .templating import templates
 
 router = APIRouter()
@@ -30,7 +30,7 @@ router = APIRouter()
 MANILA = ZoneInfo("Asia/Manila")
 STATUS_LABELS = {"pending": "Pending", "cleared": "Cleared", "bounced": "Bounced", "cancelled": "Cancelled"}
 DUE_SOON_DAYS = 3
-PAGE_SIZE = 20
+PAGE_SIZE = 15
 
 
 def _today() -> date:
@@ -48,7 +48,7 @@ def list_pdc(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     page = max(page, 1)
@@ -93,7 +93,7 @@ def list_pdc(
 def view_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     pdc = db.get(models.PostDatedCheque, pdc_id)
     if not pdc:
@@ -109,7 +109,7 @@ def clear_pdc(pdc_id: int, db: Session = Depends(get_db), user=Depends(get_curre
     """The bank honored it: apply the payment it represents, only now."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     pdc = db.get(models.PostDatedCheque, pdc_id)
     if not pdc or pdc.status != "pending":
@@ -158,7 +158,7 @@ async def bounce_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db
     """The bank rejected it. Received: nothing to undo. Issued: stays unpaid."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     pdc = db.get(models.PostDatedCheque, pdc_id)
     if not pdc or pdc.status != "pending":
@@ -179,7 +179,7 @@ def cancel_pdc(pdc_id: int, db: Session = Depends(get_db), user=Depends(get_curr
     """The cheque was returned/replaced before ever being deposited."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     pdc = db.get(models.PostDatedCheque, pdc_id)
     if pdc and pdc.status == "pending":

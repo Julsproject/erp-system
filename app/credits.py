@@ -15,7 +15,7 @@ from .templating import templates
 
 router = APIRouter()
 
-PAGE_SIZE = 20
+PAGE_SIZE = 15
 
 
 def _settled_for(db: Session, sale_ids):

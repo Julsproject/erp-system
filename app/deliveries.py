@@ -23,7 +23,7 @@ from .templating import templates
 
 router = APIRouter()
 
-PAGE_SIZE = 20
+PAGE_SIZE = 15
 STATUS_LABELS = {"delivered": "Delivered", "cancelled": "Cancelled"}
 
 # How a driver can collect a COD balance. Cheque is deliberately excluded: a

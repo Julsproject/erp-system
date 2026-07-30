@@ -22,7 +22,11 @@ from .database import get_db
 from .templating import templates
 
 app = FastAPI(title=settings.app_name)
-app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+# max_age=None -> no Max-Age/Expires on the cookie, so it's a true browser
+# session cookie: still logged in as long as the browser stays open (including
+# across tabs/reloads), but closing the browser entirely clears it, requiring
+# login again next time — instead of Starlette's 14-day-persistent default.
+app.add_middleware(SessionMiddleware, secret_key=settings.secret_key, max_age=None)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 

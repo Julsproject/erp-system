@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from . import audit, models, pricing
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_staff
 from .products import _get_or_create_category, _get_or_create_unit_type
 from .templating import templates
 
@@ -41,7 +41,7 @@ def _weighted_avg_cost(product: models.Product, base_qty: Decimal, unit_cost_per
 
 PAYMENT_METHODS = [("cash", "Cash"), ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque"), ("gcash", "GCash"), ("other", "Other")]
 STATUS_LABELS = {"paid": "Paid", "cancelled": "Cancelled"}
-PAGE_SIZE = 20
+PAGE_SIZE = 15
 
 
 def _parse_date(s: str):
@@ -110,7 +110,7 @@ def purchase_search(q: str = "", db: Session = Depends(get_db), user=Depends(get
     """Product lookup for the purchase form (includes current cost/selling price)."""
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    if not is_admin(user):
+    if not is_staff(user):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     q = (q or "").strip()
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
@@ -126,7 +126,7 @@ def purchase_product(product_id: int, db: Session = Depends(get_db), user=Depend
     unit switching on a line that predates opening the editor."""
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    if not is_admin(user):
+    if not is_staff(user):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     p = db.get(models.Product, product_id)
     if not p or not p.is_active:
@@ -147,7 +147,7 @@ def list_purchases(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     page = max(page, 1)
@@ -236,7 +236,7 @@ def list_payables(
     """
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     q = (q or "").strip()
@@ -305,7 +305,7 @@ def payables_aging(request: Request, db: Session = Depends(get_db), user=Depends
     (that's just a flat due-date-ordered list)."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     today = date.today()
@@ -372,7 +372,7 @@ def new_purchase(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     # Returns are started FROM a specific received delivery (its "Return to
@@ -446,7 +446,7 @@ async def quick_product(request: Request, db: Session = Depends(get_db), user=De
     """Create a product that isn't in inventory yet, straight from the purchase form."""
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-    if not is_admin(user):
+    if not is_staff(user):
         return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
 
     data = await request.json()
@@ -491,7 +491,7 @@ async def quick_product(request: Request, db: Session = Depends(get_db), user=De
 async def create_purchase(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-    if not is_admin(user):
+    if not is_staff(user):
         return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
 
     data = await request.json()
@@ -645,7 +645,7 @@ async def settle_purchase_pay(purchase_id: int, request: Request, db: Session = 
     partial-payment idea as a customer's credit (see sales.settle_pay)."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     purchase = db.get(models.Purchase, purchase_id)
     if not purchase or purchase.txn_type != "receive" or purchase.status != "confirmed":
@@ -717,7 +717,7 @@ def cancel_purchase(purchase_id: int, request: Request, db: Session = Depends(ge
     reverse beyond its own stock effect, same idea."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     purchase = db.get(models.Purchase, purchase_id)
     if not purchase or purchase.status == "cancelled":
@@ -756,7 +756,7 @@ def view_purchase(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     purchase = db.get(models.Purchase, purchase_id)
     if not purchase:

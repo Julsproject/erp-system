@@ -8,12 +8,12 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_staff
 from .templating import templates
 
 router = APIRouter()
 
-PAGE_SIZE = 20
+PAGE_SIZE = 15
 
 
 def get_or_create_customer(db: Session, name: str):
@@ -79,7 +79,7 @@ def list_customers(
     # Site-wide receivables snapshot — same basis as the Credits page. Money
     # figures stay admin-only, same as Credits itself.
     total_receivable, customers_owing = Decimal("0"), 0
-    if is_admin(user):
+    if is_staff(user):
         settled_sub = (
             db.query(
                 models.ReceivableSettlement.sale_id.label("sid"),

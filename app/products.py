@@ -22,12 +22,12 @@ from sqlalchemy.orm import Session
 
 from . import audit, models, pricing, settings_store
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_staff
 from .templating import templates
 
 router = APIRouter()
 
-PAGE_SIZE = 20
+PAGE_SIZE = 15
 CENTS = Decimal("0.01")
 
 BULK_MODES = ("pct", "amount", "markup")
@@ -380,6 +380,8 @@ def pricing_tool(request: Request, review: int = 0, db: Session = Depends(get_db
     not a separate tab), edit cost + the 3-row pricing matrix on the right."""
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
     min_margin = settings_store.min_margin_pct()
     review_count = db.query(func.count(models.Product.id)).filter(
         models.Product.is_active.is_(True), _needs_review_expr(min_margin)
@@ -403,6 +405,8 @@ def price_search(
 ):
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if not is_staff(user):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
     q = (q or "").strip()
     min_margin = settings_store.min_margin_pct()
 
@@ -439,6 +443,8 @@ def price_search(
 async def update_pricing(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    if not is_staff(user):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
     product = db.get(models.Product, product_id)
     if not product:
         return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
@@ -502,7 +508,7 @@ async def bulk_price_start(request: Request, db: Session = Depends(get_db), user
     Nothing is saved here — Apply (below) recomputes and saves for real."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
     form = await request.form()
     ids = sorted({int(i) for i in form.getlist("ids") if i.isdigit()})
@@ -528,7 +534,7 @@ async def bulk_price_apply(request: Request, db: Session = Depends(get_db), user
     history exactly like a one-off edit would."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
     form = await request.form()
     ids = sorted({int(i) for i in form.getlist("ids") if i.isdigit()})
@@ -603,7 +609,7 @@ def _barcode_data_uri(code: str) -> str:
 async def print_labels(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
     form = await request.form()
     ids = sorted({int(i) for i in form.getlist("ids") if i.isdigit()})
@@ -651,7 +657,7 @@ def stock_card(product_id: int, request: Request, db: Session = Depends(get_db),
     """
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     product = db.get(models.Product, product_id)
     if not product:
@@ -719,7 +725,7 @@ def product_history(product_id: int, db: Session = Depends(get_db), user=Depends
     """
     if not user:
         return {"found": False}
-    if not is_admin(user):
+    if not is_staff(user):
         return {"found": False}
     product = db.get(models.Product, product_id)
     if not product or not product.is_active:
@@ -918,6 +924,7 @@ async def import_upload(
                     .first()
                 )
                 product = existing or models.Product()
+                old_total = Decimal(str(product.total_qty or 0)) if existing else Decimal("0")
                 product.name = name
                 product.category = _get_or_create_category(db, record["category"])
                 product.unit_type = _get_or_create_unit_type(db, record["unit_type"])
@@ -928,6 +935,18 @@ async def import_upload(
                 product.is_vat = _parse_bool(record["vat"])
                 if existing:
                     updated += 1
+                    # A re-import can silently move an existing product's
+                    # stock with no trace otherwise — record it the same
+                    # way a manual edit would, so it still shows up on the
+                    # Stock Card and in Inventory Adjustments/P&L.
+                    delta = Decimal(str(product.total_qty or 0)) - old_total
+                    if delta != 0:
+                        unit_cost = Decimal(str(product.cost_price or 0))
+                        db.add(models.StockMovement(
+                            product_id=product.id, qty_base=delta, reason="adjustment",
+                            ref="bulk import", unit_cost=unit_cost, value=delta * unit_cost,
+                            note=f"Bulk import: {file.filename}",
+                        ))
                 else:
                     db.add(product)
                     created += 1

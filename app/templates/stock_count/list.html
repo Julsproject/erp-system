@@ -44,4 +44,12 @@
     </tbody>
   </table>
 </div>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn-secondary" href="/stock-count?page={{ page - 1 }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }} · {{ total }} count{{ 's' if total != 1 }}</span>
+  {% if page < pages %}<a class="btn-secondary" href="/stock-count?page={{ page + 1 }}">Next →</a>{% endif %}
+</div>
+{% endif %}
 {% endblock %}

@@ -15,14 +15,14 @@ from sqlalchemy.orm import Session
 from . import audit, models
 from .customers import get_or_create_customer
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_staff
 from .pos import METHOD_LABELS, _finalize_sale, _money, _vat_of
 from .templating import templates
 
 router = APIRouter()
 
 STATUS_LABELS = {"pending": "Pending", "confirmed": "Confirmed", "paid": "Paid", "cancelled": "Cancelled"}
-PAGE_SIZE = 20
+PAGE_SIZE = 15
 
 
 def _dec(value, default="0") -> Decimal:
@@ -177,7 +177,7 @@ def list_quotations(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     page = max(page, 1)
     q = (q or "").strip()

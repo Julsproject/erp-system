@@ -15,4 +15,12 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
 
 
 def is_admin(user) -> bool:
+    """True admin only — the two areas that stay admin-exclusive (Users,
+    Backup) check this directly instead of is_staff."""
     return user is not None and (user.role or "").lower() == "admin"
+
+
+def is_staff(user) -> bool:
+    """Admin or Manager — the general "not just a cashier" gate used by
+    every admin-only route except Users and Backup, which stay is_admin."""
+    return user is not None and (user.role or "").lower() in ("admin", "manager")

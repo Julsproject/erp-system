@@ -18,7 +18,7 @@
   <a class="tab active" href="/customers">Customers</a>
 </div>
 
-{% if (user.role or '')|lower == 'admin' %}
+{% if (user.role or '')|lower in ('admin', 'manager') %}
 <div class="stat-row">
   <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>Customer{{ '' if total == 1 else 's' }}</span></div>
   <div class="mini-stat {{ 'owed' if total_receivable }}"><span class="mini-num">{{ total_receivable|peso }}</span><span>Receivables Owed</span></div>

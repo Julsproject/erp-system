@@ -7,6 +7,7 @@
 </div>
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+{% set is_admin_user = (user.role or '')|lower in ('admin', 'manager') %}
 
 <form class="card form" method="post" novalidate
       action="{{ '/products/' ~ product.id if product else '/products' }}">
@@ -46,7 +47,7 @@
     <small class="hint">Optional. Purchasing fills this in automatically when you receive stock from a supplier.</small>
   </label>
 
-  {% if not product %}
+  {% if not product and is_admin_user %}
   <div class="full price-set">
     <h3 class="ps-title">Selling Prices <span class="muted">· every item carries all three</span></h3>
     <div class="table-wrap">
@@ -84,7 +85,7 @@
     </div>
     <p class="hint" id="priceHint">Markup and margin are calculated from the Cost of Sales above — enter a cost for them to work.</p>
   </div>
-  {% else %}
+  {% elif is_admin_user %}
   <p class="full hint" style="margin:-8px 0 4px;">Selling price is set from the <a class="btn-link" href="/products/pricing">Selling Price</a> tab.</p>
   {% endif %}
 

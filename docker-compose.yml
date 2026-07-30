@@ -52,7 +52,7 @@ services:
     environment:
       TZ: Asia/Manila
       PGPASSWORD: erp
-      KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      KEEP_DAYS: ${BACKUP_KEEP_DAYS:-31}
     volumes:
       - ${BACKUP_DIR:-./backups}:/backups
     depends_on:

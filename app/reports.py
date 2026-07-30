@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from . import models, settings_store
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_staff
 from .templating import templates
 
 router = APIRouter()
@@ -65,7 +65,7 @@ def _resolve_period(days: int, date_from: str, date_to: str):
 def reports_hub(request: Request, user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     return templates.TemplateResponse(
         "reports/hub.html",
@@ -136,7 +136,7 @@ def profit_loss(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     period_start, period_end, custom = _resolve_period(days, date_from, date_to)
@@ -163,7 +163,7 @@ def export_profit_loss(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     period_start, period_end, _ = _resolve_period(days, date_from, date_to)
@@ -279,7 +279,7 @@ def sales_by_product(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     period_start, period_end, custom = _resolve_period(days, date_from, date_to)
@@ -310,7 +310,7 @@ def export_sales_by_product(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     period_start, period_end, _ = _resolve_period(days, date_from, date_to)
@@ -379,7 +379,7 @@ def _low_margin_rows(db: Session, threshold: float):
 def low_margin_report(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     threshold = settings_store.min_margin_pct()
@@ -398,7 +398,7 @@ def low_margin_report(request: Request, db: Session = Depends(get_db), user=Depe
 def export_low_margin(db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     threshold = settings_store.min_margin_pct()
@@ -436,7 +436,7 @@ def export_low_margin(db: Session = Depends(get_db), user=Depends(get_current_us
 def inventory_valuation(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     rows = _valuation_rows(db)
@@ -466,7 +466,7 @@ def inventory_valuation(request: Request, db: Session = Depends(get_db), user=De
 def export_inventory_valuation(db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     rows = _valuation_rows(db)
@@ -544,7 +544,7 @@ def inventory_adjustments(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     period_start, period_end, custom = _resolve_period(days, date_from, date_to)

@@ -18,11 +18,13 @@ from sqlalchemy.orm import Session
 
 from . import audit, models
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_staff
 from .products import ADJUSTMENT_REASON_LABELS, ADJUSTMENT_REASONS
 from .templating import templates
 
 router = APIRouter()
+
+PAGE_SIZE = 15
 
 
 def _dec(value, default="0") -> Decimal:
@@ -68,23 +70,22 @@ def _line_dict(line: models.StockCountLine) -> dict:
 
 
 @router.get("/stock-count", response_class=HTMLResponse)
-def stock_count_list(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def stock_count_list(request: Request, page: int = 1, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
+    page = max(page, 1)
     open_count = db.query(models.StockCount).filter(models.StockCount.status == "open").first()
-    past = (
-        db.query(models.StockCount)
-        .filter(models.StockCount.status != "open")
-        .order_by(models.StockCount.id.desc())
-        .limit(50)
-        .all()
-    )
+    past_q = db.query(models.StockCount).filter(models.StockCount.status != "open").order_by(models.StockCount.id.desc())
+    total = past_q.count()
+    pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+    page = min(page, pages)
+    past = past_q.offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE).all()
     return templates.TemplateResponse(
         "stock_count/list.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "open_count": open_count, "past": past},
+         "open_count": open_count, "past": past, "page": page, "pages": pages, "total": total},
     )
 
 
@@ -92,7 +93,7 @@ def stock_count_list(request: Request, db: Session = Depends(get_db), user=Depen
 def stock_count_start(db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     existing = db.query(models.StockCount).filter(models.StockCount.status == "open").first()
     if existing:
@@ -109,7 +110,7 @@ def stock_count_start(db: Session = Depends(get_db), user=Depends(get_current_us
 def stock_count_view(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     count = db.get(models.StockCount, count_id)
     if not count:
@@ -131,7 +132,7 @@ def stock_count_view(count_id: int, request: Request, db: Session = Depends(get_
 
 @router.post("/stock-count/{count_id:int}/scan")
 async def stock_count_scan(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    if not user or not is_admin(user):
+    if not user or not is_staff(user):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     count = db.get(models.StockCount, count_id)
     if not count or count.status != "open":
@@ -175,7 +176,7 @@ async def stock_count_scan(count_id: int, request: Request, db: Session = Depend
 
 @router.post("/stock-count/{count_id:int}/line/{line_id:int}/set")
 async def stock_count_set_line(count_id: int, line_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    if not user or not is_admin(user):
+    if not user or not is_staff(user):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     count = db.get(models.StockCount, count_id)
     if not count or count.status != "open":
@@ -201,7 +202,7 @@ def stock_count_complete(count_id: int, request: Request, reason: str = Form("co
                           db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     count = db.get(models.StockCount, count_id)
     if not count or count.status != "open":
@@ -240,7 +241,7 @@ def stock_count_complete(count_id: int, request: Request, reason: str = Form("co
 def stock_count_cancel(count_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     count = db.get(models.StockCount, count_id)
     if count and count.status == "open":

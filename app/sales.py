@@ -13,13 +13,13 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_staff
 from .templating import templates
 
 router = APIRouter()
 
 SETTLE_METHODS = [("cash", "Cash"), ("gcash", "GCash"), ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque")]
-PAGE_SIZE = 20
+PAGE_SIZE = 15
 TYPE_LABELS = {"sale": "Sale", "refund": "Return", "exchange": "Sale x Exchange"}
 
 
@@ -58,7 +58,7 @@ def _back_url(user, sale=None) -> str:
     """Where "back"/"cancel" should go — admins return to the receivables
     list; cashiers (who can't see that list) go to the customer's credit
     statement instead, since that's how they got here."""
-    if is_admin(user):
+    if is_staff(user):
         return "/sales/receivables"
     if sale and sale.customer_id:
         return f"/credits/{sale.customer_id}"
@@ -111,7 +111,7 @@ def sales_history(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     q = (q or "").strip()
     page = max(page, 1)
@@ -155,7 +155,7 @@ def export_sales(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     q = (q or "").strip()
     df, dt = _parse_date(date_from), _parse_date(date_to)
@@ -213,7 +213,7 @@ def sales_returns(request: Request, page: int = 1, db: Session = Depends(get_db)
     not here; this is meant to be glanced at, not sliced."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     page = max(page, 1)
 
@@ -242,7 +242,7 @@ def sales_exchanges(request: Request, page: int = 1, db: Session = Depends(get_d
     taken), so it reads as "what did they actually exchange" at a glance."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     page = max(page, 1)
 
@@ -274,7 +274,7 @@ def receivables(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     q = (q or "").strip()
     page = max(page, 1)

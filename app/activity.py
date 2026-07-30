@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_staff
 from .templating import templates
 
 router = APIRouter()
@@ -91,7 +91,7 @@ def my_activity(request: Request, day: str = "", db: Session = Depends(get_db), 
     """A cashier's own activity for a day (defaults to today)."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if is_admin(user):
+    if is_staff(user):
         return RedirectResponse("/activity/all", status_code=302)
     d = _parse_day(day) or _today()
     summary = _day_summary(db, user.id, d)
@@ -107,7 +107,7 @@ def all_activity(request: Request, day: str = "", db: Session = Depends(get_db),
     """Admin: every cashier's activity for a day, one row per cashier."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/activity", status_code=302)
     d = _parse_day(day) or _today()
     cashiers = db.query(models.User).filter(models.User.is_active.is_(True)).order_by(models.User.username).all()
@@ -133,15 +133,15 @@ def user_activity(
     """Admin drilling into one cashier's day (or a cashier's own — same page)."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user) and user.id != user_id:
+    if not is_staff(user) and user.id != user_id:
         return RedirectResponse("/activity", status_code=302)
     target = db.get(models.User, user_id)
     if not target:
-        return RedirectResponse("/activity/all" if is_admin(user) else "/activity", status_code=302)
+        return RedirectResponse("/activity/all" if is_staff(user) else "/activity", status_code=302)
     d = _parse_day(day) or _today()
     summary = _day_summary(db, user_id, d)
     return templates.TemplateResponse(
         "activity/mine.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "day": d, "summary": summary, "viewing": target if is_admin(user) else None},
+         "day": d, "summary": summary, "viewing": target if is_staff(user) else None},
     )

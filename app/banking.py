@@ -16,12 +16,12 @@ from sqlalchemy.orm import Session
 
 from . import audit, models
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_staff
 from .templating import templates
 
 router = APIRouter()
 
-PAGE_SIZE = 20
+PAGE_SIZE = 15
 TXN_LABELS = {"deposit": "Deposit", "withdrawal": "Withdrawal"}
 ZERO = Decimal("0")
 
@@ -62,7 +62,7 @@ def _account_balance(account, balances: dict) -> Decimal:
 def list_accounts(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     accounts = db.query(models.BankAccount).filter(models.BankAccount.is_active.is_(True)).order_by(models.BankAccount.name).all()
@@ -90,7 +90,7 @@ def _render_account_form(request, user, account=None, error=None):
 def new_account(request: Request, user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     return _render_account_form(request, user)
 
@@ -99,7 +99,7 @@ def new_account(request: Request, user=Depends(get_current_user)):
 async def create_account(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     form = await request.form()
     name = (form.get("name") or "").strip()
@@ -128,7 +128,7 @@ async def create_account(request: Request, db: Session = Depends(get_db), user=D
 def edit_account(account_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     account = db.get(models.BankAccount, account_id)
     if not account:
@@ -140,7 +140,7 @@ def edit_account(account_id: int, request: Request, db: Session = Depends(get_db
 async def update_account(account_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     account = db.get(models.BankAccount, account_id)
     if not account:
@@ -184,7 +184,7 @@ def view_account(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     account = db.get(models.BankAccount, account_id)
     if not account:
@@ -240,7 +240,7 @@ def new_transaction(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     account = db.get(models.BankAccount, account_id)
     if not account:
@@ -260,7 +260,7 @@ def new_transaction(
 async def create_transaction(account_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     account = db.get(models.BankAccount, account_id)
     if not account:
@@ -299,7 +299,7 @@ async def create_transaction(account_id: int, request: Request, db: Session = De
 def void_transaction(txn_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     txn = db.get(models.BankTransaction, txn_id)
     if not txn:

@@ -22,6 +22,8 @@
         <td>
           {% if u.role == 'admin' %}
           <span class="txn" style="background:#ede9fe;color:#6d28d9;">Admin</span>
+          {% elif u.role == 'manager' %}
+          <span class="txn" style="background:#fef3c7;color:#b45309;">Manager</span>
           {% else %}
           <span class="txn" style="background:#e0f2fe;color:#0369a1;">Cashier</span>
           {% endif %}

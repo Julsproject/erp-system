@@ -14,6 +14,7 @@ every time something changes:
 The sweep is throttled (see `SWEEP_INTERVAL`) because it is triggered from the
 nav badge, which renders on every admin page load.
 """
+import calendar
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -26,7 +27,7 @@ from sqlalchemy.orm import Session
 from . import models, settings_store
 from .backup import latest_backup
 from .database import SessionLocal, get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_staff
 from .templating import templates
 
 router = APIRouter()
@@ -35,7 +36,9 @@ MANILA = ZoneInfo("Asia/Manila")
 DUE_SOON_DAYS = 15
 CHEQUE_SOON_DAYS = 3
 BACKUP_STALE_DAYS = 2
+MONTH_END_WINDOW_DAYS = 3   # start nudging this many days before month-end
 SWEEP_INTERVAL = timedelta(minutes=2)   # don't recompute more often than this
+PAGE_SIZE = 15
 ZERO = Decimal("0")
 
 NO_INVOICE_WINDOW_DAYS = 30   # how long a no-invoice return stays in the Active list
@@ -283,6 +286,20 @@ def _current_alerts(db: Session) -> dict:
                 "link": "/backup",
             }
 
+    # ---- month-end backup transfer reminder (singleton, one per month) ---
+    # Keyed by year-month so it fires once as the month winds down, then
+    # automatically resolves itself once the next month starts (a new key
+    # means the old one drops out of the live set and gets marked resolved).
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+    if today.day > days_in_month - MONTH_END_WINDOW_DAYS:
+        alerts[f"backup_transfer:{today.year}-{today.month:02d}"] = {
+            "category": "backup", "severity": "warning",
+            "title": "It's almost end of month — back up now",
+            "body": "Download this month's daily backups from the Backup page and copy them "
+                    "to your external hard drive before older ones age out.",
+            "link": "/backup",
+        }
+
     return alerts
 
 
@@ -354,12 +371,13 @@ def unread_count() -> int:
 def list_notifications(
     request: Request,
     view: str = "active",
+    page: int = 1,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     sync_notifications(db)
@@ -367,6 +385,7 @@ def list_notifications(
     db.commit()
 
     view = "history" if view == "history" else "active"
+    page = max(page, 1)
     sev_rank = case(
         (models.Notification.severity == "danger", 0),
         (models.Notification.severity == "warning", 1),
@@ -374,18 +393,17 @@ def list_notifications(
     )
     base = db.query(models.Notification)
     if view == "history":
-        rows = (
-            base.filter(models.Notification.is_resolved.is_(True))
-            .order_by(models.Notification.resolved_at.desc().nullslast(), models.Notification.id.desc())
-            .limit(200)
-            .all()
+        ordered = base.filter(models.Notification.is_resolved.is_(True)).order_by(
+            models.Notification.resolved_at.desc().nullslast(), models.Notification.id.desc()
         )
     else:
-        rows = (
-            base.filter(models.Notification.is_resolved.is_(False))
-            .order_by(models.Notification.is_read, sev_rank, models.Notification.created_at.desc())
-            .all()
+        ordered = base.filter(models.Notification.is_resolved.is_(False)).order_by(
+            models.Notification.is_read, sev_rank, models.Notification.created_at.desc()
         )
+    total = ordered.count()
+    pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+    page = min(page, pages)
+    rows = ordered.offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE).all()
 
     active_count = (
         db.query(func.count(models.Notification.id))
@@ -405,6 +423,7 @@ def list_notifications(
             "notifications": rows, "view": view, "today": _today(),
             "active_count": active_count, "unread": unread,
             "category_labels": CATEGORY_LABELS,
+            "page": page, "pages": pages, "total": total,
         },
     )
 
@@ -413,7 +432,7 @@ def list_notifications(
 def mark_read(notif_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     n = db.get(models.Notification, notif_id)
     if n and not n.is_read:
@@ -427,7 +446,7 @@ def mark_read(notif_id: int, db: Session = Depends(get_db), user=Depends(get_cur
 def mark_all_read(db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     db.query(models.Notification).filter(
         models.Notification.is_read.is_(False), models.Notification.is_resolved.is_(False)

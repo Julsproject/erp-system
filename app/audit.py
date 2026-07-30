@@ -19,12 +19,12 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_staff
 from .templating import templates
 
 router = APIRouter()
 
-PAGE_SIZE = 40
+PAGE_SIZE = 15
 
 # For the viewer's filter dropdowns — label the codes we actually emit.
 ACTION_LABELS = {
@@ -121,7 +121,7 @@ def audit_log(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     q = (q or "").strip()

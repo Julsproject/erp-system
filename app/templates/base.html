@@ -56,13 +56,14 @@
     {% set price_alerts = price_alert_count() %}
     {% set pdc_due = pdc_due_count() %}
     {% set is_admin = (user.role or '')|lower == 'admin' %}
+    {% set is_staff = (user.role or '')|lower in ('admin', 'manager') %}
     {% set finance_active = path.startswith('/pdc') or path.startswith('/expenses') or path.startswith('/banking') or path.startswith('/reports') %}
     {% set admin_active = path.startswith('/backup') or path.startswith('/users') or path.startswith('/settings') or path.startswith('/audit') %}
-    {% set notif_unread = notif_unread_count() if is_admin else 0 %}
+    {% set notif_unread = notif_unread_count() if is_staff else 0 %}
     <input type="checkbox" id="navToggle" class="nav-toggle-input">
     <nav class="nav">
       <span class="nav-label">Menu</span>
-      {% if is_admin %}
+      {% if is_staff %}
       <a class="nav-item {{ 'active' if path == '/' }}" href="/">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>
         <span>Dashboard</span>
@@ -82,7 +83,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 3h3l2.4 12.3a1.5 1.5 0 0 0 1.5 1.2h8.2a1.5 1.5 0 0 0 1.5-1.2L22 7H6"/></svg>
         <span>POS</span>
       </a>
-      {% if is_admin %}
+      {% if is_staff %}
       <a class="nav-item {{ 'active' if path.startswith('/sales') or path.startswith('/quotations') }}" href="/sales">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 4h16v4H4z"/><path d="M4 8v12h16V8"/><path d="M9 12h6"/><path d="M9 16h6"/></svg>
         <span>Sales</span>
@@ -118,11 +119,11 @@
         <span>Credits</span>
       </a>
       <a class="nav-item {{ 'active' if path.startswith('/activity') }}"
-         href="{{ '/activity/all' if is_admin else '/activity' }}">
+         href="{{ '/activity/all' if is_staff else '/activity' }}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg>
-        <span>{{ 'Cashier Activity' if is_admin else 'My Activity' }}</span>
+        <span>{{ 'Cashier Activity' if is_staff else 'My Activity' }}</span>
       </a>
-      {% if is_admin %}
+      {% if is_staff %}
       <details class="nav-group" {{ 'open' if admin_active }}>
         <summary class="nav-item nav-group-summary {{ 'active' if admin_active }}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="9" cy="8" r="3"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 11.2A3 3 0 0 0 16 5.3"/><path d="M18 20a6.4 6.4 0 0 0-2-4.7"/></svg>
@@ -132,8 +133,10 @@
         <div class="nav-subitems">
           <a class="nav-item nav-sub {{ 'active' if path.startswith('/audit') }}" href="/audit"><span>Activity Log</span></a>
           <a class="nav-item nav-sub {{ 'active' if path.startswith('/settings') }}" href="/settings"><span>Settings</span></a>
+          {% if is_admin %}
           <a class="nav-item nav-sub {{ 'active' if path.startswith('/backup') }}" href="/backup"><span>Backup</span></a>
           <a class="nav-item nav-sub {{ 'active' if path.startswith('/users') }}" href="/users"><span>Users</span></a>
+          {% endif %}
         </div>
       </details>
       {% endif %}
