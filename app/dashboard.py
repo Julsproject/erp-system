@@ -12,10 +12,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from . import models
+from . import models, settings_store
 from .backup import latest_backup
 from .database import get_db
 from .deps import get_current_user, is_staff
+from .products import low_stock_expr
 from .templating import templates
 
 router = APIRouter()
@@ -250,12 +251,7 @@ def dashboard(
     )
     low_stock = (
         db.query(models.Product)
-        .filter(
-            models.Product.is_active.is_(True),
-            models.Product.reorder_level > 0,
-            _qty_expr() > 0,
-            _qty_expr() <= models.Product.reorder_level,
-        )
+        .filter(models.Product.is_active.is_(True), low_stock_expr(settings_store.default_low_stock_pct()))
         .order_by(models.Product.name)
         .all()
     )

@@ -68,11 +68,21 @@ async def save_settings(request: Request, db: Session = Depends(get_db), user=De
         if margin_val < 0 or margin_val >= 100:
             return _render(request, db, user, error="Minimum margin must be between 0 and 99.")
 
+    raw_low_stock = (form.get("default_low_stock_pct") or "").strip()
+    if raw_low_stock:
+        try:
+            low_stock_val = float(raw_low_stock)
+        except ValueError:
+            return _render(request, db, user, error="Default low-stock % must be a number, or left blank to disable.")
+        if low_stock_val <= 0 or low_stock_val >= 100:
+            return _render(request, db, user, error="Default low-stock % must be between 0 and 100.")
+
     before = settings_store.get_all(db)
     for key, _label, maxlen in FIELDS:
         value = (form.get(key) or "").strip()[:maxlen]
         settings_store.set_setting(db, key, value)
     settings_store.set_setting(db, "min_margin_pct", raw_margin)
+    settings_store.set_setting(db, "default_low_stock_pct", raw_low_stock)
     db.flush()
     after = settings_store.get_all(db)
     changes = audit.diff(before, after)

@@ -48,7 +48,7 @@
       <div class="step-no">2</div>
       <div>
         <h2>Upload your filled-in file</h2>
-        <p class="muted">Accepts <strong>.xlsx</strong> or <strong>.csv</strong>. New categories and unit types are created automatically. A product whose name already exists is updated instead of duplicated.</p>
+        <p class="muted">Accepts <strong>.xlsx</strong> or <strong>.csv</strong>. New categories and unit types are created automatically. If a product name already exists, you'll be shown those matches and can choose to update or skip each one before anything is saved.</p>
         <form method="post" action="/products/import" enctype="multipart/form-data" class="upload-form">
           <input type="file" name="file" accept=".xlsx,.xlsm,.csv" required>
           <button class="btn" type="submit">⬆ Import</button>
@@ -57,8 +57,13 @@
     </div>
 
     <div class="hint-box">
-      <strong>Columns:</strong> Product Name (required), Category, Unit Type, Cost of Sales, Selling Price,
+      <strong>Columns:</strong> Barcode, Product Name (required), Category, Unit Type, Cost of Sales, Selling Price,
       Actual Beginning Stocks, Stocks Qty, VAT (yes/no). Total Qty is calculated automatically.
+      Column order doesn't actually matter to the import — this is just what the downloaded template looks like.
+      <br><br>
+      <strong>Barcode column:</strong> optional — click into the cell and scan with a barcode scanner
+      (it types like a keyboard), or leave it blank for items with none. A barcode already used by another
+      product will be skipped with an error instead of overwriting it.
       <br><br>
       <strong>Don't know the cost yet?</strong> Leave <em>Cost of Sales</em> blank — the import still goes through.
       The cost is filled in automatically the first time you receive that item in

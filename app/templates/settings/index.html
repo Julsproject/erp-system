@@ -48,6 +48,16 @@
       </span>
     </label>
 
+    <label class="full">Default low-stock alert (%) <span class="muted">(optional)</span>
+      <input type="number" name="default_low_stock_pct" value="{{ values.default_low_stock_pct }}" min="0" max="99" step="1"
+             placeholder="e.g. 20 — leave blank to disable" style="max-width:220px;">
+      <span class="hint">
+        Fallback for any product whose own "Low Stock Alert At" was left blank/0 on the product form — flags it
+        once on-hand quantity drops to this % (or less) of its Actual Beginning Stocks. Only applies to products
+        with no reorder level of their own set; a product with a reorder level always uses that instead.
+      </span>
+    </label>
+
     <div class="form-actions full">
       <button class="btn" type="submit">Save changes</button>
     </div>

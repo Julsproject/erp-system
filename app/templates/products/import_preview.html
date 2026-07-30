@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Review import · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Review before importing</h1>
+  <a class="btn-link" href="/products/import">← Start over</a>
+</div>
+
+<div class="alert" style="background:#fffbeb;border-color:#fde68a;color:#92400e;">
+  <strong>{{ update_rows|length }}</strong> row{{ '' if update_rows|length == 1 else 's' }} in
+  <strong>{{ filename }}</strong> match{{ 'es' if update_rows|length == 1 }} a product that already exists.
+  Nothing has been saved yet — choose what to do with each match below, then Apply Import.
+</div>
+
+<form method="post" action="/products/import/confirm">
+  <input type="hidden" name="filename" value="{{ filename }}">
+  <input type="hidden" name="rows_json" value='{{ rows_json }}'>
+
+  {% if update_rows %}
+  <h3 class="ex-h" style="margin-top:22px;">Already in Inventory — choose Update or Skip</h3>
+  <div class="table-wrap">
+    <table class="grid">
+      <thead>
+        <tr>
+          <th style="width:40px;"></th>
+          <th>Product</th>
+          <th class="num">Cost (current → new)</th>
+          <th class="num">Selling Price (current → new)</th>
+          <th class="num">Stocks Qty (current → new)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in update_rows %}
+        <tr>
+          <td><input type="checkbox" name="apply_{{ r.line_no }}" value="1" checked></td>
+          <td class="strong">{{ r.name }}</td>
+          <td class="num">{{ r.existing.cost_price|peso }} → {{ (r.record.cost|float if r.record.cost else 0)|peso }}</td>
+          <td class="num">{{ r.existing.selling_price|peso }} → {{ (r.record.selling|float if r.record.selling else 0)|peso }}</td>
+          <td class="num">{{ r.existing.stock_qty|qty }} → {{ (r.record.stocks|float if r.record.stocks else 0)|qty }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="hint" style="margin:6px 0 0;">Checked = apply the new values from the file. Unchecked = leave this product exactly as it is now.</p>
+  {% endif %}
+
+  {% if new_rows %}
+  <h3 class="ex-h" style="margin-top:22px;">New products — will be added</h3>
+  <div class="table-wrap">
+    <table class="grid">
+      <thead><tr><th>Product</th><th>Category</th><th class="num">Cost</th><th class="num">Selling Price</th><th class="num">Stocks Qty</th></tr></thead>
+      <tbody>
+        {% for r in new_rows %}
+        <tr>
+          <td class="strong">{{ r.name }}</td>
+          <td>{{ r.record.category or '—' }}</td>
+          <td class="num">{{ (r.record.cost|float if r.record.cost else 0)|peso }}</td>
+          <td class="num">{{ (r.record.selling|float if r.record.selling else 0)|peso }}</td>
+          <td class="num">{{ (r.record.stocks|float if r.record.stocks else 0)|qty }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if conflict_rows %}
+  <h3 class="ex-h" style="margin-top:22px;">Skipped — barcode conflicts</h3>
+  <div class="table-wrap">
+    <table class="grid">
+      <thead><tr><th>Row</th><th>Product</th><th>Problem</th></tr></thead>
+      <tbody>
+        {% for r in conflict_rows %}
+        <tr><td>{{ r.line_no }}</td><td>{{ r.name }}</td><td>{{ r.message }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if blank_count %}
+  <p class="muted" style="margin-top:14px;">{{ blank_count }} blank row{{ '' if blank_count == 1 else 's' }} in the file will be skipped.</p>
+  {% endif %}
+
+  <div class="form-actions" style="margin-top:18px;">
+    <button class="btn" type="submit">Apply Import</button>
+    <a class="btn-secondary" href="/products/import">Cancel</a>
+  </div>
+</form>
+{% endblock %}

@@ -56,12 +56,16 @@ def _money(value) -> Decimal:
 
 
 def _deduct_stock(product: models.Product, base_qty: Decimal):
-    """Reduce on-hand by base_qty, taking from received stock first, then beginning."""
-    take = min(base_qty, product.stock_qty or Decimal("0"))
-    product.stock_qty = (product.stock_qty or Decimal("0")) - take
+    """Reduce on-hand by base_qty, taking from Actual Beginning Stock first,
+    then Stocks Qty. If beginning stock is already at or below 0 (e.g. from
+    a past oversell), nothing more can come from it — the full amount comes
+    from Stocks Qty instead."""
+    available_beginning = max(product.beginning_stock or Decimal("0"), Decimal("0"))
+    take = min(base_qty, available_beginning)
+    product.beginning_stock = (product.beginning_stock or Decimal("0")) - take
     remainder = base_qty - take
     if remainder > 0:
-        product.beginning_stock = (product.beginning_stock or Decimal("0")) - remainder
+        product.stock_qty = (product.stock_qty or Decimal("0")) - remainder
 
 
 def _add_stock(product: models.Product, base_qty: Decimal):

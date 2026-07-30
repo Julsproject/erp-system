@@ -28,6 +28,7 @@ from . import models, settings_store
 from .backup import latest_backup
 from .database import SessionLocal, get_db
 from .deps import get_current_user, is_staff
+from .products import low_stock_expr
 from .templating import templates
 
 router = APIRouter()
@@ -86,21 +87,24 @@ def _current_alerts(db: Session) -> dict:
             "body": "On-hand quantity has reached zero. Reorder to keep selling it.",
             "link": "/products",
         }
+    default_low_stock_pct = settings_store.default_low_stock_pct()
     low = (
         db.query(models.Product)
-        .filter(
-            models.Product.is_active.is_(True),
-            models.Product.reorder_level > 0,
-            _qty_expr() > 0,
-            _qty_expr() <= models.Product.reorder_level,
-        )
+        .filter(models.Product.is_active.is_(True), low_stock_expr(default_low_stock_pct))
         .all()
     )
     for p in low:
+        if p.reorder_level and p.reorder_level > 0:
+            body = f"On hand {p.total_qty} is at or below the reorder level of {p.reorder_level}."
+        else:
+            body = (
+                f"On hand {p.total_qty} has dropped to {default_low_stock_pct:g}% or less of the "
+                f"beginning stock of {p.beginning_stock} — no reorder level is set for this item."
+            )
         alerts[f"stock_low:{p.id}"] = {
             "category": "stock", "severity": "warning",
             "title": f"Low stock: {p.name}",
-            "body": f"On hand {p.total_qty} is at or below the reorder level of {p.reorder_level}.",
+            "body": body,
             "link": "/products",
         }
 

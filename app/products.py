@@ -57,8 +57,13 @@ def _product_snapshot(p: models.Product) -> dict:
     d["unit_type"] = p.unit_type.name if p.unit_type else None
     return d
 
-# Columns used for the import template and the upload parser.
+# Columns used for the import template and the upload parser. Order here is
+# just what the downloaded template looks like — the parser reads columns by
+# header name (see HEADER_MAP), so this can be reordered freely without
+# touching how uploads are read, and doesn't affect the Inventory page's own
+# column order either.
 TEMPLATE_HEADERS = [
+    "Barcode",
     "Product Name",
     "Category",
     "Unit Type",
@@ -72,6 +77,7 @@ TEMPLATE_HEADERS = [
 # be in any order and tolerate small naming differences.
 HEADER_MAP = {
     "product name": "name", "name": "name", "product": "name",
+    "barcode": "barcode", "bar code": "barcode", "upc": "barcode", "ean": "barcode",
     "category": "category",
     "unit type": "unit_type", "unit": "unit_type", "unit of measure": "unit_type", "uom": "unit_type",
     "cost of sales": "cost", "cost": "cost", "cost price": "cost",
@@ -81,7 +87,7 @@ HEADER_MAP = {
     "stocks qty": "stocks", "stock qty": "stocks", "stocks": "stocks", "stock": "stocks",
     "vat": "vat", "vat-able": "vat", "vatable": "vat",
 }
-FIELDS = ["name", "category", "unit_type", "cost", "selling", "beginning", "stocks", "vat"]
+FIELDS = ["name", "barcode", "category", "unit_type", "cost", "selling", "beginning", "stocks", "vat"]
 
 
 def _to_decimal(value: str, default: str = "0") -> Decimal:
@@ -121,6 +127,34 @@ def _get_or_create_unit_type(db: Session, name: str):
 
 
 _needs_review_expr = pricing.needs_review_expr
+
+
+def low_stock_expr(default_pct):
+    """SQL expression: true when a product is at or under its low-stock
+    threshold. Uses the product's own "Low Stock Alert At" (reorder_level)
+    if it's set (>0); otherwise, if the shop has a default_pct configured
+    (Settings), falls back to that % of the product's Actual Beginning
+    Stocks. No fallback fires for a product whose beginning_stock is also
+    0/blank — there's nothing to take a percentage of. The single source of
+    truth for this, imported wherever a low-stock condition is checked, so
+    the nav badge, Dashboard and Notifications can never drift apart."""
+    from sqlalchemy import and_, or_
+
+    qty = models.Product.beginning_stock + models.Product.stock_qty
+    own_threshold = and_(
+        models.Product.reorder_level > 0,
+        qty > 0,
+        qty <= models.Product.reorder_level,
+    )
+    if default_pct is None:
+        return own_threshold
+    fallback_threshold = and_(
+        models.Product.reorder_level <= 0,
+        models.Product.beginning_stock > 0,
+        qty > 0,
+        qty <= models.Product.beginning_stock * (Decimal(str(default_pct)) / Decimal("100")),
+    )
+    return or_(own_threshold, fallback_threshold)
 
 
 @router.get("/products", response_class=HTMLResponse)
@@ -883,6 +917,133 @@ def _parse_upload(filename: str, contents: bytes):
     return rows, None
 
 
+def _classify_import_rows(db: Session, numbered_rows):
+    """Read-only pass over (line_no, record) pairs: figure out whether each
+    row would create a new product, update an existing one (matched by
+    name), or hit a barcode already used by a different product — without
+    writing anything to the database. This is what the duplicate-review
+    screen is built from, and it's re-run at confirm time against the
+    then-current data in case anything changed in between."""
+    classified = []
+    for line_no, record in numbered_rows:
+        name = (record["name"] or "").strip()
+        if not name:
+            classified.append({"line_no": line_no, "name": name, "record": record, "action": "blank"})
+            continue
+        existing = (
+            db.query(models.Product)
+            .filter(func.lower(models.Product.name) == name.lower())
+            .filter(models.Product.is_active.is_(True))
+            .first()
+        )
+        barcode = (record["barcode"] or "").strip()
+        conflict = (
+            db.query(models.Product)
+            .filter(models.Product.barcode == barcode)
+            .filter(models.Product.id != (existing.id if existing else 0))
+            .first()
+        ) if barcode else None
+        if conflict:
+            classified.append({
+                "line_no": line_no, "name": name, "record": record, "action": "conflict",
+                "message": f"Barcode “{barcode}” is already assigned to “{conflict.name}”.",
+            })
+        elif existing:
+            classified.append({"line_no": line_no, "name": name, "record": record, "action": "update", "existing": existing})
+        else:
+            classified.append({"line_no": line_no, "name": name, "record": record, "action": "create"})
+    return classified
+
+
+def _apply_import_row(db: Session, file_label: str, record: dict, existing):
+    """Create or update one product from a parsed import row. Returns
+    ('created' | 'updated', None) on success, or (None, error_message) on
+    failure. Caller wraps this in its own SAVEPOINT."""
+    name = record["name"].strip()
+    product = existing or models.Product()
+    barcode = (record["barcode"] or "").strip()
+    if barcode:
+        conflict = (
+            db.query(models.Product)
+            .filter(models.Product.barcode == barcode)
+            .filter(models.Product.id != (product.id or 0))
+            .first()
+        )
+        if conflict:
+            return None, f"Barcode “{barcode}” is already assigned to “{conflict.name}”."
+    old_total = Decimal(str(product.total_qty or 0)) if existing else Decimal("0")
+    product.name = name
+    product.barcode = barcode or None
+    product.category = _get_or_create_category(db, record["category"])
+    product.unit_type = _get_or_create_unit_type(db, record["unit_type"])
+    product.cost_price = _to_decimal(record["cost"])
+    product.selling_price = _to_decimal(record["selling"])
+    product.beginning_stock = _to_decimal(record["beginning"])
+    product.stock_qty = _to_decimal(record["stocks"])
+    product.is_vat = _parse_bool(record["vat"])
+    if existing:
+        # A re-import can silently move an existing product's stock with no
+        # trace otherwise — record it the same way a manual edit would, so
+        # it still shows up on the Stock Card and in Inventory Adjustments/P&L.
+        delta = Decimal(str(product.total_qty or 0)) - old_total
+        if delta != 0:
+            unit_cost = Decimal(str(product.cost_price or 0))
+            db.add(models.StockMovement(
+                product_id=product.id, qty_base=delta, reason="adjustment",
+                ref="bulk import", unit_cost=unit_cost, value=delta * unit_cost,
+                note=f"Bulk import: {file_label}",
+            ))
+        return "updated", None
+    db.add(product)
+    return "created", None
+
+
+def _run_import(db: Session, user, request, filename: str, classified, skip_line_nos=frozenset()):
+    """Apply a classified row set. 'blank' rows are counted as skipped,
+    'conflict' rows always become errors, and any row whose line_no is in
+    skip_line_nos (an unchecked duplicate on the review screen) is skipped
+    without being touched."""
+    created = updated = skipped = 0
+    errors = []
+    for item in classified:
+        line_no, name, action = item["line_no"], item["name"], item["action"]
+        if action == "blank":
+            skipped += 1
+            continue
+        if action == "conflict":
+            errors.append({"row": line_no, "name": name, "message": item["message"]})
+            continue
+        if line_no in skip_line_nos:
+            skipped += 1
+            continue
+        savepoint = db.begin_nested()
+        try:
+            status, err = _apply_import_row(db, filename, item["record"], item.get("existing"))
+            if err:
+                errors.append({"row": line_no, "name": name, "message": err})
+                savepoint.rollback()
+                continue
+            if status == "created":
+                created += 1
+            else:
+                updated += 1
+            savepoint.commit()
+        except Exception as exc:  # noqa: BLE001
+            savepoint.rollback()
+            errors.append({"row": line_no, "name": name, "message": str(exc)})
+    if created or updated:
+        audit.record(
+            db, user=user, request=request, action="update", entity_type="product",
+            entity_label=filename,
+            summary=f"Bulk import from “{filename}”: {created} created, {updated} updated, {skipped} skipped",
+        )
+    db.commit()
+    return {
+        "created": created, "updated": updated, "skipped": skipped,
+        "errors": errors, "total": len(classified), "filename": filename,
+    }
+
+
 @router.get("/products/import", response_class=HTMLResponse)
 def import_form(request: Request, user=Depends(get_current_user)):
     if not user:
@@ -907,67 +1068,64 @@ async def import_upload(
     rows, error = _parse_upload(file.filename, contents)
 
     if error:
-        result = {"error": error}
-    else:
-        created = updated = skipped = 0
-        errors = []
-        for line_no, record in enumerate(rows, start=2):  # row 2 = first data row
-            name = record["name"].strip()
-            if not name:
-                skipped += 1
-                continue
-            try:
-                existing = (
-                    db.query(models.Product)
-                    .filter(func.lower(models.Product.name) == name.lower())
-                    .filter(models.Product.is_active.is_(True))
-                    .first()
-                )
-                product = existing or models.Product()
-                old_total = Decimal(str(product.total_qty or 0)) if existing else Decimal("0")
-                product.name = name
-                product.category = _get_or_create_category(db, record["category"])
-                product.unit_type = _get_or_create_unit_type(db, record["unit_type"])
-                product.cost_price = _to_decimal(record["cost"])
-                product.selling_price = _to_decimal(record["selling"])
-                product.beginning_stock = _to_decimal(record["beginning"])
-                product.stock_qty = _to_decimal(record["stocks"])
-                product.is_vat = _parse_bool(record["vat"])
-                if existing:
-                    updated += 1
-                    # A re-import can silently move an existing product's
-                    # stock with no trace otherwise — record it the same
-                    # way a manual edit would, so it still shows up on the
-                    # Stock Card and in Inventory Adjustments/P&L.
-                    delta = Decimal(str(product.total_qty or 0)) - old_total
-                    if delta != 0:
-                        unit_cost = Decimal(str(product.cost_price or 0))
-                        db.add(models.StockMovement(
-                            product_id=product.id, qty_base=delta, reason="adjustment",
-                            ref="bulk import", unit_cost=unit_cost, value=delta * unit_cost,
-                            note=f"Bulk import: {file.filename}",
-                        ))
-                else:
-                    db.add(product)
-                    created += 1
-            except Exception as exc:  # noqa: BLE001
-                errors.append({"row": line_no, "name": name, "message": str(exc)})
-        if created or updated:
-            audit.record(
-                db, user=user, request=request, action="update", entity_type="product",
-                entity_label=file.filename,
-                summary=f"Bulk import from “{file.filename}”: {created} created, {updated} updated, {skipped} skipped",
-            )
-        db.commit()
-        result = {
-            "created": created,
-            "updated": updated,
-            "skipped": skipped,
-            "errors": errors,
-            "total": len(rows),
-            "filename": file.filename,
-        }
+        return templates.TemplateResponse(
+            "products/import.html",
+            {"request": request, "app_name": request.app.title, "user": user, "result": {"error": error}},
+        )
 
+    classified = _classify_import_rows(db, list(enumerate(rows, start=2)))  # row 2 = first data row
+    has_duplicates = any(r["action"] == "update" for r in classified)
+
+    if not has_duplicates:
+        # Nothing ambiguous — same one-step import as before.
+        result = _run_import(db, user, request, file.filename, classified)
+        return templates.TemplateResponse(
+            "products/import.html",
+            {"request": request, "app_name": request.app.title, "user": user, "result": result},
+        )
+
+    # At least one row matches an existing product by name — stop and let the
+    # admin choose per row instead of silently overwriting. Nothing has been
+    # written to the database yet; the parsed rows ride along as hidden JSON
+    # so Confirm doesn't need the file re-uploaded.
+    payload = [{"line_no": r["line_no"], "record": r["record"]} for r in classified if r["action"] in ("create", "update")]
+    return templates.TemplateResponse(
+        "products/import_preview.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "filename": file.filename,
+            "rows_json": json.dumps(payload),
+            "new_rows": [r for r in classified if r["action"] == "create"],
+            "update_rows": [r for r in classified if r["action"] == "update"],
+            "conflict_rows": [r for r in classified if r["action"] == "conflict"],
+            "blank_count": sum(1 for r in classified if r["action"] == "blank"),
+        },
+    )
+
+
+@router.post("/products/import/confirm", response_class=HTMLResponse)
+async def import_confirm(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+
+    form = await request.form()
+    filename = form.get("filename") or "import"
+    try:
+        payload = json.loads(form.get("rows_json") or "[]")
+    except ValueError:
+        payload = []
+
+    numbered_rows = [(int(item["line_no"]), item["record"]) for item in payload]
+    # Re-classify against the *current* data rather than trusting the preview
+    # snapshot — something could have changed (or another admin could have
+    # imported) in the time between rendering the review screen and this submit.
+    classified = _classify_import_rows(db, numbered_rows)
+
+    skip_line_nos = {
+        item["line_no"] for item in classified
+        if item["action"] == "update" and form.get(f"apply_{item['line_no']}") is None
+    }
+    result = _run_import(db, user, request, filename, classified, skip_line_nos=skip_line_nos)
     return templates.TemplateResponse(
         "products/import.html",
         {"request": request, "app_name": request.app.title, "user": user, "result": result},
@@ -990,12 +1148,14 @@ def download_template(user=Depends(get_current_user)):
         cell.fill = header_fill
 
     # Example rows (delete these before importing your real data).
-    # The second row deliberately leaves "Cost of Sales" blank: cost is optional
-    # and gets filled in automatically when you receive stock in Purchasing.
-    ws.append(["Portland Cement 40kg", "Cement", "Bag", 220, 260, 10, 5])
-    ws.append(["Common Wire Nail #4", "Fasteners", "Kg", None, 95, 25.5, 0])
+    # The second row deliberately leaves "Cost of Sales" and "Barcode" blank:
+    # cost is optional and gets filled in automatically when you receive stock
+    # in Purchasing, and barcode is optional too — scan it in with a barcode
+    # scanner (it types like a keyboard) or leave it blank if the item has none.
+    ws.append(["4800000000017", "Portland Cement 40kg", "Cement", "Bag", 220, 260, 10, 5])
+    ws.append([None, "Common Wire Nail #4", "Fasteners", "Kg", None, 95, 25.5, 0])
 
-    widths = [26, 16, 12, 14, 14, 24, 12]
+    widths = [18, 26, 16, 12, 14, 14, 24, 12]
     for i, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = width
     ws.freeze_panes = "A2"

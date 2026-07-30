@@ -27,6 +27,11 @@ DEFAULTS = {
     # fire regardless of this (losing money is never OK; this is a softer,
     # "you're profitable but under your own standard" nudge).
     "min_margin_pct": "",
+    # Fallback low-stock threshold, as a % of a product's Actual Beginning
+    # Stocks — only used when that product's own "Low Stock Alert At" is left
+    # at 0 (i.e. nobody set one). Blank = disabled, so an unset product stays
+    # silent until either this or its own reorder level is configured.
+    "default_low_stock_pct": "",
 }
 
 
@@ -82,6 +87,19 @@ def min_margin_pct():
     db = SessionLocal()
     try:
         raw = get_setting(db, "min_margin_pct", "")
+        return float(raw) if raw not in (None, "") else None
+    except Exception:
+        return None
+    finally:
+        db.close()
+
+
+def default_low_stock_pct():
+    """The shop-wide fallback low-stock %, or None when not set (disabled).
+    Standalone lookup (opens its own session) for the Notifications sweep."""
+    db = SessionLocal()
+    try:
+        raw = get_setting(db, "default_low_stock_pct", "")
         return float(raw) if raw not in (None, "") else None
     except Exception:
         return None

@@ -302,7 +302,10 @@
         <tr>
           <td class="strong">{{ p.name }}</td>
           <td class="num">{{ p.total_qty|qty }}</td>
-          <td class="num">{{ p.reorder_level|qty }}</td>
+          <td class="num">
+            {% if p.reorder_level and p.reorder_level > 0 %}{{ p.reorder_level|qty }}
+            {% else %}<span class="muted" title="No reorder level set — flagged by the shop-wide default low-stock %">auto</span>{% endif %}
+          </td>
           <td><span class="txn" style="background:#fef3c7;color:#b45309;">Low stock</span></td>
           <td class="row-actions"><a class="btn-link" href="/purchases/new">Reorder</a></td>
         </tr>
