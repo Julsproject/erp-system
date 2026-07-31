@@ -60,6 +60,86 @@
     {% set finance_active = path.startswith('/pdc') or path.startswith('/expenses') or path.startswith('/banking') or path.startswith('/reports') %}
     {% set admin_active = path.startswith('/backup') or path.startswith('/users') or path.startswith('/settings') or path.startswith('/audit') %}
     {% set notif_unread = notif_unread_count() if is_staff else 0 %}
+    <div class="global-search-wrap" style="position:relative;padding:0 14px 10px;">
+      <input id="globalSearch" class="search" type="search" placeholder="Go to… (e.g. New Purchase, POS)" autocomplete="off" style="width:100%;box-sizing:border-box;">
+      <div id="globalSearchResults" class="pos-results" style="display:none;position:absolute;left:14px;right:14px;top:100%;z-index:50;max-height:320px;overflow:auto;"></div>
+    </div>
+    <script>
+      const NAV_PAGES = [
+        {"label": "Inventory", "href": "/products"},
+        {"label": "Add Product", "href": "/products/new"},
+        {"label": "Import Excel", "href": "/products/import"},
+        {"label": "POS", "href": "/pos"},
+        {"label": "Credits", "href": "/credits"},
+        {"label": "{{ 'Cashier Activity' if is_staff else 'My Activity' }}", "href": "{{ '/activity/all' if is_staff else '/activity' }}"}
+        {% if is_staff %}
+        ,{"label": "Dashboard", "href": "/"}
+        ,{"label": "Notifications", "href": "/notifications"}
+        ,{"label": "Selling Price", "href": "/products/pricing"}
+        ,{"label": "Sales", "href": "/sales"}
+        ,{"label": "Quotations", "href": "/quotations"}
+        ,{"label": "Suppliers", "href": "/suppliers"}
+        ,{"label": "New Purchase", "href": "/purchases/new"}
+        ,{"label": "Purchase History", "href": "/purchases"}
+        ,{"label": "Payables", "href": "/purchases/payables"}
+        ,{"label": "AP Aging", "href": "/purchases/payables/aging"}
+        ,{"label": "Stock Count", "href": "/stock-count"}
+        ,{"label": "Cheques", "href": "/pdc"}
+        ,{"label": "Expenses", "href": "/expenses"}
+        ,{"label": "Cash & Banking", "href": "/banking"}
+        ,{"label": "Accounting Reports", "href": "/reports"}
+        ,{"label": "Customers", "href": "/customers"}
+        ,{"label": "Activity Log", "href": "/audit"}
+        ,{"label": "Settings", "href": "/settings"}
+        {% endif %}
+        {% if is_admin %}
+        ,{"label": "Backup", "href": "/backup"}
+        ,{"label": "Users", "href": "/users"}
+        {% endif %}
+      ];
+      (function () {
+        const box = document.getElementById('globalSearch');
+        const results = document.getElementById('globalSearchResults');
+        function matchesFor(q) {
+          q = q.trim().toLowerCase();
+          if (!q) return [];
+          return NAV_PAGES.filter(p => p.label.toLowerCase().includes(q));
+        }
+        function render(matches) {
+          if (!matches.length) { results.style.display = 'none'; results.innerHTML = ''; return; }
+          results.innerHTML = matches.map(p =>
+            '<button type="button" class="pos-item" data-href="' + p.href + '">' +
+            '<span class="pos-item-name">' + p.label + '</span></button>'
+          ).join('');
+          results.style.display = 'block';
+          results.querySelectorAll('[data-href]').forEach(btn => {
+            btn.onclick = () => { window.location = btn.dataset.href; };
+          });
+        }
+        box.addEventListener('input', () => render(matchesFor(box.value)));
+        box.addEventListener('focus', () => render(matchesFor(box.value)));
+        box.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            const matches = matchesFor(box.value);
+            if (matches.length) window.location = matches[0].href;
+          } else if (e.key === 'Escape') {
+            results.style.display = 'none'; box.blur();
+          }
+        });
+        document.addEventListener('click', (e) => {
+          if (!e.target.closest('.global-search-wrap')) results.style.display = 'none';
+        });
+        // "/" jumps to the search box from anywhere, like most apps with a
+        // command/quick-nav bar — unless already typing in some other field.
+        document.addEventListener('keydown', (e) => {
+          if (e.key !== '/' || box === document.activeElement) return;
+          const tag = (document.activeElement.tagName || '').toLowerCase();
+          if (tag === 'input' || tag === 'textarea' || document.activeElement.isContentEditable) return;
+          e.preventDefault();
+          box.focus();
+        });
+      })();
+    </script>
     <input type="checkbox" id="navToggle" class="nav-toggle-input">
     <nav class="nav">
       <span class="nav-label">Menu</span>

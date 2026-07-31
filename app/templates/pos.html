@@ -1095,14 +1095,38 @@ function calcReturn() {
 let quoCart = [];
 let quoDiscType = 'amt';
 let quoSearchTimer = null;
-document.getElementById('quoSearch').addEventListener('input', () => { clearTimeout(quoSearchTimer); quoSearchTimer = setTimeout(quoRunSearch, 180); });
-
-async function quoRunSearch() {
-  const q = document.getElementById('quoSearch').value.trim();
+const quoSearchBox = document.getElementById('quoSearch');
+quoSearchBox.addEventListener('input', () => { clearTimeout(quoSearchTimer); quoSearchTimer = setTimeout(quoRunSearch, 180); });
+// Same barcode-scanner behavior as the Sale search box: Enter resolves
+// immediately (no debounce), and if it matched exactly one product, adds it
+// straight to the quote and clears the box for the next scan.
+quoSearchBox.addEventListener('keydown', async (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  clearTimeout(quoSearchTimer);
+  const q = quoSearchBox.value.trim();
+  if (!q) return;
   const res = await fetch('/pos/search?q=' + encodeURIComponent(q));
   const data = await res.json();
-  const box = document.getElementById('quoResults');
   const products = data.products || [];
+  if (products.length === 1) {
+    quoAdd(products[0]);
+    quoSearchBox.value = '';
+    document.getElementById('quoResults').innerHTML = '<p class="pos-hint">Type a product name to begin.</p>';
+  } else {
+    quoRenderResults(products);
+  }
+});
+
+async function quoRunSearch() {
+  const q = quoSearchBox.value.trim();
+  const res = await fetch('/pos/search?q=' + encodeURIComponent(q));
+  const data = await res.json();
+  quoRenderResults(data.products || []);
+}
+
+function quoRenderResults(products) {
+  const box = document.getElementById('quoResults');
   if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
   box.innerHTML = '';
   products.forEach(p => {
