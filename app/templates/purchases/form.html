@@ -25,66 +25,10 @@
 </div>
 {% endif %}
 
-<div class="pos-grid" {{ 'style="grid-template-columns:1fr;max-width:900px;"' if return_against_po }}>
-  {% if not return_against_po %}
-  <!-- LEFT: product search -->
-  <section class="card pos-search-panel">
-    <input id="pSearch" class="search pos-search" type="search" placeholder="Search product to add…" autofocus autocomplete="off">
-    <div id="pResults" class="pos-results"><p class="pos-hint">Type a product name to begin.</p></div>
+<datalist id="unit-type-list">{% for u in unit_types %}<option value="{{ u.name }}">{% endfor %}</datalist>
 
-    <button type="button" class="btn-secondary np-open" onclick="showNewProduct()">＋ Not in inventory? Create product</button>
-  </section>
-
-  <!-- POPUP: create a product not yet in inventory — same style as the POS one. -->
-  <div id="npOverlay" class="modal-overlay" style="display:none;" onclick="if (event.target === this) hideNewProduct();">
-    <div class="modal-box np-panel">
-      <h3 class="np-title">New product</h3>
-      <label>Product name
-        <input id="npName" type="text" autocomplete="off">
-      </label>
-      <label>Category
-        <input id="npCategory" type="text" list="np-cats" placeholder="optional" autocomplete="off">
-      </label>
-      <label>Unit type
-        <input id="npUnit" type="text" list="np-units" placeholder="Piece" autocomplete="off">
-      </label>
-      <label>Unit cost (₱) <span class="muted">— what you pay the supplier</span>
-        <input id="npCost" type="number" step="0.01" min="0" placeholder="0.00" oninput="npRecalc()">
-      </label>
-
-      <div class="np-prices">
-        <h4 class="np-prices-title">Selling prices <span class="muted">· all three are saved</span></h4>
-        <div class="np-price-row">
-          <span class="npp-label">Fixed</span>
-          <span class="npp-pct muted">—</span>
-          <input id="npPrice" type="number" step="0.01" min="0" placeholder="0.00" oninput="npRecalc()">
-        </div>
-        <div class="np-price-row">
-          <span class="npp-label">Markup</span>
-          <input id="npMarkupPct" class="npp-pct" type="number" step="0.01" min="0" placeholder="%" oninput="npRecalc()">
-          <input id="npMarkupPrice" type="number" class="readonly" readonly tabindex="-1" placeholder="0.00">
-        </div>
-        <div class="np-price-row">
-          <span class="npp-label">Margin</span>
-          <input id="npMarginPct" class="npp-pct" type="number" step="0.01" min="0" max="99.99" placeholder="%" oninput="npRecalc()">
-          <input id="npMarginPrice" type="number" class="readonly" readonly tabindex="-1" placeholder="0.00">
-        </div>
-        <p class="pm-result" id="npResult"></p>
-      </div>
-
-      <div class="np-actions">
-        <button type="button" class="btn" onclick="createProduct()">Create &amp; add</button>
-        <button type="button" class="btn-secondary" onclick="hideNewProduct()">Cancel</button>
-      </div>
-      <div id="npError" class="alert" style="display:none;margin:10px 0 0;"></div>
-      <p class="hint np-hint">The unit cost also pre-fills this purchase line. You can refine the details later in Inventory.</p>
-    </div>
-  </div>
-  <datalist id="np-cats">{% for c in categories %}<option value="{{ c.name }}">{% endfor %}</datalist>
-  <datalist id="np-units">{% for u in unit_types %}<option value="{{ u.name }}">{% endfor %}</datalist>
-  {% endif %}
-
-  <!-- RIGHT: document -->
+<div style="max-width:1000px;">
+  <!-- Document -->
   <section class="card pos-cart-panel">
     <div class="pos-head-fields">
       <label class="pos-customer">Supplier
@@ -162,16 +106,24 @@
     </p>
     {% endif %}
 
+    {% if not return_against_po %}
+    <p class="hint" style="margin:0 0 10px;">
+      Type the Product Name to find an existing item, or type a new one to create it automatically when you save —
+      no extra steps. A new row appears as soon as you start the last one.
+    </p>
+    {% endif %}
+
     <div class="table-wrap">
       <table class="grid cart-table">
         <thead>
-          <tr><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Unit Cost</th><th class="num">Total</th><th></th></tr>
+          <tr><th class="num">Qty</th><th>Unit</th><th>Product Name</th><th class="num">Unit Price</th><th class="num">Subtotal</th><th></th></tr>
         </thead>
-        <tbody id="linesBody">
-          <tr><td colspan="6" class="empty">No items yet — add products from the left.</td></tr>
-        </tbody>
+        <tbody id="linesBody"></tbody>
       </table>
     </div>
+    {% if not return_against_po %}
+    <button type="button" class="btn-link" style="margin-top:8px;" onclick="addBlankRow(true)">+ Add row</button>
+    {% endif %}
 
     <div class="totals">
       <div class="totals-row grand"><span>Total</span><span id="tTotal">₱0.00</span></div>
@@ -191,132 +143,213 @@
 const peso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const txnType = {{ 'true' if return_against_po else 'false' }} ? 'return' : 'receive';
 const returnAgainstId = {{ return_against_po.id if return_against_po else 'null' }};
-// Cart starts pre-filled with exactly what was received on this delivery
-// when returning against one — edit quantities down or remove a line for
-// whatever's actually going back, instead of re-searching the catalog.
-let lines = {{ return_lines_prefill|tojson }};
-let searchTimer = null;
-const searchBox = document.getElementById('pSearch');
+function round2(n) { return (Math.round((Number(n) || 0) * 100) / 100).toString(); }
+function round4(n) { return (Math.round((Number(n) || 0) * 10000) / 10000).toString(); }
+function fmtQty(n) { return (Math.round((Number(n) || 0) * 1000) / 1000).toString(); }
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function lineTotal(l) { return (Number(l.qty) || 0) * (Number(l.unitCost) || 0); }
 
-if (searchBox) {
-  searchBox.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 180); });
-}
-document.getElementById('supplierId').addEventListener('change', recompute);
+/* ============================= RETURN flow =============================
+   Unchanged from before: lines are pre-seeded from the delivery being
+   returned against, each tied to a known product and its unit ladder. */
+let returnLines = txnType === 'return' ? {{ return_lines_prefill|tojson }} : [];
 
-async function runSearch() {
-  const res = await fetch('/purchases/search?q=' + encodeURIComponent(searchBox.value.trim()));
-  const data = await res.json();
-  const box = document.getElementById('pResults');
-  const products = data.products || [];
-  if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found — use <strong>Create product</strong> below.</p>'; return; }
-  box.innerHTML = '';
-  products.forEach(p => {
-    const el = document.createElement('button');
-    el.type = 'button'; el.className = 'pos-item'; el.onclick = () => addLine(p);
-    el.innerHTML =
-      '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span></div>' +
-      '<div class="pos-item-sub">cost ' + peso(p.cost_price) + ' · sells ' + peso(p.selling_price) +
-      ' · ' + fmtQty(p.on_hand) + ' on hand</div>';
-    box.appendChild(el);
-  });
-}
-
-function addLine(p) {
-  // default the cost to the biggest unit's equivalent so typing is minimal
-  lines.push({ product: p, unitIndex: 0, qty: 1, unitCost: p.cost_price || 0 });
-  renderLines();
-}
-
-/* cost per BASE unit implied by what we're paying for the chosen unit */
 function costPerBase(l) {
   const f = l.product.units[l.unitIndex].factor || 1;
   return (Number(l.unitCost) || 0) / f;
 }
-function lineTotal(l) { return (Number(l.qty) || 0) * (Number(l.unitCost) || 0); }
 
-function lineNote(l) {
-  if (txnType === 'return') return '';
-  const newCost = costPerBase(l);
-  const oldCost = Number(l.product.cost_price) || 0;
-  const sell = Number(l.product.selling_price) || 0;
-  if (!(Number(l.unitCost) > 0)) return '';
-  let out = '<span class="cost-note">cost/base ' + peso(oldCost) + ' → <b>' + peso(newCost) + '</b>';
-  if (newCost > oldCost) out += ' <span class="up">▲ up</span>';
-  else if (newCost < oldCost) out += ' <span class="down">▼ down</span>';
-  out += '</span>';
-  if (sell > 0 && sell < newCost) {
-    out += '<span class="cost-warn">⚠ selling ' + peso(sell) + ' is BELOW new cost — raise the price</span>';
-  } else if (sell > 0 && sell === newCost) {
-    out += '<span class="cost-warn">⚠ selling price equals cost — no margin</span>';
-  } else if (sell <= 0) {
-    out += '<span class="cost-warn">⚠ no selling price set</span>';
-  }
-  return out;
-}
-
-function renderLines() {
+function renderReturnLines() {
   const body = document.getElementById('linesBody');
-  if (!lines.length) {
-    body.innerHTML = '<tr><td colspan="6" class="empty">No items yet — add products from the left.</td></tr>';
+  if (!returnLines.length) {
+    body.innerHTML = '<tr><td colspan="6" class="empty">No items to return.</td></tr>';
     recompute(); return;
   }
   body.innerHTML = '';
-  lines.forEach((l, i) => {
+  returnLines.forEach((l, i) => {
     const opts = l.product.units.map((u, ui) =>
       '<option value="' + ui + '"' + (ui === l.unitIndex ? ' selected' : '') + '>' + escapeHtml(u.name) + '</option>').join('');
     const tr = document.createElement('tr');
     tr.innerHTML =
-      '<td class="strong">' + escapeHtml(l.product.name) + '<span class="line-note"></span></td>' +
-      '<td><select class="cart-unit" onchange="setUnit(' + i + ', this.value)">' + opts + '</select></td>' +
-      '<td class="num"><input class="cart-qty" type="number" step="any" min="0" value="' + fmtQty(l.qty) + '" oninput="setQty(' + i + ', this.value)"></td>' +
-      '<td class="num"><input class="cart-disc line-cost" type="number" step="any" min="0" value="' + round4(l.unitCost) + '" oninput="setCost(' + i + ', this.value)"></td>' +
-      '<td class="num"><input class="cart-disc line-total" type="number" step="any" min="0" value="' + round2(lineTotal(l)) + '" oninput="setTotal(' + i + ', this.value)"></td>' +
-      '<td><button class="btn-link danger" onclick="removeLine(' + i + ')">✕</button></td>';
+      '<td class="num"><input class="cart-qty" type="number" step="any" min="0" value="' + fmtQty(l.qty) + '" oninput="setReturnQty(' + i + ', this.value)"></td>' +
+      '<td><select class="cart-unit" onchange="setReturnUnit(' + i + ', this.value)">' + opts + '</select></td>' +
+      '<td class="strong">' + escapeHtml(l.product.name) + '</td>' +
+      '<td class="num"><input class="cart-disc line-cost" type="number" step="any" min="0" value="' + round4(l.unitCost) + '" oninput="setReturnCost(' + i + ', this.value)"></td>' +
+      '<td class="num"><input class="cart-disc line-total" type="number" step="any" min="0" value="' + round2(lineTotal(l)) + '" oninput="setReturnTotal(' + i + ', this.value)"></td>' +
+      '<td><button class="btn-link danger" onclick="removeReturnLine(' + i + ')">✕</button></td>';
     body.appendChild(tr);
   });
-  refreshComputed();
+  recompute();
+}
+function setReturnUnit(i, v) { returnLines[i].unitIndex = parseInt(v); renderReturnLines(); }
+function setReturnQty(i, v) { returnLines[i].qty = parseFloat(v) || 0; recompute(); }
+function setReturnCost(i, v) { returnLines[i].unitCost = parseFloat(v) || 0; recompute(); }
+function setReturnTotal(i, v) {
+  const t = parseFloat(v) || 0;
+  const q = Number(returnLines[i].qty) || 0;
+  if (q > 0) returnLines[i].unitCost = t / q;
+  recompute();
+}
+function removeReturnLine(i) { returnLines.splice(i, 1); renderReturnLines(); }
+
+/* ============================= RECEIVE flow =============================
+   Spreadsheet-style rows: type Qty / Unit / Product Name / Unit Price
+   directly. Product Name searches inventory as you type; pick a match to
+   lock it to that product's own unit, or leave it unmatched and it's
+   created automatically (Qty -> its starting Stocks Qty, Unit -> its Unit
+   Type, Unit Price -> its Cost of Sales) the moment you save. */
+let receiveLines = txnType === 'receive' ? [blankRow()] : [];
+let searchTimers = {};
+
+function blankRow() { return { productId: null, name: '', unitName: '', unitCost: '', qty: '', knownCost: null }; }
+
+function addBlankRow(focus) {
+  receiveLines.push(blankRow());
+  renderReceiveLines();
+  if (focus) {
+    const rows = document.querySelectorAll('#linesBody tr');
+    const last = rows[rows.length - 1];
+    if (last) last.querySelector('.row-name').focus();
+  }
 }
 
-/* Update totals/notes WITHOUT rebuilding inputs, so typing keeps focus.
-   `editing` = {i, field} of the box being typed in, so we never overwrite it. */
-function refreshComputed(editing) {
-  const rows = document.querySelectorAll('#linesBody tr');
-  lines.forEach((l, i) => {
-    const tr = rows[i];
-    if (!tr) return;
-    const note = tr.querySelector('.line-note');
-    if (note) note.innerHTML = lineNote(l);
-    const here = editing && editing.i === i;
-    const tot = tr.querySelector('.line-total');
-    if (tot && !(here && editing.field === 'total')) tot.value = round2(lineTotal(l));
-    const cost = tr.querySelector('.line-cost');
-    if (cost && !(here && editing.field === 'cost')) cost.value = round4(l.unitCost);
+/* Returns true if it actually appended a new blank row. */
+function ensureTrailingBlankRow() {
+  const last = receiveLines[receiveLines.length - 1];
+  if (last && (last.name || '').trim()) { receiveLines.push(blankRow()); return true; }
+  return false;
+}
+
+function rowHtml(l, i) {
+  return (
+    '<td class="num"><input class="cart-qty" type="number" step="any" min="0" value="' + (l.qty === '' ? '' : fmtQty(l.qty)) + '" oninput="setRQty(' + i + ', this.value)"></td>' +
+    '<td><input class="cart-unit-txt" type="text" list="unit-type-list" placeholder="e.g. Box, Pcs" value="' + escapeHtml(l.unitName) + '"' +
+      (l.productId ? ' readonly title="Locked to this product\'s Unit Type — edit it from Inventory instead."' : '') +
+      ' oninput="setRUnit(' + i + ', this.value)"></td>' +
+    '<td style="position:relative;">' +
+      '<input class="row-name" type="text" autocomplete="off" placeholder="Type to search or create…" value="' + escapeHtml(l.name) + '" ' +
+      'oninput="onNameInput(' + i + ', this.value)" onfocus="onNameInput(' + i + ', this.value)" onblur="setTimeout(function(){hideRowResults(' + i + ')}, 150)">' +
+      '<div class="pos-results row-results" id="rowResults' + i + '" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:30;max-height:220px;overflow:auto;"></div>' +
+      '<span class="hint row-hint" style="display:' + (l.productId || l.name.trim() ? 'block' : 'none') + ';">' +
+      (l.productId ? 'matched existing product' : 'will be created as a new product') + '</span>' +
+    '</td>' +
+    '<td class="num"><input class="cart-disc line-cost" type="number" step="any" min="0" value="' + (l.unitCost === '' ? '' : round4(l.unitCost)) + '" oninput="setRCost(' + i + ', this.value)"></td>' +
+    '<td class="num"><input class="cart-disc line-total" type="number" step="any" min="0" value="' + round2(lineTotal(l)) + '" oninput="setRTotal(' + i + ', this.value)"></td>' +
+    '<td><button class="btn-link danger" onclick="removeReceiveLine(' + i + ')">✕</button></td>'
+  );
+}
+
+function renderReceiveLines() {
+  const body = document.getElementById('linesBody');
+  body.innerHTML = '';
+  receiveLines.forEach((l, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = rowHtml(l, i);
+    body.appendChild(tr);
   });
   recompute();
 }
 
-function setUnit(i, v) { lines[i].unitIndex = parseInt(v); refreshComputed(); }
-function setQty(i, v) { lines[i].qty = parseFloat(v) || 0; refreshComputed({ i: i, field: 'qty' }); }
-function setCost(i, v) { lines[i].unitCost = parseFloat(v) || 0; refreshComputed({ i: i, field: 'cost' }); }
-
-/* Typing the Total works backwards: unit cost = total ÷ qty. */
-function setTotal(i, v) {
-  const t = parseFloat(v) || 0;
-  const q = Number(lines[i].qty) || 0;
-  if (q > 0) lines[i].unitCost = t / q;
-  refreshComputed({ i: i, field: 'total' });
+/* Appends exactly one new <tr> to the DOM without touching existing rows —
+   used when typing triggers a new trailing blank row, so the row currently
+   being typed into never loses focus. */
+function appendRowDom(i) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = rowHtml(receiveLines[i], i);
+  document.getElementById('linesBody').appendChild(tr);
 }
 
-function round2(n) { return (Math.round((Number(n) || 0) * 100) / 100).toString(); }
-function round4(n) { return (Math.round((Number(n) || 0) * 10000) / 10000).toString(); }
-function removeLine(i) { lines.splice(i, 1); renderLines(); }
+/* Updates just Unit Price / Subtotal for one row in place (never rebuilds
+   the DOM), so typing digit-by-digit in either field keeps focus. */
+function refreshRow(i, skipField) {
+  const tr = document.querySelectorAll('#linesBody tr')[i];
+  if (!tr) return;
+  const l = receiveLines[i];
+  const costEl = tr.querySelector('.line-cost');
+  const totalEl = tr.querySelector('.line-total');
+  if (costEl && skipField !== 'cost') costEl.value = l.unitCost === '' ? '' : round4(l.unitCost);
+  if (totalEl && skipField !== 'total') totalEl.value = round2(lineTotal(l));
+}
+
+function setRQty(i, v) { receiveLines[i].qty = v === '' ? '' : (parseFloat(v) || 0); refreshRow(i, 'qty'); recompute(); }
+function setRUnit(i, v) { receiveLines[i].unitName = v; recompute(); }
+function setRCost(i, v) { receiveLines[i].unitCost = v === '' ? '' : (parseFloat(v) || 0); refreshRow(i, 'cost'); recompute(); }
+function setRTotal(i, v) {
+  const t = parseFloat(v) || 0;
+  const q = Number(receiveLines[i].qty) || 0;
+  if (q > 0) receiveLines[i].unitCost = t / q;
+  refreshRow(i, 'total');
+  recompute();
+}
+function removeReceiveLine(i) {
+  receiveLines.splice(i, 1);
+  if (!receiveLines.length) receiveLines.push(blankRow());
+  renderReceiveLines();
+}
+
+function onNameInput(i, v) {
+  receiveLines[i].name = v;
+  receiveLines[i].productId = null;   // any edit un-matches — must re-pick from the list
+  receiveLines[i].knownCost = null;
+  const tr = document.querySelectorAll('#linesBody tr')[i];
+  const hint = tr && tr.querySelector('.row-hint');
+  if (hint) { hint.style.display = v.trim() ? 'block' : 'none'; hint.textContent = 'will be created as a new product'; }
+  if (ensureTrailingBlankRow()) appendRowDom(receiveLines.length - 1);
+  clearTimeout(searchTimers[i]);
+  searchTimers[i] = setTimeout(() => runRowSearch(i), 180);
+}
+
+async function runRowSearch(i) {
+  const box = document.getElementById('rowResults' + i);
+  if (!box) return;
+  const q = (receiveLines[i] && receiveLines[i].name || '').trim();
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const res = await fetch('/purchases/search?q=' + encodeURIComponent(q));
+  const data = await res.json();
+  const products = data.products || [];
+  if (!products.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.innerHTML = '';
+  products.forEach(p => {
+    const el = document.createElement('button');
+    el.type = 'button'; el.className = 'pos-item';
+    el.onmousedown = (e) => e.preventDefault();  // survive the input's blur
+    el.onclick = () => pickRowProduct(i, p);
+    el.innerHTML =
+      '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span></div>' +
+      '<div class="pos-item-sub">cost ' + peso(p.cost_price) + ' · ' + escapeHtml(p.base_unit) + ' · ' + fmtQty(p.on_hand) + ' on hand</div>';
+    box.appendChild(el);
+  });
+  box.style.display = 'block';
+}
+
+function pickRowProduct(i, p) {
+  receiveLines[i].productId = p.id;
+  receiveLines[i].name = p.name;
+  receiveLines[i].unitName = p.base_unit;
+  receiveLines[i].knownCost = p.cost_price;
+  if (!receiveLines[i].unitCost) receiveLines[i].unitCost = p.cost_price;
+  hideRowResults(i);
+  ensureTrailingBlankRow();
+  renderReceiveLines();
+}
+
+function hideRowResults(i) {
+  const box = document.getElementById('rowResults' + i);
+  if (box) box.style.display = 'none';
+}
+
+/* ============================= shared ============================= */
+function renderLines() {
+  if (txnType === 'return') renderReturnLines(); else renderReceiveLines();
+}
+
 function clearAll() {
-  lines = [];
+  if (txnType === 'return') { returnLines = []; }
+  else { receiveLines = [blankRow()]; }
   document.getElementById('invoiceNo').value = '';
   document.getElementById('deliveryDate').value = '';
   document.getElementById('notes').value = '';
   renderLines();
-  if (searchBox) searchBox.focus();
 }
 
 function onPaymentMethodChange() {
@@ -327,7 +360,13 @@ function onPaymentMethodChange() {
   document.getElementById('payableHint').style.display = method === 'payable' ? 'block' : 'none';
 }
 
+function activeLines() {
+  if (txnType === 'return') return returnLines;
+  return receiveLines.filter(l => (l.name || '').trim() && Number(l.qty) > 0);
+}
+
 function recompute() {
+  const lines = activeLines();
   let total = 0;
   lines.forEach(l => total += lineTotal(l));
   document.getElementById('tTotal').textContent = peso(total);
@@ -337,20 +376,19 @@ function recompute() {
   if (!lines.length) ok = false;
   else if (!supplier) { ok = false; warn = 'Choose a supplier above.'; }
 
-  // count price-review warnings so the user sees them before saving
   if (ok && txnType === 'receive') {
-    const bad = lines.filter(l => {
-      const c = costPerBase(l), s = Number(l.product.selling_price) || 0;
-      return Number(l.unitCost) > 0 && (s <= 0 || s <= c);
-    });
-    if (bad.length) warn = bad.length + ' item(s) will sell at or below cost — review the selling price after saving.';
+    const bad = lines.filter(l => l.productId && l.knownCost != null && Number(l.unitCost) > 0 && Number(l.unitCost) !== Number(l.knownCost));
+    if (bad.length) warn = bad.length + ' item(s) have a different cost than what\'s on file — the new cost will be blended in on save.';
   }
   const w = document.getElementById('warnBox');
   if (warn) { w.innerHTML = warn; w.style.display = 'block'; } else { w.style.display = 'none'; }
   document.getElementById('saveBtn').disabled = !ok;
 }
 
+document.getElementById('supplierId').addEventListener('change', recompute);
+
 async function savePurchase() {
+  const lines = activeLines();
   if (!lines.length) return;
   const btn = document.getElementById('saveBtn');
   btn.disabled = true; btn.textContent = 'Saving…';
@@ -365,11 +403,16 @@ async function savePurchase() {
     bank: document.getElementById('chequeBank') ? document.getElementById('chequeBank').value : '',
     cheque_no: document.getElementById('chequeNo') ? document.getElementById('chequeNo').value : '',
     cheque_date: document.getElementById('chequeDate') ? document.getElementById('chequeDate').value : '',
-    lines: lines.map(l => {
-      const u = l.product.units[l.unitIndex];
-      return { product_id: l.product.id, unit_name: u.name, factor: u.factor, qty: l.qty,
-               unit_cost: l.unitCost, line_total: lineTotal(l) };
-    })
+    lines: txnType === 'return'
+      ? lines.map(l => {
+          const u = l.product.units[l.unitIndex];
+          return { product_id: l.product.id, unit_name: u.name, factor: u.factor, qty: l.qty,
+                   unit_cost: l.unitCost, line_total: lineTotal(l) };
+        })
+      : lines.map(l => ({
+          product_id: l.productId, product_name: l.name, unit_name: l.unitName || 'Piece',
+          factor: 1, qty: l.qty, unit_cost: l.unitCost, line_total: lineTotal(l),
+        })),
   };
   try {
     const res = await fetch('/purchases', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
@@ -378,76 +421,6 @@ async function savePurchase() {
     else { showError(data.error || 'Save failed.'); btn.disabled = false; btn.textContent = 'Save Purchase'; }
   } catch (e) {
     showError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Save Purchase';
-  }
-}
-
-/* ---- create a product that isn't in inventory yet ---- */
-function showNewProduct() {
-  document.getElementById('npOverlay').style.display = 'flex';
-  const n = document.getElementById('npName');
-  if (!n.value) n.value = searchBox.value.trim();
-  n.focus();
-}
-function hideNewProduct() {
-  document.getElementById('npOverlay').style.display = 'none';
-  ['npName', 'npCategory', 'npUnit', 'npPrice', 'npCost',
-   'npMarkupPct', 'npMarkupPrice', 'npMarginPct', 'npMarginPrice'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('npResult').textContent = '';
-  document.getElementById('npError').style.display = 'none';
-}
-
-/* ---- the three selling prices (mirrors app/pricing.py) ---- */
-function npRecalc() {
-  const cost = parseFloat(document.getElementById('npCost').value) || 0;
-  const out = document.getElementById('npResult');
-  let mPct = parseFloat(document.getElementById('npMarkupPct').value) || 0;
-  let gPct = parseFloat(document.getElementById('npMarginPct').value) || 0;
-  if (gPct > 99.99) { gPct = 99.99; document.getElementById('npMarginPct').value = gPct; }
-
-  if (cost <= 0) {
-    document.getElementById('npMarkupPrice').value = '';
-    document.getElementById('npMarginPrice').value = '';
-    out.className = 'pm-result warn';
-    out.textContent = 'Enter a unit cost — markup and margin are calculated from it.';
-    return;
-  }
-  const markup = Math.round(cost * (1 + mPct / 100) * 100) / 100;
-  const margin = Math.round(cost / (1 - gPct / 100) * 100) / 100;
-  document.getElementById('npMarkupPrice').value = markup.toFixed(2);
-  document.getElementById('npMarginPrice').value = margin.toFixed(2);
-  out.className = 'pm-result';
-  out.textContent = 'Markup ₱' + markup.toFixed(2) + ' (true margin ' + ((markup - cost) / markup * 100).toFixed(1) +
-    '%)  ·  Margin ₱' + margin.toFixed(2) + ' (true margin ' + ((margin - cost) / margin * 100).toFixed(1) + '%)';
-}
-
-async function createProduct() {
-  const err = document.getElementById('npError');
-  err.style.display = 'none';
-  const name = document.getElementById('npName').value.trim();
-  if (!name) { err.textContent = 'Enter a product name.'; err.style.display = 'block'; return; }
-  const payload = {
-    name: name,
-    category: document.getElementById('npCategory').value,
-    unit_type: document.getElementById('npUnit').value,
-    selling_price: document.getElementById('npPrice').value,
-    cost_price: document.getElementById('npCost').value,
-    markup_pct: document.getElementById('npMarkupPct').value,
-    margin_pct: document.getElementById('npMarginPct').value
-  };
-  try {
-    const res = await fetch('/purchases/quick-product', {
-      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
-    });
-    const data = await res.json();
-    if (!data.ok) { err.textContent = data.error || 'Could not create the product.'; err.style.display = 'block'; return; }
-    addLine(data.product);
-    hideNewProduct();
-    searchBox.value = '';
-    document.getElementById('pResults').innerHTML =
-      '<p class="pos-hint">' + escapeHtml(data.product.name) +
-      (data.existed ? ' already existed — added to this purchase.' : ' created and added.') + '</p>';
-  } catch (e) {
-    err.textContent = 'Network error. Please try again.'; err.style.display = 'block';
   }
 }
 
@@ -492,8 +465,6 @@ async function createSupplier() {
 }
 
 function showError(m) { const e = document.getElementById('pError'); e.textContent = m; e.style.display = 'block'; }
-function fmtQty(n) { return (Math.round((Number(n) || 0) * 1000) / 1000).toString(); }
-function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 renderLines();
 </script>

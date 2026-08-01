@@ -330,7 +330,7 @@ table.grid tr:last-child td { border-bottom: none; }
 
 /* ---------- Login ---------- */
 .login-page { min-height: 100vh; display: grid; place-items: center; background: radial-gradient(1200px 600px at 50% -10%, #eef0fe 0%, var(--bg) 55%); padding: 20px; }
-.login-card { width: 360px; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 32px 30px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 15px; }
+.login-card { width: 100%; max-width: 360px; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 32px 30px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 15px; }
 .login-brand { display: flex; align-items: center; gap: 11px; justify-content: center; margin-bottom: 4px; }
 .login-brand .brand-mark { width: 48px; height: 48px; }
 .login-title { margin: 0; font-size: 19px; text-align: center; font-weight: 700; }
@@ -598,6 +598,10 @@ table.grid tr:last-child td { border-bottom: none; }
 
 .cart-table th, .cart-table td { padding: 9px 10px; white-space: nowrap; }
 .cart-unit { padding: 6px 8px; border: 1px solid var(--line-2); border-radius: 8px; font-size: 13px; background: #fff; max-width: 150px; }
+.cart-unit-txt { padding: 6px 8px; border: 1px solid var(--line-2); border-radius: 8px; font-size: 13px; background: var(--surface); color: var(--ink); width: 110px; }
+.cart-unit-txt[readonly] { background: var(--surface-2); color: var(--muted); }
+.row-name { width: 100%; padding: 6px 8px; border: 1px solid var(--line-2); border-radius: 8px; font-size: 13.5px; background: var(--surface); color: var(--ink); }
+.row-results { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: var(--shadow-md); }
 .cart-disc { width: 76px; padding: 6px 8px; border: 1px solid var(--line-2); border-radius: 8px; font-size: 13px; text-align: right; }
 /* Qty and Price get edited constantly at checkout — kept larger and bolder
    than the other cart fields so they're easy to read/hit at a glance. */
@@ -772,6 +776,14 @@ table.grid tr:last-child td { border-bottom: none; }
   .sidebar-foot { margin: 0; padding: 8px 0 0; border: none; display: none; }
   #navToggle:checked ~ .sidebar-foot { display: block; }
   .content { padding: 22px 18px 50px; }
+
+  .page-head { flex-wrap: wrap; align-items: flex-start; }
+  .head-actions { flex-wrap: wrap; }
+  .stat-row { gap: 10px; }
+  .mini-stat { min-width: 0; flex: 1 1 140px; }
+  .result-stats { grid-template-columns: repeat(2, 1fr); }
+  .toolbar { flex-wrap: wrap; }
+  .search, input.search { max-width: none; }
 }
 
 /* ============================================================

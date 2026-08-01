@@ -9,6 +9,7 @@ import io
 import json
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 import barcode as barcode_lib
 from barcode.writer import SVGWriter
@@ -21,16 +22,18 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from . import audit, models, pricing, settings_store
-from .database import get_db
+from .database import SessionLocal, get_db
 from .deps import get_current_user, is_staff
 from .templating import templates
 
 router = APIRouter()
 
 PAGE_SIZE = 15
+MANILA = ZoneInfo("Asia/Manila")
+MONTH_END_SETTING_KEY = "last_month_end_period"
 CENTS = Decimal("0.01")
 
-BULK_MODES = ("pct", "amount", "markup")
+BULK_MODES = ("pct", "amount", "markup", "margin")
 
 # Fields whose before/after we log on a product edit. Stock and price changes
 # are the theft/accountability-sensitive ones the owner most wants visible.
@@ -49,6 +52,66 @@ ADJUSTMENT_REASONS = [
     ("other", "Other"),
 ]
 ADJUSTMENT_REASON_LABELS = dict(ADJUSTMENT_REASONS)
+
+# Throttles the month-end rollover check to at most once per real day per
+# process — see maybe_run_month_end_rollover(). Not persisted; a restart just
+# means the next request re-checks, which is harmless (the actual guard
+# against double-rolling the same month lives in app_settings, not here).
+_last_rollover_check_day = None
+
+
+def _run_month_end_rollover(db: Session, period: str) -> int:
+    """Fold every active product's Stocks Qty into Actual Beginning and reset
+    Stocks Qty to 0 — the shop's own month-end close: whatever's left on the
+    shelf becomes next month's opening balance, and Stocks Qty starts fresh
+    for the new month's purchases. total_qty (and therefore stock valuation)
+    is unchanged, so this is a reclassification, not a StockMovement/adjustment
+    — just one audit summary row for traceability."""
+    products = db.query(models.Product).filter(models.Product.is_active.is_(True)).all()
+    rolled = 0
+    for p in products:
+        total = Decimal(str(p.beginning_stock or 0)) + Decimal(str(p.stock_qty or 0))
+        if Decimal(str(p.beginning_stock or 0)) != total or Decimal(str(p.stock_qty or 0)) != 0:
+            p.beginning_stock = total
+            p.stock_qty = Decimal("0")
+            rolled += 1
+    if rolled:
+        audit.record(
+            db, action="update", entity_type="product", entity_label="Month-end rollover",
+            summary=f"Month-end rollover into {period}: {rolled} product(s) — Stocks Qty folded into Actual Beginning",
+        )
+    return rolled
+
+
+def maybe_run_month_end_rollover() -> None:
+    """Auto-fires the month-end rollover on the first page load of a new
+    calendar month (Asia/Manila). This app has no scheduler process, so — like
+    notifications._maybe_sweep — it piggybacks on normal page loads instead:
+    cheap in-memory guard skips the DB check after the first hit each day,
+    and the real once-per-month guard lives in app_settings so it can never
+    double-roll even across restarts or multiple app instances.
+    """
+    global _last_rollover_check_day
+    today = datetime.now(MANILA).date()
+    if _last_rollover_check_day == today:
+        return
+    _last_rollover_check_day = today
+    current_period = today.strftime("%Y-%m")
+    db = SessionLocal()
+    try:
+        last_period = settings_store.get_setting(db, MONTH_END_SETTING_KEY, "")
+        if last_period == current_period:
+            return
+        if last_period:  # not the very first run ever — actually roll
+            _run_month_end_rollover(db, current_period)
+        # First run ever: just establish a baseline, don't roll over
+        # retroactively for however many months of history already exist.
+        settings_store.set_setting(db, MONTH_END_SETTING_KEY, current_period)
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
 
 
 def _product_snapshot(p: models.Product) -> dict:
@@ -251,6 +314,7 @@ def list_products(
             "category_id": category_id,
             "categories": categories,
             "cat_counts": cat_counts,
+            "last_rollover_period": settings_store.get_setting(db, MONTH_END_SETTING_KEY, ""),
         },
     )
 
@@ -527,13 +591,50 @@ def archive_product(product_id: int, request: Request, db: Session = Depends(get
     return RedirectResponse("/products", status_code=status.HTTP_302_FOUND)
 
 
+@router.get("/products/archived", response_class=HTMLResponse)
+def list_archived_products(
+    request: Request, q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    q = (q or "").strip()
+    query = db.query(models.Product).filter(models.Product.is_active.is_(False))
+    if q:
+        query = query.filter(
+            models.Product.name.ilike(f"%{q}%") | (models.Product.barcode == q)
+        )
+    products = query.order_by(models.Product.name).all()
+    return templates.TemplateResponse(
+        "products/archived.html",
+        {"request": request, "app_name": request.app.title, "user": user, "products": products, "q": q},
+    )
+
+
+@router.post("/products/{product_id:int}/restore")
+def restore_product(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    product = db.get(models.Product, product_id)
+    if product:
+        product.is_active = True
+        audit.record(
+            db, user=user, request=request, action="restore", entity_type="product",
+            entity_id=product.id, entity_label=product.name,
+            summary=f"Restored “{product.name}” from archive",
+        )
+        db.commit()
+    return RedirectResponse("/products/archived", status_code=status.HTTP_302_FOUND)
+
+
 def _bulk_mode_label(mode: str, value: Decimal) -> str:
     sign = "+" if value >= 0 else ""
     if mode == "pct":
         return f"Bulk price update: {sign}{value:g}% on Fixed Price"
     if mode == "amount":
         return f"Bulk price update: {sign}{value:g} on Fixed Price"
-    return f"Bulk price update: Markup set to {value:g}%"
+    if mode == "markup":
+        return f"Bulk price update: Markup set to {value:g}%"
+    return f"Bulk price update: Margin set to {value:g}%"
 
 
 @router.post("/products/bulk-price", response_class=HTMLResponse)
@@ -592,7 +693,7 @@ async def bulk_price_apply(request: Request, db: Session = Depends(get_db), user
     updated = 0
     skipped = 0
     for p in products:
-        if mode == "markup" and (not p.cost_price or p.cost_price <= 0):
+        if mode in ("markup", "margin") and (not p.cost_price or p.cost_price <= 0):
             skipped += 1
             continue
         before = _product_snapshot(p)
@@ -602,9 +703,12 @@ async def bulk_price_apply(request: Request, db: Session = Depends(get_db), user
         elif mode == "amount":
             new_price = (Decimal(str(p.selling_price or 0)) + value).quantize(CENTS, rounding=ROUND_HALF_UP)
             p.selling_price = max(new_price, Decimal("0"))
-        else:  # markup
+        elif mode == "markup":
             p.markup_pct = value
             p.markup_price = pricing.markup_price(p.cost_price, value)
+        else:  # margin
+            p.margin_pct = value
+            p.margin_price = pricing.margin_price(p.cost_price, value)
         after = _product_snapshot(p)
         changes = audit.diff(before, after)
         if changes:

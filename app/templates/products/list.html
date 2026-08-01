@@ -6,9 +6,11 @@
     <h1 class="page-title">{{ 'Price Review Needed' if alert else 'Inventory' }}</h1>
     <p class="muted">
       {{ total }} product{{ '' if total == 1 else 's' }}{{ ' selling at or below cost' if alert }}
+      {% if last_rollover_period %}· Last month-end rollover: {{ last_rollover_period }}{% endif %}
     </p>
   </div>
   <div class="head-actions">
+    <a class="btn-secondary" href="/products/archived">🗄 Archived</a>
     <a class="btn-secondary" href="/products/import">⬆ Import Excel</a>
     <a class="btn" href="/products/new">+ Add product</a>
   </div>
@@ -107,9 +109,9 @@
           {% else %}<span class="muted">not set</span>{% endif %}
         </td>
         {% endif %}
-        <td class="num">{{ p.beginning_stock|qty }}</td>
-        <td class="num">{{ p.stock_qty|qty }}</td>
-        <td class="num strong">{{ p.total_qty|qty }}</td>
+        <td class="num">{{ p.beginning_stock|whole_qty }}</td>
+        <td class="num">{{ p.stock_qty|whole_qty }}</td>
+        <td class="num strong">{{ p.total_qty|whole_qty }}</td>
         <td class="row-actions">
           <a class="btn-link" href="/products/{{ p.id }}/edit">Edit</a>
           {% if (user.role or '')|lower == 'admin' %}

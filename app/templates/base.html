@@ -52,6 +52,7 @@
       {% endif %}
     </div>
     {% if user %}
+    {% set _ = check_month_end_rollover() %}
     {% set path = request.url.path %}
     {% set price_alerts = price_alert_count() %}
     {% set pdc_due = pdc_due_count() %}

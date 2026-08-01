@@ -556,6 +556,35 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
     total = Decimal("0")
     for ln in lines:
         product = db.get(models.Product, int(ln["product_id"])) if ln.get("product_id") else None
+        if not product and txn_type == "receive":
+            # Product Name typed in the purchase row didn't match anything —
+            # create it right here from what was typed, so receiving doesn't
+            # stall on a separate "add product" step. Re-check by name first
+            # (case-insensitive) in case it exists but the row lost its match
+            # (e.g. the name was re-typed after a pick).
+            name = (ln.get("product_name") or "").strip()
+            if not name:
+                continue
+            product = (
+                db.query(models.Product)
+                .filter(func.lower(models.Product.name) == name.lower(), models.Product.is_active.is_(True))
+                .first()
+            )
+            if not product:
+                product = models.Product(
+                    name=name,
+                    cost_price=Decimal("0"), selling_price=Decimal("0"),
+                    beginning_stock=Decimal("0"), stock_qty=Decimal("0"),
+                    unit_type=_get_or_create_unit_type(db, (ln.get("unit_name") or "Piece").strip() or "Piece"),
+                    is_active=True,
+                )
+                db.add(product)
+                db.flush()  # assign product.id for the StockMovement/PurchaseLine below
+                audit.record(
+                    db, user=user, request=request, action="create", entity_type="product",
+                    entity_id=product.id, entity_label=product.name,
+                    summary=f"Created product “{product.name}” from purchase receiving",
+                )
         if not product:
             continue
         qty = _dec(ln.get("qty"))

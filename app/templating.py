@@ -1,5 +1,5 @@
 """Shared Jinja2 templates instance and view helpers."""
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR
 
 from fastapi.templating import Jinja2Templates
 
@@ -23,6 +23,19 @@ def qty(value) -> str:
     d = d.normalize()
     s = format(d, "f")
     return s
+
+
+def whole_qty(value) -> str:
+    """Whole-number view of a quantity, dropping any fractional remainder
+    (e.g. 19.7 sacks -> "19"). Used where the fractional part is already
+    broken out elsewhere as the open-container amount, so the shop only
+    has to read one number for how many full units are on the shelf.
+    """
+    try:
+        d = Decimal(value or 0)
+    except (InvalidOperation, TypeError, ValueError):
+        return "0"
+    return str(d.to_integral_value(rounding=ROUND_FLOOR))
 
 
 def price_alert_count() -> int:
@@ -101,6 +114,18 @@ def notif_unread_count() -> int:
         return 0
 
 
+def check_month_end_rollover() -> str:
+    """Fires the throttled month-end rollover check on page load — see
+    products.maybe_run_month_end_rollover. Returns '' (nothing to render);
+    called for its side effect only. Imported lazily; never raises."""
+    try:
+        from .products import maybe_run_month_end_rollover
+        maybe_run_month_end_rollover()
+    except Exception:
+        pass
+    return ""
+
+
 def business_info() -> dict:
     """DB-saved display settings (business name + receipt details) for templates.
     Imported lazily to keep templating import-light; never raises."""
@@ -123,8 +148,10 @@ def min_margin_pct():
 
 templates.env.filters["peso"] = peso
 templates.env.filters["qty"] = qty
+templates.env.filters["whole_qty"] = whole_qty
 templates.env.globals["price_alert_count"] = price_alert_count
 templates.env.globals["pdc_due_count"] = pdc_due_count
+templates.env.globals["check_month_end_rollover"] = check_month_end_rollover
 templates.env.globals["asset_version"] = asset_version
 templates.env.globals["notif_unread_count"] = notif_unread_count
 templates.env.globals["business_info"] = business_info
