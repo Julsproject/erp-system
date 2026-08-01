@@ -98,6 +98,7 @@ def _purchase_product_payload(p: models.Product) -> dict:
         "id": p.id,
         "name": p.name,
         "base_unit": base_unit,
+        "has_unit_type": p.unit_type_id is not None,
         "units": units,
         "cost_price": float(p.cost_price or 0),
         "selling_price": float(p.selling_price or 0),
@@ -587,6 +588,13 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
                 )
         if not product:
             continue
+        if txn_type == "receive" and not product.unit_type_id:
+            # Inventory had no Unit Type on file for this product (that's why
+            # the row's Unit field was left editable instead of locked) —
+            # whatever was typed there becomes its Unit Type going forward.
+            typed_unit = (ln.get("unit_name") or "").strip()
+            if typed_unit:
+                product.unit_type = _get_or_create_unit_type(db, typed_unit)
         qty = _dec(ln.get("qty"))
         if qty <= 0:
             continue

@@ -49,12 +49,13 @@
   <h3 class="ex-h" style="margin-top:22px;">New products — will be added</h3>
   <div class="table-wrap">
     <table class="grid">
-      <thead><tr><th>Product</th><th>Category</th><th class="num">Cost</th><th class="num">Selling Price</th><th class="num">Stocks Qty</th></tr></thead>
+      <thead><tr><th>Product</th><th>Category</th><th>Sub Category</th><th class="num">Cost</th><th class="num">Selling Price</th><th class="num">Stocks Qty</th></tr></thead>
       <tbody>
         {% for r in new_rows %}
         <tr>
           <td class="strong">{{ r.name }}</td>
           <td>{{ r.record.category or '—' }}</td>
+          <td>{{ r.record.subcategory or '—' }}</td>
           <td class="num">{{ (r.record.cost|float if r.record.cost else 0)|peso }}</td>
           <td class="num">{{ (r.record.selling|float if r.record.selling else 0)|peso }}</td>
           <td class="num">{{ (r.record.stocks|float if r.record.stocks else 0)|qty }}</td>

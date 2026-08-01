@@ -306,6 +306,7 @@ table.grid tr:last-child td { border-bottom: none; }
 
 /* ---------- Forms ---------- */
 .form { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 22px; max-width: 820px; }
+@media (min-width: 1300px) { .form { grid-template-columns: 1fr 1fr 1fr; max-width: 1180px; } }
 /* Grid items default to min-width:auto, so a wide child (the units table) can
    push the columns past the card edge. Let them shrink and scroll instead. */
 .form > * { min-width: 0; }
@@ -596,6 +597,26 @@ table.grid tr:last-child td { border-bottom: none; }
 .container-line strong { color: var(--ink, #0f172a); font-weight: 600; }
 .container-line .open-hl { color: var(--brand, #4f46e5); }
 
+/* Sub-unit ladder, shown as its own mini table nested under the product row */
+.subunit-cell { padding: 0 22px 12px !important; }
+.subunit-table { width: 100%; max-width: 640px; border-collapse: collapse; font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
+.subunit-table th { text-align: left; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; font-size: 10.5px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.subunit-table th.num, .subunit-table td.num { text-align: right; }
+.subunit-table td { padding: 5px 10px; color: var(--ink-soft); }
+.subunit-table tr + tr td { border-top: 1px solid var(--line); }
+.subunit-table .subunit-base td { font-weight: 600; color: var(--ink); }
+
+/* Expand/collapse toggle for a product's unit rows (same-format sub-rows in the main table) */
+.unit-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; margin-right: 4px; padding: 0;
+  border: none; background: none; color: var(--muted); cursor: pointer;
+  font-size: 11px; transition: transform .12s var(--ease), color .12s;
+}
+.unit-toggle:hover { color: var(--brand); }
+.subunit-row { background: var(--surface-2); }
+.subunit-row td { font-size: 13.5px; }
+
 .cart-table th, .cart-table td { padding: 9px 10px; white-space: nowrap; }
 .cart-unit { padding: 6px 8px; border: 1px solid var(--line-2); border-radius: 8px; font-size: 13px; background: #fff; max-width: 150px; }
 .cart-unit-txt { padding: 6px 8px; border: 1px solid var(--line-2); border-radius: 8px; font-size: 13px; background: var(--surface); color: var(--ink); width: 110px; }
@@ -607,6 +628,11 @@ table.grid tr:last-child td { border-bottom: none; }
    than the other cart fields so they're easy to read/hit at a glance. */
 .cart-qty, .cart-price { width: 140px; padding: 12px 12px; border: 1.5px solid var(--line-2); border-radius: 9px; font-size: 17px; font-weight: 600; text-align: right; }
 .cart-qty:focus, .cart-disc:focus, .cart-price:focus, .cart-unit:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
+
+/* New Purchase's Unit Price / Subtotal — wider than the generic .cart-disc
+   (which stays narrow for POS's small per-line discount box) so a 5-6 digit
+   peso amount like 12425.00 shows in full instead of getting clipped. */
+input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size: 14.5px; }
 
 .totals { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
 .totals-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 0; font-size: 14px; color: var(--muted); }

@@ -31,6 +31,15 @@
     <small class="hint">Type a new one to create it.</small>
   </label>
 
+  <label>Sub Category
+    <input name="subcategory" list="subcategory-list" placeholder="Optional — type or pick…"
+           value="{{ product.subcategory.name if product and product.subcategory else '' }}">
+    <datalist id="subcategory-list">
+      {% for sc in subcategories %}<option value="{{ sc.name }}">{% endfor %}
+    </datalist>
+    <small class="hint">Optional. Type a new one to create it.</small>
+  </label>
+
   <label>Unit Type
     <input id="unitType" name="unit_type" list="unit-list" placeholder="e.g. Piece, Bag, Meter, Kg…"
            value="{{ product.unit_type.name if product and product.unit_type else '' }}"

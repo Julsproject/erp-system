@@ -17,7 +17,7 @@
 </div>
 
 <div class="stat-row">
-  <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>SKU{{ '' if total == 1 else 's' }}{{ ' matching filter' if q or category_id or alert }}</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>SKU{{ '' if total == 1 else 's' }}{{ ' matching filter' if q or category_id or subcategory_id or alert }}</span></div>
   <div class="mini-stat"><span class="mini-num">{{ total_cost_value|peso }}</span><span>Stock Value (at cost)</span></div>
   <div class="mini-stat"><span class="mini-num">{{ total_retail_value|peso }}</span><span>Stock Value (at retail)</span></div>
   <div class="mini-stat"><span class="mini-num">{{ (total_retail_value - total_cost_value)|peso }}</span><span>Potential Gross Profit</span></div>
@@ -55,12 +55,24 @@
 </div>
 {% endif %}
 
+{% if subcategories %}
+<div class="cat-pills">
+  <a class="cat-pill {{ 'active' if not subcategory_id }}" href="/products?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}subcategory_id=0">All sub categories</a>
+  {% for sc in subcategories %}
+  <a class="cat-pill {{ 'active' if subcategory_id == sc.id }}" href="/products?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}subcategory_id={{ sc.id }}">
+    {{ sc.name }} <span class="cat-pill-count">{{ subcat_counts.get(sc.id, 0) }}</span>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
 <form class="toolbar" method="get" action="/products">
   {% if alert %}<input type="hidden" name="alert" value="1">{% endif %}
   {% if category_id %}<input type="hidden" name="category_id" value="{{ category_id }}">{% endif %}
+  {% if subcategory_id %}<input type="hidden" name="subcategory_id" value="{{ subcategory_id }}">{% endif %}
   <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search product name or scan barcode…" autofocus>
   <button class="btn-secondary" type="submit">Search</button>
-  {% if q or category_id %}<a class="btn-link" href="/products{{ '?alert=1' if alert }}">Clear</a>{% endif %}
+  {% if q or category_id or subcategory_id %}<a class="btn-link" href="/products{{ '?alert=1' if alert }}">Clear</a>{% endif %}
 </form>
 
 <form id="bulkForm" method="post">
@@ -72,6 +84,7 @@
         <th>Product Name</th>
         <th>Barcode</th>
         <th>Category</th>
+        <th>Sub Category</th>
         <th>Unit Type</th>
         <th class="num">Cost of Sales</th>
         {% if is_admin_user %}<th class="num">Selling Price</th>{% endif %}
@@ -85,7 +98,11 @@
       {% for p in products %}
       <tr>
         {% if is_admin_user %}<td><input type="checkbox" class="rowChk" name="ids" value="{{ p.id }}" onchange="updateBulkBar()"></td>{% endif %}
-        <td class="strong">{{ p.name }}
+        <td class="strong">
+          {% if p.units %}
+          <button type="button" class="unit-toggle" onclick="toggleUnits(this, {{ p.id }})" title="Show units for this product">▸</button>
+          {% endif %}
+          {{ p.name }}
           {% if p.cost_price and p.cost_price > 0 %}
             {% if not p.selling_price or p.selling_price <= 0 %}
             <span class="warn-tag" title="No selling price set">⚠ no price</span>
@@ -98,6 +115,7 @@
         </td>
         <td class="muted">{{ p.barcode or '—' }}</td>
         <td>{{ p.category.name if p.category else '—' }}</td>
+        <td>{{ p.subcategory.name if p.subcategory else '—' }}</td>
         <td>{{ p.unit_type.name if p.unit_type else '—' }}</td>
         <td class="num">
           {% if p.cost_price and p.cost_price > 0 %}{{ p.cost_price|peso }}
@@ -122,16 +140,44 @@
           </form>
         </td>
       </tr>
-      {% if p.container %}
+      {% if p.unit_breakdown %}
+      {% set tiers = p.unit_breakdown %}
       <tr class="container-row">
-        <td colspan="{{ 11 if is_admin_user else 10 }}" class="container-line">
-          ↳ Sealed: <strong>{{ p.container.sealed }}</strong> {{ p.container.pack_name }}{{ '' if p.container.sealed == 1 else 's' }}
-          &nbsp;·&nbsp; Open container: <strong class="open-hl">{{ p.container.open|qty }} {{ p.container.loose_name }}</strong>
+        <td colspan="{{ 12 if is_admin_user else 11 }}" class="container-line">
+          ↳
+          {% for tier in tiers %}
+            {%- set is_last = loop.last and tiers|length > 1 -%}
+            {%- if loop.first %}Sealed:{% elif is_last %}Open container:{% endif %}
+            <strong{{ ' class="open-hl"' if is_last }}>{{ tier.qty|qty }}</strong>
+            {{- ' ' }}{{ tier.name }}{{ '' if tier.qty == 1 else 's' if not is_last }}
+            {%- if not loop.last %}&nbsp;·&nbsp;{% endif %}
+          {% endfor %}
         </td>
       </tr>
       {% endif %}
+      {% for u in p.units %}
+      <tr class="subunit-row" data-parent-id="{{ p.id }}" style="display:none;">
+        {% if is_admin_user %}<td></td>{% endif %}
+        <td class="strong">↳ {{ u.name }}</td>
+        <td class="muted">{{ p.barcode or '—' }}</td>
+        <td>{{ p.category.name if p.category else '—' }}</td>
+        <td>{{ p.subcategory.name if p.subcategory else '—' }}</td>
+        <td>{{ p.unit_type.name if p.unit_type else '—' }}</td>
+        <td class="num muted">—</td>
+        {% if is_admin_user %}
+        <td class="num">
+          {% if u.price and u.price > 0 %}{{ u.price|peso }}
+          {% else %}<span class="muted">not set</span>{% endif %}
+        </td>
+        {% endif %}
+        <td class="num">{{ p.beginning_stock|whole_qty }}</td>
+        <td class="num">{{ p.stock_qty|whole_qty }}</td>
+        <td class="num strong">{{ p.total_qty|whole_qty }}</td>
+        <td></td>
+      </tr>
+      {% endfor %}
       {% else %}
-      <tr><td colspan="{{ 11 if is_admin_user else 10 }}" class="empty">No products yet. Click <strong>Add product</strong> to start encoding inventory.</td></tr>
+      <tr><td colspan="{{ 12 if is_admin_user else 11 }}" class="empty">No products yet. Click <strong>Add product</strong> to start encoding inventory.</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -149,9 +195,9 @@
 
 {% if pages > 1 %}
 <div class="pager">
-  {% if page > 1 %}<a class="btn-secondary" href="/products?page={{ page - 1 }}&q={{ q }}{{ '&alert=1' if alert }}{{ '&category_id=' ~ category_id if category_id }}">← Prev</a>{% endif %}
+  {% if page > 1 %}<a class="btn-secondary" href="/products?page={{ page - 1 }}&q={{ q }}{{ '&alert=1' if alert }}{{ '&category_id=' ~ category_id if category_id }}{{ '&subcategory_id=' ~ subcategory_id if subcategory_id }}">← Prev</a>{% endif %}
   <span class="muted">Page {{ page }} of {{ pages }}</span>
-  {% if page < pages %}<a class="btn-secondary" href="/products?page={{ page + 1 }}&q={{ q }}{{ '&alert=1' if alert }}{{ '&category_id=' ~ category_id if category_id }}">Next →</a>{% endif %}
+  {% if page < pages %}<a class="btn-secondary" href="/products?page={{ page + 1 }}&q={{ q }}{{ '&alert=1' if alert }}{{ '&category_id=' ~ category_id if category_id }}{{ '&subcategory_id=' ~ subcategory_id if subcategory_id }}">Next →</a>{% endif %}
 </div>
 {% endif %}
 
@@ -177,4 +223,14 @@ function clearAllChk() {
 }
 </script>
 {% endif %}
+
+<script>
+function toggleUnits(btn, productId) {
+  const open = btn.classList.toggle('open');
+  btn.textContent = open ? '▾' : '▸';
+  document.querySelectorAll('.subunit-row[data-parent-id="' + productId + '"]').forEach(row => {
+    row.style.display = open ? '' : 'none';
+  });
+}
+</script>
 {% endblock %}

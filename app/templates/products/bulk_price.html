@@ -15,6 +15,7 @@
       <select id="bulkMode" onchange="onModeChange()">
         <option value="pct">Fixed Price — Percentage</option>
         <option value="amount">Fixed Price — Amount (₱)</option>
+        <option value="cost_pct">Fixed Price — % on top of Cost</option>
         <option value="markup">Markup % — set new value</option>
         <option value="margin">Margin % — set new value</option>
       </select>
@@ -83,6 +84,10 @@ function onModeChange() {
     label.textContent = 'Amount change (₱)';
     hint.textContent = 'Use a negative number to decrease. Example: 10 = +₱10, -10 = -₱10.';
     colCurrent.textContent = 'Current Fixed Price'; colNew.textContent = 'New Fixed Price';
+  } else if (mode === 'cost_pct') {
+    label.textContent = '% on top of Cost';
+    hint.textContent = 'Sets Fixed Price directly from cost — e.g. 30 = cost + 30%. Products with no cost on file are skipped.';
+    colCurrent.textContent = 'Current Fixed Price'; colNew.textContent = 'New Fixed Price';
   } else if (mode === 'markup') {
     label.textContent = 'New markup %';
     hint.textContent = 'Sets the markup percentage directly (not a change) — recalculated from each product\'s cost. Products with no cost on file are skipped.';
@@ -116,6 +121,14 @@ function renderPreview() {
     } else if (mode === 'amount') {
       currentCell.textContent = peso(fixed);
       newCell.textContent = peso(Math.max(fixed + value, 0));
+    } else if (mode === 'cost_pct') {
+      currentCell.textContent = peso(fixed);
+      if (cost <= 0) {
+        newCell.innerHTML = '<span class="muted">skipped — no cost</span>';
+        skipped++;
+      } else {
+        newCell.textContent = peso(Math.max(cost * (1 + value / 100), 0));
+      }
     } else if (mode === 'markup') {
       currentCell.textContent = markupPct.toFixed(1) + '%';
       if (cost <= 0) {

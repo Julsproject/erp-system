@@ -46,6 +46,22 @@ class Category(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class SubCategory(Base):
+    """A finer-grained grouping under a Category (e.g. Category "Paint" ->
+    Sub Category "Rollers", "Thinner"). category_id is nullable so a sub
+    category can be typed in before its parent Category is chosen — it's
+    backfilled the next time it's saved alongside one, same forgiving
+    get-or-create pattern as Category and UnitType."""
+    __tablename__ = "sub_categories"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(80), nullable=False, unique=True)
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    category = relationship("Category")
+
+
 class UnitType(Base):
     __tablename__ = "unit_types"
 
@@ -61,6 +77,7 @@ class Product(Base):
     name = Column(String(150), nullable=False, index=True)
     barcode = Column(String(64), nullable=True, unique=True)
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
+    subcategory_id = Column(Integer, ForeignKey("sub_categories.id"), nullable=True)
     unit_type_id = Column(Integer, ForeignKey("unit_types.id"), nullable=True)
 
     # Manual for now; sourced from the Supplier module later.
@@ -94,6 +111,7 @@ class Product(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     category = relationship("Category")
+    subcategory = relationship("SubCategory")
     unit_type = relationship("UnitType")
     units = relationship(
         "ProductUnit",
@@ -143,6 +161,41 @@ class Product(Base):
             "sealed": sealed,
             "open": open_loose,
         }
+
+    @property
+    def unit_breakdown(self):
+        """Cascading breakdown across EVERY defined unit (not just the two
+        extremes container() uses) — e.g. base Cubic meter + ELF + ELF 1/2 +
+        ELF 1/4 all shown at once, like coin change: as many of the biggest
+        unit as fit, then the remainder cascades into the next-biggest, and
+        so on down to the smallest, which keeps the leftover. Rounded to 4
+        decimal places so a repeating-decimal factor (e.g. 1/0.0465) doesn't
+        print a 20-digit number.
+
+        Returns a list of {name, qty} from biggest unit to smallest, or None
+        for products with no units ladder at all.
+        """
+        base_name = self.unit_type.name if self.unit_type else "unit"
+        entries = [(base_name, Decimal("1"))]
+        for u in self.units:
+            f = Decimal(str(u.factor_to_base or 0))
+            if f > 0:
+                entries.append((u.name, f))
+        if len(entries) < 2:
+            return None
+
+        entries.sort(key=lambda e: e[1], reverse=True)
+        remaining = Decimal(str(self.total_qty or 0))
+        breakdown = []
+        for i, (name, factor) in enumerate(entries):
+            is_last = i == len(entries) - 1
+            if is_last:
+                qty = (remaining / factor).quantize(Decimal("0.0001"))
+            else:
+                qty = (remaining // factor)
+                remaining -= qty * factor
+            breakdown.append({"name": name, "qty": qty})
+        return breakdown
 
 
 class ProductUnit(Base):

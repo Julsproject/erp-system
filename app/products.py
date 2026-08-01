@@ -33,7 +33,7 @@ MANILA = ZoneInfo("Asia/Manila")
 MONTH_END_SETTING_KEY = "last_month_end_period"
 CENTS = Decimal("0.01")
 
-BULK_MODES = ("pct", "amount", "markup", "margin")
+BULK_MODES = ("pct", "amount", "cost_pct", "markup", "margin")
 
 # Fields whose before/after we log on a product edit. Stock and price changes
 # are the theft/accountability-sensitive ones the owner most wants visible.
@@ -117,6 +117,7 @@ def maybe_run_month_end_rollover() -> None:
 def _product_snapshot(p: models.Product) -> dict:
     d = audit.snapshot(p, AUDIT_FIELDS)
     d["category"] = p.category.name if p.category else None
+    d["subcategory"] = p.subcategory.name if p.subcategory else None
     d["unit_type"] = p.unit_type.name if p.unit_type else None
     return d
 
@@ -129,6 +130,7 @@ TEMPLATE_HEADERS = [
     "Barcode",
     "Product Name",
     "Category",
+    "Sub Category",
     "Unit Type",
     "Cost of Sales",
     "Selling Price",
@@ -142,6 +144,7 @@ HEADER_MAP = {
     "product name": "name", "name": "name", "product": "name",
     "barcode": "barcode", "bar code": "barcode", "upc": "barcode", "ean": "barcode",
     "category": "category",
+    "sub category": "subcategory", "subcategory": "subcategory", "sub-category": "subcategory",
     "unit type": "unit_type", "unit": "unit_type", "unit of measure": "unit_type", "uom": "unit_type",
     "cost of sales": "cost", "cost": "cost", "cost price": "cost",
     "selling price": "selling", "price": "selling", "srp": "selling",
@@ -150,7 +153,7 @@ HEADER_MAP = {
     "stocks qty": "stocks", "stock qty": "stocks", "stocks": "stocks", "stock": "stocks",
     "vat": "vat", "vat-able": "vat", "vatable": "vat",
 }
-FIELDS = ["name", "barcode", "category", "unit_type", "cost", "selling", "beginning", "stocks", "vat"]
+FIELDS = ["name", "barcode", "category", "subcategory", "unit_type", "cost", "selling", "beginning", "stocks", "vat"]
 
 
 def _to_decimal(value: str, default: str = "0") -> Decimal:
@@ -174,6 +177,23 @@ def _get_or_create_category(db: Session, name: str):
     db.add(cat)
     db.flush()
     return cat
+
+
+def _get_or_create_subcategory(db: Session, name: str, category: models.Category = None):
+    name = (name or "").strip()
+    if not name:
+        return None
+    existing = db.query(models.SubCategory).filter(func.lower(models.SubCategory.name) == name.lower()).first()
+    if existing:
+        # Backfill the parent link if this sub category was created before a
+        # Category was ever paired with it.
+        if existing.category_id is None and category is not None:
+            existing.category_id = category.id
+        return existing
+    sub = models.SubCategory(name=name, category_id=category.id if category else None)
+    db.add(sub)
+    db.flush()
+    return sub
 
 
 def _get_or_create_unit_type(db: Session, name: str):
@@ -227,6 +247,7 @@ def list_products(
     page: int = 1,
     alert: int = 0,
     category_id: int = 0,
+    subcategory_id: int = 0,
     bulk_msg: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
@@ -250,6 +271,8 @@ def list_products(
         )
     if category_id:
         query = query.filter(models.Product.category_id == category_id)
+    if subcategory_id:
+        query = query.filter(models.Product.subcategory_id == subcategory_id)
 
     total = query.count()
     pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
@@ -296,6 +319,24 @@ def list_products(
         .all()
     ) if cat_counts else []
 
+    # Sub Category pills: scoped to the selected Category (if any) — same
+    # live-count-against-everything-but-itself idea as the Category pills.
+    base_for_subcounts = base_for_counts
+    if category_id:
+        base_for_subcounts = base_for_subcounts.filter(models.Product.category_id == category_id)
+    subcat_counts = dict(
+        base_for_subcounts.filter(models.Product.subcategory_id.isnot(None))
+        .with_entities(models.Product.subcategory_id, func.count(models.Product.id))
+        .group_by(models.Product.subcategory_id)
+        .all()
+    )
+    subcategories = (
+        db.query(models.SubCategory)
+        .filter(models.SubCategory.id.in_(subcat_counts.keys()))
+        .order_by(models.SubCategory.name)
+        .all()
+    ) if subcat_counts else []
+
     return templates.TemplateResponse(
         "products/list.html",
         {
@@ -314,6 +355,9 @@ def list_products(
             "category_id": category_id,
             "categories": categories,
             "cat_counts": cat_counts,
+            "subcategory_id": subcategory_id,
+            "subcategories": subcategories,
+            "subcat_counts": subcat_counts,
             "last_rollover_period": settings_store.get_setting(db, MONTH_END_SETTING_KEY, ""),
         },
     )
@@ -321,6 +365,7 @@ def list_products(
 
 def _render_form(request, db, user, product=None, error=None):
     categories = db.query(models.Category).order_by(models.Category.name).all()
+    subcategories = db.query(models.SubCategory).order_by(models.SubCategory.name).all()
     unit_types = db.query(models.UnitType).order_by(models.UnitType.name).all()
     return templates.TemplateResponse(
         "products/form.html",
@@ -330,6 +375,7 @@ def _render_form(request, db, user, product=None, error=None):
             "user": user,
             "product": product,
             "categories": categories,
+            "subcategories": subcategories,
             "unit_types": unit_types,
             "adjustment_reasons": ADJUSTMENT_REASONS,
             "error": error,
@@ -358,6 +404,7 @@ def _save_from_form(product: models.Product, db: Session, form):
     product.name = (form.get("name") or "").strip()
     product.barcode = (form.get("barcode") or "").strip() or None
     product.category = _get_or_create_category(db, form.get("category"))
+    product.subcategory = _get_or_create_subcategory(db, form.get("subcategory"), product.category)
     product.unit_type = _get_or_create_unit_type(db, form.get("unit_type"))
     product.cost_price = _to_decimal(form.get("cost_price"))
     # Selling prices are set on the Add-product form and from then on only
@@ -632,6 +679,8 @@ def _bulk_mode_label(mode: str, value: Decimal) -> str:
         return f"Bulk price update: {sign}{value:g}% on Fixed Price"
     if mode == "amount":
         return f"Bulk price update: {sign}{value:g} on Fixed Price"
+    if mode == "cost_pct":
+        return f"Bulk price update: Fixed Price set to Cost {sign}{value:g}%"
     if mode == "markup":
         return f"Bulk price update: Markup set to {value:g}%"
     return f"Bulk price update: Margin set to {value:g}%"
@@ -693,7 +742,7 @@ async def bulk_price_apply(request: Request, db: Session = Depends(get_db), user
     updated = 0
     skipped = 0
     for p in products:
-        if mode in ("markup", "margin") and (not p.cost_price or p.cost_price <= 0):
+        if mode in ("markup", "margin", "cost_pct") and (not p.cost_price or p.cost_price <= 0):
             skipped += 1
             continue
         before = _product_snapshot(p)
@@ -702,6 +751,11 @@ async def bulk_price_apply(request: Request, db: Session = Depends(get_db), user
             p.selling_price = max(new_price, Decimal("0"))
         elif mode == "amount":
             new_price = (Decimal(str(p.selling_price or 0)) + value).quantize(CENTS, rounding=ROUND_HALF_UP)
+            p.selling_price = max(new_price, Decimal("0"))
+        elif mode == "cost_pct":
+            # Same math as Markup, but writes straight into Fixed Price —
+            # for the common case of seeding a never-set Fixed Price in bulk.
+            new_price = pricing.markup_price(p.cost_price, value)
             p.selling_price = max(new_price, Decimal("0"))
         elif mode == "markup":
             p.markup_pct = value
@@ -1079,6 +1133,7 @@ def _apply_import_row(db: Session, file_label: str, record: dict, existing):
     product.name = name
     product.barcode = barcode or None
     product.category = _get_or_create_category(db, record["category"])
+    product.subcategory = _get_or_create_subcategory(db, record["subcategory"], product.category)
     product.unit_type = _get_or_create_unit_type(db, record["unit_type"])
     product.cost_price = _to_decimal(record["cost"])
     product.selling_price = _to_decimal(record["selling"])
@@ -1256,10 +1311,10 @@ def download_template(user=Depends(get_current_user)):
     # cost is optional and gets filled in automatically when you receive stock
     # in Purchasing, and barcode is optional too — scan it in with a barcode
     # scanner (it types like a keyboard) or leave it blank if the item has none.
-    ws.append(["4800000000017", "Portland Cement 40kg", "Cement", "Bag", 220, 260, 10, 5])
-    ws.append([None, "Common Wire Nail #4", "Fasteners", "Kg", None, 95, 25.5, 0])
+    ws.append(["4800000000017", "Portland Cement 40kg", "Cement", "Bag Cement", "Bag", 220, 260, 10, 5])
+    ws.append([None, "Common Wire Nail #4", "Fasteners", "Nails", "Kg", None, 95, 25.5, 0])
 
-    widths = [18, 26, 16, 12, 14, 14, 24, 12]
+    widths = [18, 26, 16, 16, 12, 14, 14, 24, 12]
     for i, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = width
     ws.freeze_panes = "A2"

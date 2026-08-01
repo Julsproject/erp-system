@@ -27,7 +27,7 @@
 
 <datalist id="unit-type-list">{% for u in unit_types %}<option value="{{ u.name }}">{% endfor %}</datalist>
 
-<div style="max-width:1000px;">
+<div>
   <!-- Document -->
   <section class="card pos-cart-panel">
     <div class="pos-head-fields">
@@ -201,7 +201,7 @@ function removeReturnLine(i) { returnLines.splice(i, 1); renderReturnLines(); }
 let receiveLines = txnType === 'receive' ? [blankRow()] : [];
 let searchTimers = {};
 
-function blankRow() { return { productId: null, name: '', unitName: '', unitCost: '', qty: '', knownCost: null }; }
+function blankRow() { return { productId: null, name: '', unitName: '', unitCost: '', qty: '', knownCost: null, unitLocked: false, units: null, unitIndex: 0 }; }
 
 function addBlankRow(focus) {
   receiveLines.push(blankRow());
@@ -221,11 +221,16 @@ function ensureTrailingBlankRow() {
 }
 
 function rowHtml(l, i) {
+  const unitCell = (l.units && l.units.length)
+    ? '<select class="cart-unit" onchange="setRUnitIndex(' + i + ', this.value)">' +
+        l.units.map((u, ui) => '<option value="' + ui + '"' + (ui === l.unitIndex ? ' selected' : '') + '>' + escapeHtml(u.name) + '</option>').join('') +
+      '</select>'
+    : '<input class="cart-unit-txt" type="text" list="unit-type-list" placeholder="e.g. Box, Pcs" value="' + escapeHtml(l.unitName) + '"' +
+      (l.unitLocked ? ' readonly title="Locked to this product\'s Unit Type — edit it from Inventory instead."' : '') +
+      ' oninput="setRUnit(' + i + ', this.value)">';
   return (
     '<td class="num"><input class="cart-qty" type="number" step="any" min="0" value="' + (l.qty === '' ? '' : fmtQty(l.qty)) + '" oninput="setRQty(' + i + ', this.value)"></td>' +
-    '<td><input class="cart-unit-txt" type="text" list="unit-type-list" placeholder="e.g. Box, Pcs" value="' + escapeHtml(l.unitName) + '"' +
-      (l.productId ? ' readonly title="Locked to this product\'s Unit Type — edit it from Inventory instead."' : '') +
-      ' oninput="setRUnit(' + i + ', this.value)"></td>' +
+    '<td>' + unitCell + '</td>' +
     '<td style="position:relative;">' +
       '<input class="row-name" type="text" autocomplete="off" placeholder="Type to search or create…" value="' + escapeHtml(l.name) + '" ' +
       'oninput="onNameInput(' + i + ', this.value)" onfocus="onNameInput(' + i + ', this.value)" onblur="setTimeout(function(){hideRowResults(' + i + ')}, 150)">' +
@@ -273,6 +278,15 @@ function refreshRow(i, skipField) {
 
 function setRQty(i, v) { receiveLines[i].qty = v === '' ? '' : (parseFloat(v) || 0); refreshRow(i, 'qty'); recompute(); }
 function setRUnit(i, v) { receiveLines[i].unitName = v; recompute(); }
+function setRUnitIndex(i, v) {
+  const l = receiveLines[i];
+  l.unitIndex = parseInt(v);
+  // Suggest a starting cost for the newly-picked unit (base cost x its
+  // factor) — still just a starting point, editable like any other cost.
+  if (l.knownCost != null) l.unitCost = Number(l.knownCost) * l.units[l.unitIndex].factor;
+  refreshRow(i, null);
+  recompute();
+}
 function setRCost(i, v) { receiveLines[i].unitCost = v === '' ? '' : (parseFloat(v) || 0); refreshRow(i, 'cost'); recompute(); }
 function setRTotal(i, v) {
   const t = parseFloat(v) || 0;
@@ -291,6 +305,9 @@ function onNameInput(i, v) {
   receiveLines[i].name = v;
   receiveLines[i].productId = null;   // any edit un-matches — must re-pick from the list
   receiveLines[i].knownCost = null;
+  receiveLines[i].units = null;
+  receiveLines[i].unitIndex = 0;
+  receiveLines[i].unitLocked = false;
   const tr = document.querySelectorAll('#linesBody tr')[i];
   const hint = tr && tr.querySelector('.row-hint');
   if (hint) { hint.style.display = v.trim() ? 'block' : 'none'; hint.textContent = 'will be created as a new product'; }
@@ -314,20 +331,47 @@ async function runRowSearch(i) {
     el.type = 'button'; el.className = 'pos-item';
     el.onmousedown = (e) => e.preventDefault();  // survive the input's blur
     el.onclick = () => pickRowProduct(i, p);
+    // p.units[0] is always the base unit itself (factor 1) — anything after
+    // that is a real conversion worth showing, e.g. "1 Piece = 0.002 Box",
+    // so it's clear you can buy in that other unit too.
+    const conversions = (p.units || []).slice(1)
+      .map(u => '1 ' + escapeHtml(u.name) + ' = ' + fmtQty(u.factor) + ' ' + escapeHtml(p.base_unit))
+      .join(' · ');
     el.innerHTML =
       '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span></div>' +
-      '<div class="pos-item-sub">cost ' + peso(p.cost_price) + ' · ' + escapeHtml(p.base_unit) + ' · ' + fmtQty(p.on_hand) + ' on hand</div>';
+      '<div class="pos-item-sub">cost ' + peso(p.cost_price) + ' · ' + escapeHtml(p.base_unit) + ' · ' + fmtQty(p.on_hand) + ' on hand</div>' +
+      (conversions ? '<div class="pos-item-sub">' + conversions + '</div>' : '');
     box.appendChild(el);
   });
-  box.style.display = 'block';
+  box.style.display = 'flex';   /* matches .pos-results { display: flex; flex-direction: column } — 'block' would
+                                    win over the class (inline style beats class) and the buttons' native
+                                    inline-block display would wrap them sideways instead of stacking. */
 }
 
 function pickRowProduct(i, p) {
-  receiveLines[i].productId = p.id;
-  receiveLines[i].name = p.name;
-  receiveLines[i].unitName = p.base_unit;
-  receiveLines[i].knownCost = p.cost_price;
-  if (!receiveLines[i].unitCost) receiveLines[i].unitCost = p.cost_price;
+  const l = receiveLines[i];
+  l.productId = p.id;
+  l.name = p.name;
+  l.knownCost = p.cost_price;
+  if (p.has_unit_type && p.units && p.units.length > 1) {
+    // A real units ladder is on file (e.g. Box + Piece) — offer all of them
+    // in a dropdown so you can buy in whichever one this delivery is in.
+    l.units = p.units;
+    l.unitIndex = 0;   // defaults to the base unit; switch it in the row
+    l.unitLocked = false;
+  } else if (p.has_unit_type) {
+    // Only a base unit, no ladder — nothing to choose between.
+    l.units = null;
+    l.unitLocked = true;
+    l.unitName = p.base_unit;
+  } else {
+    // Inventory has no Unit Type on file at all — leave it blank/editable
+    // instead of prefilling the "Unit" fallback label.
+    l.units = null;
+    l.unitLocked = false;
+    l.unitName = '';
+  }
+  if (!l.unitCost) l.unitCost = p.cost_price;
   hideRowResults(i);
   ensureTrailingBlankRow();
   renderReceiveLines();
@@ -409,10 +453,15 @@ async function savePurchase() {
           return { product_id: l.product.id, unit_name: u.name, factor: u.factor, qty: l.qty,
                    unit_cost: l.unitCost, line_total: lineTotal(l) };
         })
-      : lines.map(l => ({
-          product_id: l.productId, product_name: l.name, unit_name: l.unitName || 'Piece',
-          factor: 1, qty: l.qty, unit_cost: l.unitCost, line_total: lineTotal(l),
-        })),
+      : lines.map(l => {
+          const u = (l.units && l.units.length) ? l.units[l.unitIndex] : null;
+          return {
+            product_id: l.productId, product_name: l.name,
+            unit_name: u ? u.name : (l.unitName || 'Piece'),
+            factor: u ? u.factor : 1,
+            qty: l.qty, unit_cost: l.unitCost, line_total: lineTotal(l),
+          };
+        }),
   };
   try {
     const res = await fetch('/purchases', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
