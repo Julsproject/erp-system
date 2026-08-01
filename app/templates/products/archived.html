@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Archived Products · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Archived Products</h1>
+    <p class="muted">{{ products|length }} product{{ '' if products|length == 1 else 's' }} archived</p>
+  </div>
+  <a class="btn-secondary" href="/products">← Back to inventory</a>
+</div>
+
+<form class="toolbar" method="get" action="/products/archived">
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search archived product name or barcode…">
+  <button class="btn-secondary" type="submit">Search</button>
+  {% if q %}<a class="btn-link" href="/products/archived">Clear</a>{% endif %}
+</form>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Product Name</th>
+        <th>Barcode</th>
+        <th>Category</th>
+        <th>Unit Type</th>
+        <th class="num">Cost of Sales</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in products %}
+      <tr>
+        <td class="strong">{{ p.name }}</td>
+        <td class="muted">{{ p.barcode or '—' }}</td>
+        <td>{{ p.category.name if p.category else '—' }}</td>
+        <td>{{ p.unit_type.name if p.unit_type else '—' }}</td>
+        <td class="num">
+          {% if p.cost_price and p.cost_price > 0 %}{{ p.cost_price|peso }}
+          {% else %}<span class="muted">not set</span>{% endif %}
+        </td>
+        <td class="row-actions">
+          <form method="post" action="/products/{{ p.id }}/restore" onsubmit="return confirm('Restore {{ p.name|e }} back to Inventory?');">
+            <button class="btn-link" type="submit">Restore</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No archived products{{ ' matching “' ~ q ~ '”' if q }}.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
