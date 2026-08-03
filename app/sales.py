@@ -54,6 +54,16 @@ def _outstanding(sale, settled_map) -> Decimal:
     return (sale.receivable_amount or Decimal("0")) - settled_map.get(sale.id, Decimal("0"))
 
 
+def _sold_amount(sale) -> Decimal:
+    """The actual sale portion of a transaction — for a plain sale this is
+    just the total; for a Sale x Exchange it's only the sold line(s), not
+    netted against whatever was returned in the same transaction. Used by
+    the 'Sale' type filter so 'only sales' doesn't get muddied by returns."""
+    if sale.txn_type == "exchange":
+        return sum((ln.line_total for ln in sale.lines if (ln.qty or 0) > 0), Decimal("0"))
+    return sale.total or Decimal("0")
+
+
 def _back_url(user, sale=None) -> str:
     """Where "back"/"cancel" should go — admins return to the receivables
     list; cashiers (who can't see that list) go to the customer's credit
@@ -119,18 +129,33 @@ def sales_history(
 
     query = _filtered_sales_query(db, q, type_filter, df, dt)
 
-    total_count, total_sales = query.with_entities(
-        func.count(models.Sale.id), func.coalesce(func.sum(models.Sale.total), 0)
-    ).one()
-    pages = max((total_count + PAGE_SIZE - 1) // PAGE_SIZE, 1)
-    page = min(page, pages)
+    if type_filter == "sale":
+        # "Sale" should read as sales only — an exchange's Total is netted
+        # against whatever was returned in the same transaction, which
+        # doesn't belong in a sales-only view. Total here needs the sold
+        # portion of every matching row, so it's computed in Python rather
+        # than a single SQL sum.
+        all_matching = query.order_by(models.Sale.id.desc()).all()
+        total_count = len(all_matching)
+        total_sales = sum((_sold_amount(s) for s in all_matching), Decimal("0"))
+        pages = max((total_count + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+        page = min(page, pages)
+        start = (page - 1) * PAGE_SIZE
+        sales_page = all_matching[start:start + PAGE_SIZE]
+    else:
+        total_count, total_sales = query.with_entities(
+            func.count(models.Sale.id), func.coalesce(func.sum(models.Sale.total), 0)
+        ).one()
+        pages = max((total_count + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+        page = min(page, pages)
+        sales_page = (
+            query.order_by(models.Sale.id.desc())
+            .offset((page - 1) * PAGE_SIZE)
+            .limit(PAGE_SIZE)
+            .all()
+        )
 
-    sales_page = (
-        query.order_by(models.Sale.id.desc())
-        .offset((page - 1) * PAGE_SIZE)
-        .limit(PAGE_SIZE)
-        .all()
-    )
+    row_totals = {s.id: (_sold_amount(s) if type_filter == "sale" else (s.total or Decimal("0"))) for s in sales_page}
     totals = {"count": total_count, "sales": Decimal(str(total_sales or 0))}
     # The Sales Returns / Exchange of Items tabs are this same list, just
     # pre-filtered by type — so the right tab highlights when they're used.
@@ -139,6 +164,7 @@ def sales_history(
         "sales/list.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "sales": sales_page, "totals": totals, "tab": tab, "q": q,
+         "row_totals": row_totals,
          "type_filter": type_filter, "date_from": date_from, "date_to": date_to,
          "types": TYPE_LABELS, "page": page, "pages": pages},
     )
@@ -174,13 +200,14 @@ def export_sales(
         cell.fill = header_fill
 
     for s in sales:
+        amount = _sold_amount(s) if type_filter == "sale" else (s.total or Decimal("0"))
         ws.append([
             s.invoice_no,
             TYPE_LABELS.get(s.txn_type, s.txn_type),
             s.created_at.strftime("%Y-%m-%d %I:%M %p") if s.created_at else "",
             s.customer_name or "Walk-in",
             s.payment_method or "",
-            float(s.total or 0),
+            float(amount),
         ])
 
     widths = [16, 12, 20, 24, 20, 14]

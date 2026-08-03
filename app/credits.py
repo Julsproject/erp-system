@@ -1,13 +1,14 @@
 """Credits menu: look up a customer and view/print their credit statement."""
+import io
 from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from . import models
+from . import models, settings_store
 from .database import get_db
 from .deps import get_current_user
 from .sales import SETTLE_METHODS
@@ -154,7 +155,92 @@ def credit_statement(customer_id: int, request: Request, db: Session = Depends(g
     )
 
 
-def _outstanding_sales(db: Session, customer_id: int):
+@router.get("/credits/{customer_id:int}/pdf")
+def credit_statement_pdf(customer_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """A simple downloadable PDF of the customer's credit statement — every
+    credit invoice, the items bought on it, and the balances. Matches the
+    on-screen statement, just as a file instead of print-to-PDF."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    customer = db.get(models.Customer, customer_id)
+    if not customer:
+        return RedirectResponse("/credits", status_code=302)
+
+    sales = (
+        db.query(models.Sale)
+        .filter(models.Sale.customer_id == customer_id, models.Sale.receivable_amount > 0)
+        .order_by(models.Sale.id)
+        .all()
+    )
+    settled = _settled_for(db, [s.id for s in sales])
+    rows = []
+    orig_total = paid_total = out_total = Decimal("0")
+    for s in sales:
+        orig = s.receivable_amount or Decimal("0")
+        paid = settled.get(s.id, Decimal("0"))
+        outstanding = orig - paid
+        items = ", ".join(
+            f"{float(ln.qty):g} {ln.unit_name or ''} {ln.product_name}".strip()
+            for ln in s.lines if (ln.qty or 0) > 0
+        )
+        rows.append((s, orig, paid, outstanding, items))
+        orig_total += orig
+        paid_total += paid
+        out_total += outstanding
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from .pdf_utils import letterhead
+
+    biz = settings_store.get_all(db)
+    as_of = rows[0][0].created_at.strftime("%b %d, %Y") if rows and rows[0][0].created_at else ""
+    doc_meta = [f"As of: {as_of}"] if as_of else []
+
+    party_lines = [customer.name]
+    if customer.tin:
+        party_lines.append(f"TIN {customer.tin}")
+    if customer.address:
+        party_lines.append(customer.address)
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm, leftMargin=18 * mm, rightMargin=18 * mm)
+    styles = getSampleStyleSheet()
+    elements = letterhead(biz, "Statement of Account", doc_meta, "Customer", party_lines)
+
+    table_data = [["Invoice #", "Date", "Items", "Credit", "Paid", "Outstanding"]]
+    for s, orig, paid, outstanding, items in rows:
+        date_str = s.created_at.strftime("%b %d, %Y") if s.created_at else "-"
+        table_data.append([s.invoice_no, date_str, items or "-", f"{orig:,.2f}", f"{paid:,.2f}", f"{outstanding:,.2f}"])
+    table_data.append(["", "", "Totals", f"{orig_total:,.2f}", f"{paid_total:,.2f}", f"{out_total:,.2f}"])
+
+    table = Table(table_data, colWidths=[55, 65, 185, 65, 65, 75], repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F6FEB")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("LINEABOVE", (0, -1), (-1, -1), 1, colors.black),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+        ("ALIGN", (3, 0), (-1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    elements.append(table)
+    elements.append(Spacer(1, 14))
+    elements.append(Paragraph(f"<b>Outstanding balance: {out_total:,.2f}</b>", styles["Heading3"]))
+
+    doc.build(elements)
+    buf.seek(0)
+    safe_name = "".join(c for c in customer.name if c.isalnum() or c in (" ", "_", "-")).strip() or "customer"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}_statement.pdf"'},
+    )
+
     """This customer's still-owed invoices, oldest first — settling the
     whole balance pays these off in the order they were incurred."""
     sales = (

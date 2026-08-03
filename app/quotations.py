@@ -8,11 +8,11 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import audit, models
+from . import audit, models, settings_store
 from .customers import get_or_create_customer
 from .database import get_db
 from .deps import get_current_user, is_staff
@@ -234,6 +234,83 @@ def view_quotation(
             "request": request, "app_name": request.app.title, "user": user,
             "quote": quote, "error": error, "methods": METHOD_LABELS,
         },
+    )
+
+
+@router.get("/quotations/{quote_id:int}/pdf")
+def quotation_pdf(quote_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """A simple downloadable PDF of the quotation — for sending to a
+    customer online (email/chat) instead of only printing in-store."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    quote = db.get(models.Quotation, quote_id)
+    if not quote:
+        return RedirectResponse("/quotations", status_code=302)
+
+    import io
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from .pdf_utils import letterhead
+
+    biz = settings_store.get_all(db)
+    doc_meta = [
+        f"Quote #: {quote.quote_no}",
+        f"Date: {quote.created_at.strftime('%b %d, %Y %I:%M %p') if quote.created_at else ''}",
+        f"Status: {STATUS_LABELS.get(quote.status, quote.status)}",
+    ]
+
+    party_lines = [quote.customer_name or "Walk-in"]
+    if quote.customer:
+        if quote.customer.tin:
+            party_lines.append(f"TIN {quote.customer.tin}")
+        if quote.customer.address:
+            party_lines.append(quote.customer.address)
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm, leftMargin=18 * mm, rightMargin=18 * mm)
+    styles = getSampleStyleSheet()
+    elements = letterhead(biz, "Sales Quotation", doc_meta, "Customer", party_lines)
+
+    table_data = [["Item", "Qty", "Unit Price", "Discount", "Amount"]]
+    for ln in quote.lines:
+        table_data.append([
+            ln.product_name,
+            f"{float(ln.qty):g} {ln.unit_name or ''}".strip(),
+            f"{ln.unit_price:,.2f}",
+            f"{ln.discount:,.2f}" if ln.discount else "-",
+            f"{ln.line_total:,.2f}",
+        ])
+    table = Table(table_data, colWidths=[190, 90, 80, 70, 90], repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F6FEB")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    elements.append(table)
+    elements.append(Spacer(1, 14))
+
+    totals_style = styles["Normal"]
+    elements.append(Paragraph(f"Subtotal: {quote.subtotal:,.2f}", totals_style))
+    if quote.discount_total and quote.discount_total > 0:
+        elements.append(Paragraph(f"Discount: -{quote.discount_total:,.2f}", totals_style))
+    if quote.vat_amount and quote.vat_amount != 0:
+        elements.append(Paragraph(f"VAT (12%, included): {quote.vat_amount:,.2f}", totals_style))
+    elements.append(Spacer(1, 4))
+    elements.append(Paragraph(f"<b>TOTAL: {quote.total:,.2f}</b>", styles["Heading3"]))
+
+    doc.build(elements)
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{quote.quote_no}.pdf"'},
     )
 
 

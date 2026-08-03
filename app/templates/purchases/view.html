@@ -12,6 +12,7 @@
   </div>
   <div class="head-actions">
     <a class="btn-secondary" href="/purchases">← Back</a>
+    <a class="btn-secondary" href="/purchases/{{ purchase.id }}/pdf">⬇ Download PDF</a>
     {% if purchase.txn_type == 'receive' and purchase.status == 'paid' %}
     <a class="btn-secondary" href="/purchases/new?return_against={{ purchase.id }}">↩ Return to supplier</a>
     {% endif %}

@@ -10,7 +10,11 @@
       {% if customer.address %} · {{ customer.address }}{% endif %}
     </p>
   </div>
-  <a class="btn-secondary" href="/customers">← Back to Customers</a>
+  <div class="head-actions">
+    <a class="btn-secondary" href="/customers/{{ customer.id }}/history/export.xlsx">⬇ Export Excel</a>
+    <a class="btn-secondary" href="/customers/{{ customer.id }}/history/export.pdf">⬇ Export PDF</a>
+    <a class="btn-secondary" href="/customers">← Back to Customers</a>
+  </div>
 </div>
 
 <div class="stat-row">
@@ -46,7 +50,10 @@
           <span class="txn" style="background:#dcfce7;color:#15803d;">Paid</span>
           {% endif %}
         </td>
-        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=customer&cust={{ customer.id }}">Receipt</a></td>
+        <td class="row-actions">
+          <a class="btn-link" href="/pos/receipt/{{ s.id }}?from=customer&cust={{ customer.id }}">Receipt</a>
+          <a class="btn-link" href="/pos/receipt/{{ s.id }}/pdf">PDF</a>
+        </td>
       </tr>
       {% else %}
       <tr><td colspan="7" class="empty">No purchases recorded for this customer yet.</td></tr>

@@ -11,11 +11,11 @@ from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, Request, status as http_status
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import audit, models, pricing
+from . import audit, models, pricing, settings_store
 from .database import get_db
 from .deps import get_current_user, is_staff
 from .products import _get_or_create_category, _get_or_create_unit_type
@@ -609,22 +609,20 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
         total += line_total
 
         base_qty = qty * factor
+        pmult = product.purchase_multiplier or Decimal("1")
+        stock_qty = base_qty * pmult
         old_cost = Decimal(str(product.cost_price or 0))
         new_cost = old_cost
 
         if txn_type == "return":
-            # Goods going back to the supplier: take them out of stock, leave cost alone.
-            product.stock_qty = (product.stock_qty or Decimal("0")) - base_qty
-            db.add(models.StockMovement(product_id=product.id, qty_base=-base_qty, reason="purchase-return"))
+            product.stock_qty = (product.stock_qty or Decimal("0")) - stock_qty
+            db.add(models.StockMovement(product_id=product.id, qty_base=-stock_qty, reason="purchase-return"))
         else:
-            # Receiving: blend into the weighted-average cost BEFORE stock_qty
-            # moves — the blend needs the pre-receipt quantity as its weight —
-            # then add the stock, immediately (no separate confirm step).
             if unit_cost > 0:
-                new_cost = _weighted_avg_cost(product, base_qty, unit_cost / factor)
+                new_cost = _weighted_avg_cost(product, stock_qty, unit_cost / factor / pmult)
                 product.cost_price = new_cost
-            product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
-            db.add(models.StockMovement(product_id=product.id, qty_base=base_qty, reason="purchase"))
+            product.stock_qty = (product.stock_qty or Decimal("0")) + stock_qty
+            db.add(models.StockMovement(product_id=product.id, qty_base=stock_qty, reason="purchase"))
 
         purchase.lines.append(models.PurchaseLine(
             product_id=product.id,
@@ -767,8 +765,9 @@ def cancel_purchase(purchase_id: int, request: Request, db: Session = Depends(ge
         if not product:
             continue
         base_qty = (line.qty or Decimal("0")) * (line.unit_factor or Decimal("1"))
-        # Undo whichever direction this line originally moved stock.
-        delta = -base_qty if purchase.txn_type == "receive" else base_qty
+        pmult = product.purchase_multiplier or Decimal("1")
+        stock_qty = base_qty * pmult
+        delta = -stock_qty if purchase.txn_type == "receive" else stock_qty
         product.stock_qty = (product.stock_qty or Decimal("0")) + delta
         db.add(models.StockMovement(product_id=product.id, qty_base=delta, reason="purchase-cancelled"))
 
@@ -850,4 +849,90 @@ def view_purchase(
          "settlements": settlements, "outstanding": outstanding,
          "today": date.today(), "payment_methods": PAYMENT_METHODS,
          "payment_method_labels": dict(PAYMENT_METHODS)},
+    )
+
+
+@router.get("/purchases/{purchase_id:int}/pdf")
+def purchase_pdf(purchase_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """A simple downloadable PDF of the Purchase Order — supplier, the items
+    received/returned, and the total. Matches the on-screen PO view."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    purchase = db.get(models.Purchase, purchase_id)
+    if not purchase:
+        return RedirectResponse("/purchases", status_code=302)
+
+    import io
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from .pdf_utils import letterhead
+
+    biz = settings_store.get_all(db)
+    doc_label = "Purchase Return" if purchase.txn_type == "return" else "Purchase Order"
+
+    doc_meta = [
+        f"Ref #: {purchase.ref_no}",
+        f"Date: {purchase.created_at.strftime('%b %d, %Y %I:%M %p') if purchase.created_at else ''}",
+    ]
+    if purchase.invoice_no:
+        doc_meta.append(f"Supplier Invoice: {purchase.invoice_no}")
+
+    party_lines = []
+    if purchase.supplier:
+        s = purchase.supplier
+        party_lines.append(s.name)
+        if s.contact_person:
+            party_lines.append(s.contact_person)
+        if s.mobile:
+            party_lines.append(s.mobile)
+        if s.address:
+            party_lines.append(s.address)
+        if s.tin:
+            party_lines.append(f"TIN {s.tin}")
+    else:
+        party_lines.append("-")
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm, leftMargin=18 * mm, rightMargin=18 * mm)
+    styles = getSampleStyleSheet()
+    elements = letterhead(biz, doc_label, doc_meta, "Supplier", party_lines)
+
+    table_data = [["Item", "Unit", "Qty", "Unit Cost", "Total"]]
+    for ln in purchase.lines:
+        table_data.append([
+            ln.product_name,
+            ln.unit_name or "",
+            f"{float(ln.qty):g}",
+            f"{ln.unit_cost:,.2f}",
+            f"{ln.line_total:,.2f}",
+        ])
+    table_data.append(["", "", "", "Total", f"{purchase.total:,.2f}"])
+
+    table = Table(table_data, colWidths=[170, 80, 60, 90, 90], repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F6FEB")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("LINEABOVE", (0, -1), (-1, -1), 1, colors.black),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+        ("ALIGN", (2, 0), (-1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    elements.append(table)
+    elements.append(Spacer(1, 14))
+    elements.append(Paragraph(f"<b>Total: {purchase.total:,.2f}</b>", styles["Heading3"]))
+
+    doc.build(elements)
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{purchase.ref_no}.pdf"'},
     )

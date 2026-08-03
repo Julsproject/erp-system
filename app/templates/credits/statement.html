@@ -125,6 +125,7 @@
     <a class="btn back" href="/credits">← Back</a>
     {% if out_total > 0 %}<a class="btn back" href="/credits/{{ customer.id }}/pay-full">Pay Full</a>{% endif %}
     <button class="btn print" onclick="window.print()">🖨 Print</button>
+    <a class="btn back" href="/credits/{{ customer.id }}/pdf">⬇ Download PDF</a>
   </div>
 </body>
 </html>

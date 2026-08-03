@@ -78,7 +78,10 @@
           <span class="txn" style="background:#f1f5f9;color:#64748b;">Cancelled</span>
           {% endif %}
         </td>
-        <td class="row-actions"><a class="btn-link" href="/quotations/{{ quote.id }}">View</a></td>
+        <td class="row-actions">
+          <a class="btn-link" href="/quotations/{{ quote.id }}">View</a>
+          <a class="btn-link" href="/quotations/{{ quote.id }}/pdf">PDF</a>
+        </td>
       </tr>
       {% else %}
       <tr><td colspan="6" class="empty">No quotations {{ 'match that filter' if (status_filter or q or date_from or date_to) else 'yet' }}.</td></tr>

@@ -247,6 +247,7 @@
     <a class="btn back" href="/pos/receipt/{{ sale.id }}?from={{ from }}&cust={{ cust }}&quote={{ quote }}&thermal=1">🧾 Thermal receipt</a>
     {% endif %}
     <button class="btn print" onclick="window.print()">🖨 Print</button>
+    <a class="btn back" href="/pos/receipt/{{ sale.id }}/pdf">⬇ Download PDF</a>
   </div>
 </body>
 </html>

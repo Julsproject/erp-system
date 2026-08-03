@@ -1,12 +1,16 @@
 """Customer accounts (name, TIN, address) and receivable helper."""
+import io
 from decimal import Decimal
 
+import openpyxl
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
 from fastapi import APIRouter, Depends, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from . import models
+from . import models, settings_store
 from .database import get_db
 from .deps import get_current_user, is_staff
 from .templating import templates
@@ -182,6 +186,152 @@ def customer_history(customer_id: int, request: Request, db: Session = Depends(g
             "customer": customer, "rows": rows, "count": len(rows),
             "total_spent": total_spent, "total_out": total_out,
         },
+    )
+
+
+@router.get("/customers/{customer_id:int}/history/export.xlsx")
+def export_customer_history_excel(customer_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Excel export of one customer's full transaction history — every
+    invoice/refund/exchange row exactly as shown on the history page."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    customer = db.get(models.Customer, customer_id)
+    if not customer:
+        return RedirectResponse("/customers", status_code=302)
+
+    sales = (
+        db.query(models.Sale)
+        .filter(models.Sale.customer_id == customer_id)
+        .order_by(models.Sale.id.desc())
+        .all()
+    )
+    sale_ids = [s.id for s in sales]
+    settled = {}
+    if sale_ids:
+        rows = (
+            db.query(models.ReceivableSettlement.sale_id, func.coalesce(func.sum(models.ReceivableSettlement.amount), 0))
+            .filter(models.ReceivableSettlement.sale_id.in_(sale_ids))
+            .group_by(models.ReceivableSettlement.sale_id)
+            .all()
+        )
+        settled = {sid: Decimal(amt) for sid, amt in rows}
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Purchase History"
+    headers = ["Invoice #", "Type", "Date", "Payment", "Total", "Status"]
+    ws.append(headers)
+    fill = PatternFill("solid", fgColor="1F6FEB")
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = fill
+
+    for s in sales:
+        outstanding = (s.receivable_amount or Decimal("0")) - settled.get(s.id, Decimal("0"))
+        status_label = f"Credit {outstanding:,.2f}" if outstanding > 0 else "Paid"
+        ws.append([
+            s.invoice_no,
+            s.txn_type.capitalize() if s.txn_type else "",
+            s.created_at.strftime("%Y-%m-%d %H:%M") if s.created_at else "",
+            s.payment_method or "",
+            float(s.total or 0),
+            status_label,
+        ])
+
+    widths = [14, 12, 18, 16, 14, 16]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    safe_name = "".join(c for c in customer.name if c.isalnum() or c in (" ", "_", "-")).strip() or "customer"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}_history.xlsx"'},
+    )
+
+
+@router.get("/customers/{customer_id:int}/history/export.pdf")
+def export_customer_history_pdf(customer_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """PDF version of the full Purchase History export — same rows as the
+    Excel export, letterhead-styled to match the other simple PDFs."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    customer = db.get(models.Customer, customer_id)
+    if not customer:
+        return RedirectResponse("/customers", status_code=302)
+
+    sales = (
+        db.query(models.Sale)
+        .filter(models.Sale.customer_id == customer_id)
+        .order_by(models.Sale.id.desc())
+        .all()
+    )
+    sale_ids = [s.id for s in sales]
+    settled = {}
+    if sale_ids:
+        srows = (
+            db.query(models.ReceivableSettlement.sale_id, func.coalesce(func.sum(models.ReceivableSettlement.amount), 0))
+            .filter(models.ReceivableSettlement.sale_id.in_(sale_ids))
+            .group_by(models.ReceivableSettlement.sale_id)
+            .all()
+        )
+        settled = {sid: Decimal(amt) for sid, amt in srows}
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from .pdf_utils import letterhead
+
+    biz = settings_store.get_all(db)
+    party_lines = [customer.name]
+    if customer.tin:
+        party_lines.append(f"TIN {customer.tin}")
+    if customer.address:
+        party_lines.append(customer.address)
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm, leftMargin=18 * mm, rightMargin=18 * mm)
+    styles = getSampleStyleSheet()
+    elements = letterhead(biz, "Purchase History", [f"{len(sales)} transaction(s)"], "Customer", party_lines)
+
+    table_data = [["Invoice #", "Type", "Date", "Payment", "Total", "Status"]]
+    for s in sales:
+        outstanding = (s.receivable_amount or Decimal("0")) - settled.get(s.id, Decimal("0"))
+        status_label = f"Credit {outstanding:,.2f}" if outstanding > 0 else "Paid"
+        table_data.append([
+            s.invoice_no,
+            s.txn_type.capitalize() if s.txn_type else "",
+            s.created_at.strftime("%b %d, %Y") if s.created_at else "-",
+            s.payment_method or "-",
+            f"{s.total or 0:,.2f}",
+            status_label,
+        ])
+
+    table = Table(table_data, colWidths=[65, 65, 80, 100, 70, 90], repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F6FEB")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+        ("ALIGN", (4, 0), (-1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    elements.append(table)
+
+    doc.build(elements)
+    buf.seek(0)
+    safe_name = "".join(c for c in customer.name if c.isalnum() or c in (" ", "_", "-")).strip() or "customer"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}_history.pdf"'},
     )
 
 

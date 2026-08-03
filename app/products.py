@@ -363,6 +363,73 @@ def list_products(
     )
 
 
+@router.get("/products/export.xlsx")
+def export_products_excel(
+    q: str = "",
+    alert: int = 0,
+    category_id: int = 0,
+    subcategory_id: int = 0,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Excel export of Inventory — respects whatever filter/search/category
+    pill is active on screen, same as the list page itself."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+
+    q = (q or "").strip()
+    query = db.query(models.Product).filter(models.Product.is_active.is_(True))
+    if q:
+        query = query.filter(models.Product.name.ilike(f"%{q}%") | (models.Product.barcode == q))
+    if alert:
+        query = query.filter(models.Product.cost_price > 0, models.Product.selling_price <= models.Product.cost_price)
+    if category_id:
+        query = query.filter(models.Product.category_id == category_id)
+    if subcategory_id:
+        query = query.filter(models.Product.subcategory_id == subcategory_id)
+    products = query.order_by(models.Product.name).all()
+
+    is_admin_user = is_staff(user)
+    headers = ["Product Name", "Barcode", "Category", "Sub Category", "Unit Type", "Cost of Sales"]
+    if is_admin_user:
+        headers.append("Selling Price")
+    headers += ["Actual Beginning", "Stocks Qty", "Total Qty"]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Inventory"
+    ws.append(headers)
+    fill = PatternFill("solid", fgColor="1F6FEB")
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = fill
+
+    for p in products:
+        row = [
+            p.name, p.barcode or "", p.category.name if p.category else "",
+            p.subcategory.name if p.subcategory else "", p.unit_type.name if p.unit_type else "",
+            float(p.cost_price or 0),
+        ]
+        if is_admin_user:
+            row.append(float(p.selling_price or 0))
+        row += [float(p.beginning_stock or 0), float(p.stock_qty or 0), float(p.total_qty or 0)]
+        ws.append(row)
+
+    widths = [28, 16, 16, 16, 14, 14, 14, 14, 14, 14]
+    for i, w in enumerate(widths[: len(headers)], start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="inventory.xlsx"'},
+    )
+
+
 def _render_form(request, db, user, product=None, error=None):
     categories = db.query(models.Category).order_by(models.Category.name).all()
     subcategories = db.query(models.SubCategory).order_by(models.SubCategory.name).all()
@@ -420,6 +487,8 @@ def _save_from_form(product: models.Product, db: Session, form):
     product.beginning_stock = _to_decimal(form.get("beginning_stock"))
     product.stock_qty = _to_decimal(form.get("stock_qty"))
     product.reorder_level = _to_decimal(form.get("reorder_level"))
+    mult = _to_decimal(form.get("purchase_multiplier"), "1")
+    product.purchase_multiplier = mult if mult > 0 else Decimal("1")
     product.is_vat = bool(form.get("is_vat"))
 
     # Units ladder (extra sellable units). Parallel arrays from the form.

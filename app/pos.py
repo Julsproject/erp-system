@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from . import models
+from . import models, settings_store
 from .customers import get_or_create_customer
 from .database import get_db
 from .deps import get_current_user
@@ -796,4 +796,76 @@ def pos_receipt(
         {"request": request, "app_name": request.app.title, "user": user,
          "sale": sale, "from": from_, "cust": cust, "quote": quote, "thermal": thermal,
          "linked": linked, "original": original, "credit_outstanding": credit_outstanding},
+    )
+
+
+@router.get("/pos/receipt/{sale_id:int}/pdf")
+def pos_receipt_pdf(sale_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """A simple downloadable PDF version of the receipt — invoice header,
+    the items bought, and the total. No frills, matches what's on screen."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    sale = db.get(models.Sale, sale_id)
+    if not sale:
+        return RedirectResponse("/pos", status_code=302)
+
+    import io
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from fastapi.responses import Response as FileResponse
+    from .pdf_utils import letterhead
+
+    biz = settings_store.get_all(db)
+    doc_label = "Refund Slip" if sale.txn_type == "refund" else ("Exchange Slip" if sale.txn_type == "exchange" else "Sales Invoice")
+
+    doc_meta = [
+        f"Invoice #: {sale.invoice_no}",
+        f"Date: {sale.created_at.strftime('%b %d, %Y %I:%M %p') if sale.created_at else ''}",
+    ]
+    if sale.cashier:
+        doc_meta.append(f"Cashier: {sale.cashier.full_name or sale.cashier.username}")
+
+    party_lines = [sale.customer_name or "Walk-in"]
+    if sale.customer:
+        if sale.customer.tin:
+            party_lines.append(f"TIN {sale.customer.tin}")
+        if sale.customer.address:
+            party_lines.append(sale.customer.address)
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm, leftMargin=18 * mm, rightMargin=18 * mm)
+    styles = getSampleStyleSheet()
+    elements = letterhead(biz, doc_label, doc_meta, "Customer", party_lines)
+
+    table_data = [["Item", "Qty", "Unit Price", "Amount"]]
+    for l in sale.lines:
+        table_data.append([
+            l.product_name,
+            f"{l.qty} {l.unit_name or ''}".strip(),
+            f"{l.unit_price:,.2f}",
+            f"{l.line_total:,.2f}",
+        ])
+    table = Table(table_data, colWidths=[220, 90, 90, 90])
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F6FEB")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    elements.append(table)
+    elements.append(Spacer(1, 14))
+    elements.append(Paragraph(f"<b>TOTAL: {sale.total:,.2f}</b>", styles["Heading3"]))
+
+    doc.build(elements)
+    buf.seek(0)
+    return FileResponse(
+        content=buf.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="receipt_{sale.invoice_no}.pdf"'},
     )

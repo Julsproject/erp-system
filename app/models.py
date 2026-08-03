@@ -105,6 +105,8 @@ class Product(Base):
     margin_pct = Column(Numeric(6, 2), nullable=False, server_default="0")
     margin_price = Column(Numeric(12, 2), nullable=False, server_default="0")
 
+    purchase_multiplier = Column(Numeric(10, 3), nullable=False, server_default="1")
+
     is_vat = Column(Boolean, nullable=False, server_default="false")  # VAT toggle per product
     is_active = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
