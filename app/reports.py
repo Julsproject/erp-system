@@ -343,6 +343,142 @@ def export_sales_by_product(
     )
 
 
+def _sales_by_unit(db: Session, period_start: date, period_end: date):
+    """Which selling unit actually moves for each product — e.g. is GRAVEL
+    going out as whole FORWARD loads or mostly as Elf 1/4?
+
+    Grouped by product + unit name. `base_qty` restates every unit in the
+    product's base unit so volumes are comparable across rows (2 FORWARD and
+    12 Elf are not the same amount of gravel); `share` is that row's cut of
+    its own product's revenue, which is what makes one unit "the best seller".
+    Sale lines only, same gross-demand basis as _sales_by_product.
+    """
+    rows = (
+        db.query(
+            models.SaleLine.product_name,
+            models.SaleLine.unit_name,
+            func.coalesce(func.sum(models.SaleLine.qty), 0).label("qty"),
+            func.coalesce(func.sum(models.SaleLine.qty * models.SaleLine.unit_factor), 0).label("base_qty"),
+            func.coalesce(func.sum(models.SaleLine.line_total), 0).label("revenue"),
+            func.count(models.SaleLine.id).label("times"),
+        )
+        .join(models.Sale, models.SaleLine.sale_id == models.Sale.id)
+        .filter(
+            models.Sale.txn_type == "sale",
+            models.SaleLine.qty > 0,
+            _local_date(models.Sale.created_at).between(period_start, period_end),
+        )
+        .group_by(models.SaleLine.product_name, models.SaleLine.unit_name)
+        .all()
+    )
+
+    by_product = {}
+    for r in rows:
+        by_product.setdefault(r.product_name, []).append({
+            "unit": r.unit_name or "—",
+            "qty": Decimal(str(r.qty or 0)),
+            "base_qty": Decimal(str(r.base_qty or 0)),
+            "revenue": Decimal(str(r.revenue or 0)),
+            "times": int(r.times or 0),
+        })
+
+    groups = []
+    for name, units in by_product.items():
+        total_rev = sum((u["revenue"] for u in units), ZERO)
+        for u in units:
+            u["share"] = float(u["revenue"] / total_rev * 100) if total_rev > 0 else 0.0
+        units.sort(key=lambda u: u["revenue"], reverse=True)
+        for i, u in enumerate(units):
+            u["is_top"] = i == 0 and u["revenue"] > 0
+        groups.append({
+            "name": name,
+            "units": units,
+            "revenue": total_rev,
+            "base_qty": sum((u["base_qty"] for u in units), ZERO),
+            "times": sum(u["times"] for u in units),
+        })
+    groups.sort(key=lambda g: g["revenue"], reverse=True)
+    return groups
+
+
+@router.get("/reports/sales-by-unit", response_class=HTMLResponse)
+def sales_by_unit(
+    request: Request,
+    days: int = 30,
+    date_from: str = "",
+    date_to: str = "",
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    period_start, period_end, custom = _resolve_period(days, date_from, date_to)
+    groups = _sales_by_unit(db, period_start, period_end)
+    today = _today()
+    return templates.TemplateResponse(
+        "reports/sales_by_unit.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "days": days, "date_from": date_from, "date_to": date_to,
+            "period_start": period_start, "period_end": period_end, "custom": custom,
+            "groups": groups,
+            "today": today,
+            "month_start": today.replace(day=1),
+            "this_month": custom and date_from == today.replace(day=1).isoformat() and date_to == today.isoformat(),
+        },
+    )
+
+
+@router.get("/reports/sales-by-unit/export")
+def export_sales_by_unit(
+    days: int = 30,
+    date_from: str = "",
+    date_to: str = "",
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    period_start, period_end, _ = _resolve_period(days, date_from, date_to)
+    groups = _sales_by_unit(db, period_start, period_end)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sales by Unit"
+    ws.append(["Product", "Sold As", "Qty Sold", "In Base Units", "Times Sold", "Revenue", "% of Product", "Best Seller"])
+    header_fill = PatternFill("solid", fgColor="1F6FEB")
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+    for g in groups:
+        for u in g["units"]:
+            ws.append([
+                g["name"], u["unit"], float(u["qty"]), float(u["base_qty"]),
+                u["times"], float(u["revenue"]), round(u["share"], 1),
+                "Yes" if u["is_top"] else "",
+            ])
+    widths = [28, 16, 12, 16, 12, 16, 14, 12]
+    for i, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"sales_by_unit_{period_start.isoformat()}_{period_end.isoformat()}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 def _low_margin_rows(db: Session, threshold: float):
     """Same rule as the 'thin margin' Notification: profitable products
     (selling above cost) whose true margin still falls under the shop's

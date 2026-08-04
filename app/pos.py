@@ -265,6 +265,12 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
         subtotal += line_total
 
         base_qty = qty * factor
+        available = product.total_qty
+        if base_qty > available:
+            return False, (
+                f"Not enough stock for {product.name}. "
+                f"Available: {float(available):g}, needed: {float(base_qty):g}."
+            )
         _deduct_stock(product, base_qty)
         db.add(models.StockMovement(product_id=product.id, qty_base=-base_qty, reason="sale"))
 
@@ -631,8 +637,18 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
         new_total += lt
         product = db.get(models.Product, int(ln["product_id"])) if ln.get("product_id") else None
         if product:
-            _deduct_stock(product, qty * factor)
-            db.add(models.StockMovement(product_id=product.id, qty_base=-(qty * factor), reason="exchange-sale"))
+            base_qty = qty * factor
+            available = product.total_qty
+            if base_qty > available:
+                return JSONResponse({
+                    "ok": False,
+                    "error": (
+                        f"Not enough stock for {product.name}. "
+                        f"Available: {float(available):g}, needed: {float(base_qty):g}."
+                    ),
+                }, status_code=400)
+            _deduct_stock(product, base_qty)
+            db.add(models.StockMovement(product_id=product.id, qty_base=-base_qty, reason="exchange-sale"))
         ex.lines.append(models.SaleLine(
             product_id=product.id if product else None, product_name=ln.get("name") or "Item",
             unit_name=ln.get("unit_name"), unit_factor=factor, qty=qty, unit_price=unit_price,

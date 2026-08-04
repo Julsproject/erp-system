@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Sales by Unit · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Sales by Unit</h1>
+    <p class="muted">{{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }} · which selling unit actually moves for each product</p>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;">
+    <div class="seg">
+      <a class="seg-btn {{ 'active' if days == 7 and not custom }}" href="/reports/sales-by-unit?days=7">7 days</a>
+      <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="/reports/sales-by-unit?days=30">30 days</a>
+      <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="/reports/sales-by-unit?days=90">90 days</a>
+      <a class="seg-btn {{ 'active' if this_month }}" href="/reports/sales-by-unit?date_from={{ month_start.isoformat() }}&date_to={{ today.isoformat() }}">This Month</a>
+    </div>
+    <details class="filter-drop filter-drop-right" {{ 'open' if custom and not this_month }}>
+      <summary>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M3 9.5h18M8 3v3M16 3v3"/></svg>
+        {% if custom %}{{ period_start.strftime('%b %d') }} – {{ period_end.strftime('%b %d, %Y') }}{% else %}Custom range{% endif %}
+      </summary>
+      <div class="filter-panel">
+        <form method="get" action="/reports/sales-by-unit">
+          <div class="field-row">
+            <div class="field"><label>From</label><input type="date" name="date_from" value="{{ date_from }}"></div>
+            <div class="field"><label>To</label><input type="date" name="date_to" value="{{ date_to }}"></div>
+          </div>
+          <div class="actions">
+            <a class="btn-link" href="/reports/sales-by-unit?days=30">Clear</a>
+            <button class="btn" type="submit">Apply</button>
+          </div>
+        </form>
+      </div>
+    </details>
+    <a class="btn-secondary" href="/reports/sales-by-unit/export?{{ 'date_from=' ~ date_from ~ '&date_to=' ~ date_to if custom else 'days=' ~ days }}">⬇ Download Excel</a>
+  </div>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ groups|length }}</span><span>Products sold</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ groups|sum(attribute='times') }}</span><span>Line items</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ (groups|sum(attribute='revenue'))|peso }}</span><span>Revenue</span></div>
+</div>
+
+<p class="muted" style="margin:-6px 0 16px;">
+  <strong>In Base Units</strong> restates every row in the product's own base unit, so 2 FORWARD and 12 Elf
+  can be compared as the same kind of volume. <strong>%</strong> is that unit's share of its own product's revenue —
+  the highest one is tagged <span class="warn-tag" style="background:#dcfce7;color:#15803d;">top seller</span>.
+</p>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Product</th>
+        <th>Sold As</th>
+        <th class="num">Qty Sold</th>
+        <th class="num">In Base Units</th>
+        <th class="num">Times Sold</th>
+        <th class="num">Revenue</th>
+        <th class="num">% of Product</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for g in groups %}
+      {% for u in g.units %}
+      <tr>
+        <td class="strong">{% if loop.first %}{{ g.name }}{% endif %}</td>
+        <td>
+          {{ u.unit }}
+          {% if u.is_top and g.units|length > 1 %}
+          <span class="warn-tag" style="background:#dcfce7;color:#15803d;" title="Biggest share of this product's revenue">top seller</span>
+          {% endif %}
+        </td>
+        <td class="num">{{ u.qty|qty }}</td>
+        <td class="num muted">{{ u.base_qty|qty }}</td>
+        <td class="num">{{ u.times }}</td>
+        <td class="num strong">{{ u.revenue|peso }}</td>
+        <td class="num">{{ '%.1f'|format(u.share) }}%</td>
+      </tr>
+      {% endfor %}
+      {% if g.units|length > 1 %}
+      <tr class="container-row">
+        <td></td>
+        <td class="container-line muted">All units</td>
+        <td class="num muted">—</td>
+        <td class="num muted">{{ g.base_qty|qty }}</td>
+        <td class="num muted">{{ g.times }}</td>
+        <td class="num strong">{{ g.revenue|peso }}</td>
+        <td class="num muted">100.0%</td>
+      </tr>
+      {% endif %}
+      {% else %}
+      <tr><td colspan="7" class="empty">No sales in this period.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

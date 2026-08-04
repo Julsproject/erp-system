@@ -215,7 +215,52 @@ class ProductUnit(Base):
     price = Column(Numeric(12, 2), nullable=False, server_default="0")
     sort_order = Column(Integer, nullable=False, server_default="0")
 
+    # Optional chain link: this unit's factor can be entered relative to
+    # another unit in the same ladder (e.g. "1 Elf Load = 6 Sack") instead of
+    # only relative to base. factor_to_base above always stays the resolved,
+    # base-relative value — every other reader in the app (POS, purchases,
+    # sales, receipts) only ever needs that one number and never has to know
+    # a chain exists. relative_to_unit_id/relative_factor exist purely so the
+    # product form can redisplay what the user actually typed on next edit.
+    relative_to_unit_id = Column(Integer, ForeignKey("product_units.id"), nullable=True)
+    relative_factor = Column(Numeric(14, 4), nullable=True)
+
     product = relationship("Product", back_populates="units")
+    relative_to_unit = relationship("ProductUnit", remote_side=[id], foreign_keys=[relative_to_unit_id])
+
+    @property
+    def stock_as_this_unit(self):
+        """The product's on-hand expressed in THIS unit — "how many Elf can I
+        still make out of what's in the yard". Stock itself is only ever stored
+        in base units; this is a read-only view of the same number, so it can
+        never drift. Rounded to 3 dp because a factor like 8.6 divides into a
+        long repeating decimal. None when the factor is unusable (0/blank)."""
+        f = Decimal(str(self.factor_to_base or 0))
+        if f <= 0:
+            return None
+        p = self.product
+        if p is None:
+            return None
+
+        def per(value):
+            return (Decimal(str(value or 0)) / f).quantize(Decimal("0.001"))
+
+        return {
+            "beginning": per(p.beginning_stock),
+            "stock": per(p.stock_qty),
+            "total": per(p.total_qty),
+        }
+
+    @property
+    def cost_as_this_unit(self):
+        """Cost of one of this unit (base cost × factor), or None if not costed."""
+        f = Decimal(str(self.factor_to_base or 0))
+        if f <= 0 or self.product is None:
+            return None
+        cost = Decimal(str(self.product.cost_price or 0))
+        if cost <= 0:
+            return None
+        return (cost * f).quantize(Decimal("0.01"))
 
 
 class Sale(Base):

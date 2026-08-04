@@ -492,11 +492,16 @@ def _save_from_form(product: models.Product, db: Session, form):
     product.is_vat = bool(form.get("is_vat"))
 
     # Units ladder (extra sellable units). Parallel arrays from the form.
+    # Each row's factor can be typed relative to another unit already on the
+    # ladder (e.g. "1 Elf Load = 6 Sack") instead of only relative to base —
+    # see _resolve_unit_chain for how that gets flattened into factor_to_base.
     names = form.getlist("unit_name")
     factors = form.getlist("unit_factor")
     prices = form.getlist("unit_price")
+    relative_tos = form.getlist("unit_relative_to")
     product.units.clear()
-    order = 0
+
+    rows = []
     for i, nm in enumerate(names):
         nm = (nm or "").strip()
         if not nm:
@@ -505,10 +510,56 @@ def _save_from_form(product: models.Product, db: Session, form):
         if fac <= 0:
             fac = Decimal("1")
         pr = _to_decimal(prices[i] if i < len(prices) else "0")
-        product.units.append(
-            models.ProductUnit(name=nm, factor_to_base=fac, price=pr, sort_order=order)
+        rel_to = (relative_tos[i] if i < len(relative_tos) else "").strip()
+        base_name = product.unit_type.name if product.unit_type else None
+        if rel_to and base_name and rel_to.lower() == base_name.lower():
+            rel_to = ""  # typing the base unit's own name just means "relative to base"
+        rows.append({"name": nm, "relative_factor": fac, "price": pr, "relative_to": rel_to or None})
+
+    resolved = _resolve_unit_chain(rows)
+
+    order = 0
+    name_to_unit = {}
+    for r in rows:
+        pu = models.ProductUnit(
+            name=r["name"], price=r["price"], sort_order=order,
+            factor_to_base=resolved[r["name"]], relative_factor=r["relative_factor"],
         )
+        product.units.append(pu)
+        name_to_unit[r["name"]] = pu
         order += 1
+    db.flush()  # assign ids so relative_to_unit_id below can point at them
+    for r in rows:
+        if r["relative_to"] and r["relative_to"] in name_to_unit:
+            name_to_unit[r["name"]].relative_to_unit_id = name_to_unit[r["relative_to"]].id
+
+
+def _resolve_unit_chain(rows: list) -> dict:
+    """rows: [{name, relative_factor, relative_to}]. Returns {name: factor_to_base},
+    flattening any chain (A relative to B relative to base) into a single
+    base-relative number via memoized recursion. Falls back to treating a row
+    as base-relative if its parent is missing or a cycle is detected, so a
+    typo in "relative to" never breaks saving."""
+    by_name = {r["name"]: r for r in rows}
+    resolved = {}
+
+    def resolve(name, visiting):
+        if name in resolved:
+            return resolved[name]
+        row = by_name.get(name)
+        if not row:
+            return Decimal("1")
+        rel_to = row["relative_to"]
+        if not rel_to or rel_to == name or rel_to in visiting:
+            value = row["relative_factor"]
+        else:
+            value = row["relative_factor"] * resolve(rel_to, visiting | {name})
+        resolved[name] = value
+        return value
+
+    for r in rows:
+        resolve(r["name"], set())
+    return resolved
 
 
 @router.post("/products")
@@ -522,8 +573,8 @@ async def create_product(request: Request, db: Session = Depends(get_db), user=D
     if barcode and db.query(models.Product).filter(models.Product.barcode == barcode).first():
         return _render_form(request, db, user, product=None, error=f"Barcode “{barcode}” is already assigned to another product.")
     product = models.Product()
+    db.add(product)  # add before _save_from_form so its internal flush (for the units-ladder chain) can assign ids
     _save_from_form(product, db, form)
-    db.add(product)
     db.flush()  # assign product.id so the audit row can reference it
     audit.record(
         db, user=user, request=request, action="create", entity_type="product",
