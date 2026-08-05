@@ -105,8 +105,6 @@ class Product(Base):
     margin_pct = Column(Numeric(6, 2), nullable=False, server_default="0")
     margin_price = Column(Numeric(12, 2), nullable=False, server_default="0")
 
-    purchase_multiplier = Column(Numeric(10, 3), nullable=False, server_default="1")
-
     is_vat = Column(Boolean, nullable=False, server_default="false")  # VAT toggle per product
     is_active = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -635,6 +633,13 @@ class StockCountLine(Base):
     # overwrite of whatever stock_qty happens to be at Complete time.
     system_qty = Column(Numeric(14, 3), nullable=False)
     counted_qty = Column(Numeric(14, 3), nullable=False, server_default="0")
+    # Optional per-unit breakdown of how counted_qty was arrived at — e.g.
+    # {"FORWARD": "2", "Elf": "3", "Elf 1/2": "1"} for a product with a units
+    # ladder, so staff can count physical containers instead of doing the
+    # base-unit math themselves. JSON text (same convention as audit_log);
+    # counted_qty is always the resolved total and stays the one number
+    # variance/completion logic reads — this is purely for redisplay.
+    unit_breakdown = Column(Text, nullable=True)
     first_scanned_at = Column(DateTime(timezone=True), server_default=func.now())
 
     stock_count = relationship("StockCount", back_populates="lines")

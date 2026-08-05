@@ -33,7 +33,7 @@
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>When</th><th>Movement</th><th>Reference</th><th class="num">In</th><th class="num">Out</th><th class="num">Balance</th></tr>
+      <tr><th>When</th><th>Movement</th><th>Reference</th><th class="num">In</th><th class="num">Out</th><th class="num">Balance</th><th class="num">Unit Cost</th><th class="num">Value</th></tr>
     </thead>
     <tbody>
       {% for r in rows %}
@@ -46,14 +46,17 @@
         <td class="num" style="color:var(--ok);font-weight:600;">{{ ('+' ~ r.in_qty|qty) if r.in_qty else '' }}</td>
         <td class="num" style="color:var(--danger);font-weight:600;">{{ ('−' ~ r.out_qty|qty) if r.out_qty else '' }}</td>
         <td class="num strong">{{ r.balance|qty }}</td>
+        <td class="num muted">{{ m.unit_cost|peso if m.unit_cost else '—' }}</td>
+        <td class="num {{ 'owed' if m.value and m.value < 0 }}">{{ m.value|peso if m.value is not none else '—' }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="empty">No stock movements recorded yet for this product.</td></tr>
+      <tr><td colspan="8" class="empty">No stock movements recorded yet for this product.</td></tr>
       {% endfor %}
       {% if rows %}
       <tr style="background:var(--surface-2);">
         <td class="muted" colspan="5" style="font-style:italic;">Opening balance (implied — before the earliest movement)</td>
         <td class="num strong">{{ opening|qty }}</td>
+        <td colspan="2"></td>
       </tr>
       {% endif %}
     </tbody>

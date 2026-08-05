@@ -8,6 +8,7 @@ line snapshots system_qty the moment it's first scanned, and Complete
 applies (counted - system_qty) as a signed stock movement, so it's still
 correct even if sales happen elsewhere on the system while counting.
 """
+import json
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
@@ -59,6 +60,17 @@ def _find_products(db: Session, q: str):
 
 def _line_dict(line: models.StockCountLine) -> dict:
     variance = Decimal(str(line.counted_qty or 0)) - Decimal(str(line.system_qty or 0))
+    try:
+        breakdown = json.loads(line.unit_breakdown) if line.unit_breakdown else {}
+    except (ValueError, TypeError):
+        breakdown = {}
+    product = line.product
+    units = []
+    if product:
+        base_name = product.unit_type.name if product.unit_type else "unit"
+        units.append({"name": base_name, "factor": 1.0, "qty": breakdown.get(base_name, "")})
+        for u in product.units:
+            units.append({"name": u.name, "factor": float(u.factor_to_base), "qty": breakdown.get(u.name, "")})
     return {
         "id": line.id,
         "product_id": line.product_id,
@@ -66,6 +78,7 @@ def _line_dict(line: models.StockCountLine) -> dict:
         "system_qty": float(line.system_qty or 0),
         "counted_qty": float(line.counted_qty or 0),
         "variance": float(variance),
+        "units": units if len(units) > 1 else [],  # only worth showing when there's an actual ladder
     }
 
 
@@ -115,13 +128,14 @@ def stock_count_view(count_id: int, request: Request, db: Session = Depends(get_
     count = db.get(models.StockCount, count_id)
     if not count:
         return RedirectResponse("/stock-count", status_code=302)
-    lines = (
+    line_rows = (
         db.query(models.StockCountLine)
         .filter(models.StockCountLine.stock_count_id == count.id)
         .order_by(models.StockCountLine.product_name)
         .all()
     )
-    variance_count = sum(1 for l in lines if (l.counted_qty or 0) != (l.system_qty or 0))
+    lines = [_line_dict(l) for l in line_rows]
+    variance_count = sum(1 for l in lines if l["counted_qty"] != l["system_qty"])
     return templates.TemplateResponse(
         "stock_count/session.html",
         {"request": request, "app_name": request.app.title, "user": user,
@@ -193,6 +207,53 @@ async def stock_count_set_line(count_id: int, line_id: int, request: Request, db
     if new_qty < 0:
         return JSONResponse({"ok": False, "error": "Quantity can't be negative."}, status_code=400)
     line.counted_qty = new_qty
+    line.unit_breakdown = None  # a plain-number edit overrides any per-unit breakdown
+    db.commit()
+    return {"ok": True, "line": _line_dict(line)}
+
+
+@router.post("/stock-count/{count_id:int}/line/{line_id:int}/set-units")
+async def stock_count_set_line_units(count_id: int, line_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Per-unit count entry — e.g. '2 FORWARD, 3 Elf, 1 Elf 1/2 physically on
+    the shelf' — resolved into the one counted_qty (base units) everything
+    else reads, so this is purely a friendlier way to arrive at that number."""
+    if not user or not is_staff(user):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    count = db.get(models.StockCount, count_id)
+    if not count or count.status != "open":
+        return JSONResponse({"ok": False, "error": "This count isn't open anymore."}, status_code=400)
+    line = db.get(models.StockCountLine, line_id)
+    if not line or line.stock_count_id != count.id:
+        return JSONResponse({"ok": False, "error": "Line not found."}, status_code=404)
+    product = line.product
+    if not product:
+        return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
+
+    data = await request.json()
+    raw = data.get("units") or {}
+    if not isinstance(raw, dict):
+        return JSONResponse({"ok": False, "error": "Invalid data."}, status_code=400)
+
+    base_name = product.unit_type.name if product.unit_type else "unit"
+    factor_by_name = {base_name: Decimal("1")}
+    for u in product.units:
+        factor_by_name[u.name] = Decimal(str(u.factor_to_base or 0))
+
+    total = Decimal("0")
+    breakdown = {}
+    for name, val in raw.items():
+        if name not in factor_by_name:
+            continue
+        qty = _dec(val, "0")
+        if qty < 0:
+            return JSONResponse({"ok": False, "error": f"Quantity for {name} can't be negative."}, status_code=400)
+        if qty == 0 and str(val).strip() == "":
+            continue  # skip untouched fields entirely, don't record a stray "0"
+        breakdown[name] = str(val).strip()
+        total += qty * factor_by_name[name]
+
+    line.counted_qty = total
+    line.unit_breakdown = json.dumps(breakdown) if breakdown else None
     db.commit()
     return {"ok": True, "line": _line_dict(line)}
 
@@ -213,7 +274,7 @@ def stock_count_complete(count_id: int, request: Request, reason: str = Form("co
         variance = Decimal(str(line.counted_qty or 0)) - Decimal(str(line.system_qty or 0))
         if variance == 0:
             continue
-        product = db.get(models.Product, line.product_id)
+        product = db.get(models.Product, line.product_id, with_for_update=True)
         if not product:
             continue
         before_qty = Decimal(str(product.stock_qty or 0))

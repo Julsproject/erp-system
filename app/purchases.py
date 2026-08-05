@@ -556,7 +556,8 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
 
     total = Decimal("0")
     for ln in lines:
-        product = db.get(models.Product, int(ln["product_id"])) if ln.get("product_id") else None
+        # Row-level lock — see the matching comment in pos.py's _finalize_sale.
+        product = db.get(models.Product, int(ln["product_id"]), with_for_update=True) if ln.get("product_id") else None
         if not product and txn_type == "receive":
             # Product Name typed in the purchase row didn't match anything —
             # create it right here from what was typed, so receiving doesn't
@@ -609,20 +610,24 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
         total += line_total
 
         base_qty = qty * factor
-        pmult = product.purchase_multiplier or Decimal("1")
-        stock_qty = base_qty * pmult
         old_cost = Decimal(str(product.cost_price or 0))
         new_cost = old_cost
 
         if txn_type == "return":
-            product.stock_qty = (product.stock_qty or Decimal("0")) - stock_qty
-            db.add(models.StockMovement(product_id=product.id, qty_base=-stock_qty, reason="purchase-return"))
+            product.stock_qty = (product.stock_qty or Decimal("0")) - base_qty
+            db.add(models.StockMovement(
+                product_id=product.id, qty_base=-base_qty, reason="purchase-return",
+                unit_cost=old_cost, value=-base_qty * old_cost,
+            ))
         else:
             if unit_cost > 0:
-                new_cost = _weighted_avg_cost(product, stock_qty, unit_cost / factor / pmult)
+                new_cost = _weighted_avg_cost(product, base_qty, unit_cost / factor)
                 product.cost_price = new_cost
-            product.stock_qty = (product.stock_qty or Decimal("0")) + stock_qty
-            db.add(models.StockMovement(product_id=product.id, qty_base=stock_qty, reason="purchase"))
+            product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
+            db.add(models.StockMovement(
+                product_id=product.id, qty_base=base_qty, reason="purchase",
+                unit_cost=new_cost, value=base_qty * new_cost,
+            ))
 
         purchase.lines.append(models.PurchaseLine(
             product_id=product.id,
@@ -761,15 +766,17 @@ def cancel_purchase(purchase_id: int, request: Request, db: Session = Depends(ge
     for line in purchase.lines:
         if not line.product_id:
             continue
-        product = db.get(models.Product, line.product_id)
+        product = db.get(models.Product, line.product_id, with_for_update=True)
         if not product:
             continue
         base_qty = (line.qty or Decimal("0")) * (line.unit_factor or Decimal("1"))
-        pmult = product.purchase_multiplier or Decimal("1")
-        stock_qty = base_qty * pmult
-        delta = -stock_qty if purchase.txn_type == "receive" else stock_qty
+        delta = -base_qty if purchase.txn_type == "receive" else base_qty
         product.stock_qty = (product.stock_qty or Decimal("0")) + delta
-        db.add(models.StockMovement(product_id=product.id, qty_base=delta, reason="purchase-cancelled"))
+        cancel_unit_cost = Decimal(str(line.new_cost or product.cost_price or 0))
+        db.add(models.StockMovement(
+            product_id=product.id, qty_base=delta, reason="purchase-cancelled",
+            unit_cost=cancel_unit_cost, value=delta * cancel_unit_cost,
+        ))
 
     purchase.status = "cancelled"
     purchase.cancelled_at = func.now()

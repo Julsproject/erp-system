@@ -487,8 +487,6 @@ def _save_from_form(product: models.Product, db: Session, form):
     product.beginning_stock = _to_decimal(form.get("beginning_stock"))
     product.stock_qty = _to_decimal(form.get("stock_qty"))
     product.reorder_level = _to_decimal(form.get("reorder_level"))
-    mult = _to_decimal(form.get("purchase_multiplier"), "1")
-    product.purchase_multiplier = mult if mult > 0 else Decimal("1")
     product.is_vat = bool(form.get("is_vat"))
 
     # Units ladder (extra sellable units). Parallel arrays from the form.
@@ -499,19 +497,34 @@ def _save_from_form(product: models.Product, db: Session, form):
     factors = form.getlist("unit_factor")
     prices = form.getlist("unit_price")
     relative_tos = form.getlist("unit_relative_to")
+
+    # Break any self-referential link among the OLD units (e.g. Sack ->
+    # Elf Load) before they get deleted below — with the link still in
+    # place, SQLAlchemy can't decide which ProductUnit row to delete first
+    # and raises CircularDependencyError. Nulling it out first removes the
+    # cycle so the deletes can proceed in any order.
+    for existing in product.units:
+        existing.relative_to_unit_id = None
+    db.flush()
     product.units.clear()
 
+    base_name = product.unit_type.name if product.unit_type else None
     rows = []
     for i, nm in enumerate(names):
         nm = (nm or "").strip()
         if not nm:
+            continue
+        # A ladder row named the same as the base unit is meaningless (the
+        # base already exists as its own row-less entry) and produces a
+        # confusing duplicate in every unit picker — drop it rather than
+        # save it.
+        if base_name and nm.lower() == base_name.lower():
             continue
         fac = _to_decimal(factors[i] if i < len(factors) else "1", "1")
         if fac <= 0:
             fac = Decimal("1")
         pr = _to_decimal(prices[i] if i < len(prices) else "0")
         rel_to = (relative_tos[i] if i < len(relative_tos) else "").strip()
-        base_name = product.unit_type.name if product.unit_type else None
         if rel_to and base_name and rel_to.lower() == base_name.lower():
             rel_to = ""  # typing the base unit's own name just means "relative to base"
         rows.append({"name": nm, "relative_factor": fac, "price": pr, "relative_to": rel_to or None})

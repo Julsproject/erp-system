@@ -250,7 +250,12 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
     subtotal = Decimal("0")
 
     for ln in lines:
-        product = db.get(models.Product, int(ln["product_id"])) if ln.get("product_id") else None
+        # Row-level lock: if two checkouts hit the same product at once, the
+        # second one waits here until the first commits, so it always reads
+        # the real post-deduction stock instead of a stale snapshot (a "lost
+        # update" that could let both sales pass an insufficient-stock check
+        # that only one of them should have passed).
+        product = db.get(models.Product, int(ln["product_id"]), with_for_update=True) if ln.get("product_id") else None
         if not product:
             continue
         qty = _dec(ln.get("qty"))
@@ -272,7 +277,11 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
                 f"Available: {float(available):g}, needed: {float(base_qty):g}."
             )
         _deduct_stock(product, base_qty)
-        db.add(models.StockMovement(product_id=product.id, qty_base=-base_qty, reason="sale"))
+        sale_unit_cost = Decimal(str(product.cost_price or 0))
+        db.add(models.StockMovement(
+            product_id=product.id, qty_base=-base_qty, reason="sale",
+            unit_cost=sale_unit_cost, value=-base_qty * sale_unit_cost,
+        ))
 
         sale.lines.append(models.SaleLine(
             product_id=product.id,
@@ -499,10 +508,14 @@ async def pos_refund(request: Request, db: Session = Depends(get_db), user=Depen
         total += value
         if is_vat:
             vat_base += value
-        product = db.get(models.Product, int(it["product_id"])) if it.get("product_id") else None
+        product = db.get(models.Product, int(it["product_id"]), with_for_update=True) if it.get("product_id") else None
         if product:
             _add_stock(product, qty * factor)
-            db.add(models.StockMovement(product_id=product.id, qty_base=qty * factor, reason="refund"))
+            refund_unit_cost = Decimal(str(product.cost_price or 0))
+            db.add(models.StockMovement(
+                product_id=product.id, qty_base=qty * factor, reason="refund",
+                unit_cost=refund_unit_cost, value=qty * factor * refund_unit_cost,
+            ))
         refund.lines.append(models.SaleLine(
             product_id=product.id if product else None,
             product_name=it.get("name") or "Item",
@@ -613,10 +626,14 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
         factor = _dec(it.get("factor"), "1")
         value = qty * unit_price
         returned_total += value
-        product = db.get(models.Product, int(it["product_id"])) if it.get("product_id") else None
+        product = db.get(models.Product, int(it["product_id"]), with_for_update=True) if it.get("product_id") else None
         if product:
             _add_stock(product, qty * factor)
-            db.add(models.StockMovement(product_id=product.id, qty_base=qty * factor, reason="exchange-return"))
+            ex_return_cost = Decimal(str(product.cost_price or 0))
+            db.add(models.StockMovement(
+                product_id=product.id, qty_base=qty * factor, reason="exchange-return",
+                unit_cost=ex_return_cost, value=qty * factor * ex_return_cost,
+            ))
         ex.lines.append(models.SaleLine(
             product_id=product.id if product else None, product_name=it.get("name") or "Item",
             unit_name=it.get("unit_name"), unit_factor=factor, qty=-qty, unit_price=unit_price,
@@ -635,7 +652,7 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
         if lt < 0:
             lt = Decimal("0")
         new_total += lt
-        product = db.get(models.Product, int(ln["product_id"])) if ln.get("product_id") else None
+        product = db.get(models.Product, int(ln["product_id"]), with_for_update=True) if ln.get("product_id") else None
         if product:
             base_qty = qty * factor
             available = product.total_qty
@@ -648,7 +665,11 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
                     ),
                 }, status_code=400)
             _deduct_stock(product, base_qty)
-            db.add(models.StockMovement(product_id=product.id, qty_base=-base_qty, reason="exchange-sale"))
+            ex_sale_cost = Decimal(str(product.cost_price or 0))
+            db.add(models.StockMovement(
+                product_id=product.id, qty_base=-base_qty, reason="exchange-sale",
+                unit_cost=ex_sale_cost, value=-base_qty * ex_sale_cost,
+            ))
         ex.lines.append(models.SaleLine(
             product_id=product.id if product else None, product_name=ln.get("name") or "Item",
             unit_name=ln.get("unit_name"), unit_factor=factor, qty=qty, unit_price=unit_price,

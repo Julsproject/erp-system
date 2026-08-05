@@ -3,15 +3,15 @@ through base — e.g. Sack relative to Elf Load, Elf Load relative to Forward
 Load — resolved into factor_to_base on save so every downstream reader
 (POS, purchases, sales, reports) keeps using the same single resolved value.
 
-Revision ID: 0032
-Revises: 0031
-Create Date: 2026-08-04
+Revision ID: 0033
+Revises: 0032
+Create Date: 2026-08-05
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0032"
-down_revision = "0031"
+revision = "0033"
+down_revision = "0032"
 branch_labels = None
 depends_on = None
 
