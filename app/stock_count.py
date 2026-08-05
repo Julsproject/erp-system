@@ -188,6 +188,17 @@ async def stock_count_scan(count_id: int, request: Request, db: Session = Depend
     return {"ok": True, "line": _line_dict(line)}
 
 
+@router.get("/stock-count/{count_id:int}/search")
+def stock_count_search(count_id: int, q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Live typeahead as the scan box is typed into by hand (a barcode
+    scanner still just types-and-Enters, unaffected by this) — same
+    matching rules as an actual scan, via _find_products."""
+    if not user or not is_staff(user):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    matches = _find_products(db, q)
+    return {"products": [{"id": p.id, "name": p.name} for p in matches]}
+
+
 @router.post("/stock-count/{count_id:int}/line/{line_id:int}/set")
 async def stock_count_set_line(count_id: int, line_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user or not is_staff(user):

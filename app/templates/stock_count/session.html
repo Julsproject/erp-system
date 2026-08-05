@@ -233,9 +233,35 @@ async function doScan(payload) {
 scanBox.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter') return;
   e.preventDefault();
+  scanChoices.style.display = 'none';
   const q = scanBox.value.trim();
   if (!q) return;
   doScan({q: q});
+});
+
+// Live typeahead as you type by hand — a barcode scanner types fast and
+// sends its own Enter right after, so debouncing this doesn't slow a scan
+// down; it just means manual typing gets suggestions before you hit Enter.
+let liveSearchTimer = null;
+scanBox.addEventListener('input', () => {
+  clearTimeout(liveSearchTimer);
+  const q = scanBox.value.trim();
+  if (!q) { scanChoices.style.display = 'none'; scanChoices.innerHTML = ''; return; }
+  liveSearchTimer = setTimeout(async () => {
+    const res = await fetch('/stock-count/' + countId + '/search?q=' + encodeURIComponent(q));
+    const data = await res.json();
+    if (scanBox.value.trim() !== q) return;  // stale response, a newer keystroke has since fired
+    if (!data.products || !data.products.length) { scanChoices.style.display = 'none'; scanChoices.innerHTML = ''; return; }
+    scanChoices.innerHTML = '';
+    data.products.forEach(p => {
+      const el = document.createElement('button');
+      el.type = 'button'; el.className = 'pos-item';
+      el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + p.name.replace(/</g, '&lt;') + '</span></div>';
+      el.onclick = () => doScan({product_id: p.id});
+      scanChoices.appendChild(el);
+    });
+    scanChoices.style.display = 'block';
+  }, 200);
 });
 
 async function setCounted(input) {
