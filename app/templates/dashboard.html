@@ -338,12 +338,12 @@
   </section>
 
   <section class="card chart-card">
-    <h3 class="card-title">Incoming deliveries <span class="muted">· Purchase Orders awaiting receipt</span></h3>
-    {% if pending_pos %}
+    <h3 class="card-title">Recent purchases <span class="muted">· deliveries already received</span></h3>
+    {% if recent_purchases %}
     <table class="grid mini">
       <thead><tr><th>Ref #</th><th>Supplier</th><th class="num">Total</th><th></th></tr></thead>
       <tbody>
-        {% for p in pending_pos %}
+        {% for p in recent_purchases %}
         <tr>
           <td class="strong">{{ p.ref_no }}</td>
           <td>{{ p.supplier.name if p.supplier else '—' }}</td>
@@ -353,11 +353,7 @@
         {% endfor %}
       </tbody>
     </table>
-    {% if pending_po_count > pending_pos|length %}
-    <p class="muted" style="margin:8px 0 0;font-size:12px;">+ {{ pending_po_count - pending_pos|length }} more — <a href="/purchases?status_filter=pending">see all pending</a></p>
-    {% endif %}
-    <p class="muted" style="margin:10px 0 0;font-size:12.5px;">{{ pending_po_count }} pending · {{ pending_pos_total|peso }} total value</p>
-    {% else %}<p class="pos-hint">No Purchase Orders waiting on a delivery. 🎉</p>{% endif %}
+    {% else %}<p class="pos-hint">No purchases recorded yet.</p>{% endif %}
   </section>
 </div>
 

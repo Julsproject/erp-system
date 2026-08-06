@@ -339,16 +339,12 @@ def dashboard(
     )
     top_revenue = sorted(perf, key=lambda r: float(r.revenue or 0), reverse=True)[:5]
 
-    # Purchase Orders raised but not yet received — nothing in stock for these yet.
-    pending_po_count, pending_pos_total = (
-        db.query(func.count(models.Purchase.id), func.coalesce(func.sum(models.Purchase.total), 0))
-        .filter(models.Purchase.txn_type == "receive", models.Purchase.status == "pending")
-        .one()
-    )
-    pending_pos_total = Decimal(str(pending_pos_total or 0))
-    pending_pos = (
+    # Deliveries already received, most recent first — every purchase here
+    # is something that already happened (stock and cost already moved),
+    # not something still awaited, matching how purchases get entered here.
+    recent_purchases = (
         db.query(models.Purchase)
-        .filter(models.Purchase.txn_type == "receive", models.Purchase.status == "pending")
+        .filter(models.Purchase.txn_type == "receive")
         .order_by(models.Purchase.id.desc())
         .limit(8)
         .all()
@@ -392,8 +388,7 @@ def dashboard(
             "pdc_alert_count": pdc_alert_count,
             "credit_total": credit_total, "due_soon": due_soon, "overdue": overdue,
             "payables_total": payables_total, "payables_overdue": payables_overdue,
-            "top_revenue": top_revenue, "dead_stock": dead_stock,
-            "pending_pos": pending_pos, "pending_po_count": pending_po_count, "pending_pos_total": pending_pos_total,
+            "top_revenue": top_revenue, "recent_purchases": recent_purchases, "dead_stock": dead_stock,
             "recent": recent, "backup": backup_info, "backup_stale_days": BACKUP_STALE_DAYS,
         },
     )
