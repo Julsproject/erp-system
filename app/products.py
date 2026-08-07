@@ -65,16 +65,24 @@ def _run_month_end_rollover(db: Session, period: str) -> int:
     Stocks Qty to 0 — the shop's own month-end close: whatever's left on the
     shelf becomes next month's opening balance, and Stocks Qty starts fresh
     for the new month's purchases. total_qty (and therefore stock valuation)
-    is unchanged, so this is a reclassification, not a StockMovement/adjustment
-    — just one audit summary row for traceability."""
+    is unchanged, so this is a reclassification, not a StockMovement/adjustment.
+    One MonthEndRolloverLine per product is recorded so the exact amount
+    that moved is traceable later (see /reports/month-end-rollover), plus
+    one audit summary row for the Activity Log."""
     products = db.query(models.Product).filter(models.Product.is_active.is_(True)).all()
     rolled = 0
     for p in products:
-        total = Decimal(str(p.beginning_stock or 0)) + Decimal(str(p.stock_qty or 0))
-        if Decimal(str(p.beginning_stock or 0)) != total or Decimal(str(p.stock_qty or 0)) != 0:
+        old_beginning = Decimal(str(p.beginning_stock or 0))
+        qty_moved = Decimal(str(p.stock_qty or 0))
+        total = old_beginning + qty_moved
+        if old_beginning != total or qty_moved != 0:
             p.beginning_stock = total
             p.stock_qty = Decimal("0")
             rolled += 1
+            db.add(models.MonthEndRolloverLine(
+                product_id=p.id, product_name=p.name, period=period,
+                qty_moved=qty_moved, old_beginning=old_beginning, new_beginning=total,
+            ))
     if rolled:
         audit.record(
             db, action="update", entity_type="product", entity_label="Month-end rollover",
@@ -154,6 +162,32 @@ HEADER_MAP = {
     "vat": "vat", "vat-able": "vat", "vatable": "vat",
 }
 FIELDS = ["name", "barcode", "category", "subcategory", "unit_type", "cost", "selling", "beginning", "stocks", "vat"]
+
+# --- Units & Conversions import (separate flow for products that sell in
+# more than one unit, e.g. Sack/Elf Load/Kg) — see routes near the bottom of
+# this file. Each row adds one unit to a product's ladder; several rows with
+# the same Product Name build up that product's full ladder together.
+TEMPLATE_HEADERS_UNITS = [
+    "Product Name",
+    "Unit Name",
+    "Equivalent Qty",
+    "Of Unit (blank = base unit)",
+    "Fixed Price",
+    "Markup %",
+    "Margin %",
+]
+HEADER_MAP_UNITS = {
+    "product name": "product", "product": "product",
+    "unit name": "unit_name", "unit": "unit_name", "sell as": "unit_name",
+    "equivalent qty": "factor", "equivalent": "factor", "factor": "factor",
+    "qty": "factor", "1 unit =": "factor",
+    "of unit (blank = base unit)": "relative_to", "of unit": "relative_to",
+    "of": "relative_to", "relative to": "relative_to",
+    "fixed price": "price", "price": "price",
+    "markup %": "markup_pct", "markup": "markup_pct",
+    "margin %": "margin_pct", "margin": "margin_pct",
+}
+FIELDS_UNITS = ["product", "unit_name", "factor", "relative_to", "price", "markup_pct", "margin_pct"]
 
 
 def _to_decimal(value: str, default: str = "0") -> Decimal:
@@ -497,7 +531,34 @@ def _save_from_form(product: models.Product, db: Session, form):
     factors = form.getlist("unit_factor")
     prices = form.getlist("unit_price")
     relative_tos = form.getlist("unit_relative_to")
+    unit_markup_pcts = form.getlist("unit_markup_pct")
+    unit_margin_pcts = form.getlist("unit_margin_pct")
 
+    rows = []
+    for i, nm in enumerate(names):
+        nm = (nm or "").strip()
+        if not nm:
+            continue
+        fac = _to_decimal(factors[i] if i < len(factors) else "1", "1")
+        if fac <= 0:
+            fac = Decimal("1")
+        pr = _to_decimal(prices[i] if i < len(prices) else "0")
+        rel_to = (relative_tos[i] if i < len(relative_tos) else "").strip() or None
+        u_markup_pct = _to_decimal(unit_markup_pcts[i] if i < len(unit_markup_pcts) else "0")
+        u_margin_pct = _to_decimal(unit_margin_pcts[i] if i < len(unit_margin_pcts) else "0")
+        rows.append({
+            "name": nm, "relative_factor": fac, "price": pr, "relative_to": rel_to,
+            "markup_pct": u_markup_pct, "margin_pct": u_margin_pct,
+        })
+
+    _apply_unit_rows(product, db, rows)
+
+
+def _apply_unit_rows(product: models.Product, db: Session, rows: list):
+    """Replace product's entire unit ladder with the given rows
+    ({name, relative_factor, price, relative_to, markup_pct, margin_pct}),
+    resolving any "relative to another unit" chain into factor_to_base.
+    Shared by the product edit form and the Units & Conversions bulk import."""
     # Break any self-referential link among the OLD units (e.g. Sack ->
     # Elf Load) before they get deleted below — with the link still in
     # place, SQLAlchemy can't decide which ProductUnit row to delete first
@@ -509,40 +570,37 @@ def _save_from_form(product: models.Product, db: Session, form):
     product.units.clear()
 
     base_name = product.unit_type.name if product.unit_type else None
-    rows = []
-    for i, nm in enumerate(names):
-        nm = (nm or "").strip()
-        if not nm:
-            continue
+    filtered = []
+    for r in rows:
         # A ladder row named the same as the base unit is meaningless (the
         # base already exists as its own row-less entry) and produces a
         # confusing duplicate in every unit picker — drop it rather than
         # save it.
-        if base_name and nm.lower() == base_name.lower():
+        if base_name and r["name"].lower() == base_name.lower():
             continue
-        fac = _to_decimal(factors[i] if i < len(factors) else "1", "1")
-        if fac <= 0:
-            fac = Decimal("1")
-        pr = _to_decimal(prices[i] if i < len(prices) else "0")
-        rel_to = (relative_tos[i] if i < len(relative_tos) else "").strip()
+        rel_to = r["relative_to"]
         if rel_to and base_name and rel_to.lower() == base_name.lower():
-            rel_to = ""  # typing the base unit's own name just means "relative to base"
-        rows.append({"name": nm, "relative_factor": fac, "price": pr, "relative_to": rel_to or None})
+            rel_to = None  # typing the base unit's own name just means "relative to base"
+        filtered.append({**r, "relative_to": rel_to})
 
-    resolved = _resolve_unit_chain(rows)
+    resolved = _resolve_unit_chain(filtered)
 
     order = 0
     name_to_unit = {}
-    for r in rows:
+    for r in filtered:
+        unit_factor = resolved[r["name"]]
+        unit_cost = (product.cost_price or Decimal("0")) * unit_factor
         pu = models.ProductUnit(
             name=r["name"], price=r["price"], sort_order=order,
-            factor_to_base=resolved[r["name"]], relative_factor=r["relative_factor"],
+            factor_to_base=unit_factor, relative_factor=r["relative_factor"],
+            markup_pct=r["markup_pct"], markup_price=pricing.markup_price(unit_cost, r["markup_pct"]),
+            margin_pct=r["margin_pct"], margin_price=pricing.margin_price(unit_cost, r["margin_pct"]),
         )
         product.units.append(pu)
         name_to_unit[r["name"]] = pu
         order += 1
     db.flush()  # assign ids so relative_to_unit_id below can point at them
-    for r in rows:
+    for r in filtered:
         if r["relative_to"] and r["relative_to"] in name_to_unit:
             name_to_unit[r["name"]].relative_to_unit_id = name_to_unit[r["relative_to"]].id
 
@@ -1159,8 +1217,13 @@ def _parse_bool(value: str) -> bool:
     return str(value or "").strip().lower() in {"1", "y", "yes", "true", "vat", "x", "✓", "oui"}
 
 
-def _parse_upload(filename: str, contents: bytes):
-    """Return (rows, error). rows is a list of dicts keyed by FIELDS."""
+def _parse_upload(filename: str, contents: bytes, header_map=None, fields=None,
+                   required_field="name", required_label="Product Name"):
+    """Return (rows, error). rows is a list of dicts keyed by `fields`
+    (defaults to the products FIELDS list; the Units & Conversions import
+    passes HEADER_MAP_UNITS/FIELDS_UNITS instead)."""
+    header_map = header_map if header_map is not None else HEADER_MAP
+    fields = fields if fields is not None else FIELDS
     name = (filename or "").lower()
     try:
         if name.endswith(".csv"):
@@ -1182,11 +1245,11 @@ def _parse_upload(filename: str, contents: bytes):
     idx = {}
     for i, cell in enumerate(header):
         key = str(cell or "").strip().lower()
-        if key in HEADER_MAP:
-            idx[HEADER_MAP[key]] = i
-    if "name" not in idx:
+        if key in header_map:
+            idx[header_map[key]] = i
+    if required_field not in idx:
         return None, (
-            "Missing a 'Product Name' column. Download the template to see the "
+            f"Missing a '{required_label}' column. Download the template to see the "
             "expected format."
         )
 
@@ -1201,8 +1264,8 @@ def _parse_upload(filename: str, contents: bytes):
     for raw in table[1:]:
         if not raw:
             continue
-        record = {f: cell(raw, f) for f in FIELDS}
-        if not any(record[f] for f in FIELDS):  # skip blank rows
+        record = {f: cell(raw, f) for f in fields}
+        if not any(record[f] for f in fields):  # skip blank rows
             continue
         rows.append(record)
     return rows, None
@@ -1459,4 +1522,151 @@ def download_template(user=Depends(get_current_user)):
         content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": 'attachment; filename="product_import_template.xlsx"'},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Bulk import (Excel / CSV) — Units & Conversions
+# --------------------------------------------------------------------------- #
+def _classify_unit_import_rows(db: Session, numbered_rows):
+    """Group parsed rows by Product Name (case-insensitive) and look each one
+    up now, so the confirm screen can show which products weren't found
+    without touching the database."""
+    groups = {}
+    order = []
+    for line_no, record in numbered_rows:
+        pname = (record["product"] or "").strip()
+        uname = (record["unit_name"] or "").strip()
+        if not pname or not uname:
+            continue
+        key = pname.lower()
+        if key not in groups:
+            product = (
+                db.query(models.Product)
+                .filter(func.lower(models.Product.name) == key)
+                .filter(models.Product.is_active.is_(True))
+                .first()
+            )
+            groups[key] = {"name": pname, "product": product, "rows": [], "line_nos": []}
+            order.append(key)
+        fac = _to_decimal(record["factor"], "1")
+        if fac <= 0:
+            fac = Decimal("1")
+        groups[key]["rows"].append({
+            "name": uname,
+            "relative_factor": fac,
+            "price": _to_decimal(record["price"]),
+            "relative_to": (record["relative_to"] or "").strip() or None,
+            "markup_pct": _to_decimal(record["markup_pct"]),
+            "margin_pct": _to_decimal(record["margin_pct"]),
+        })
+        groups[key]["line_nos"].append(line_no)
+    return [groups[k] for k in order]
+
+
+def _run_unit_import(db: Session, user, request, filename: str, groups):
+    """Apply each product's full ladder in its own SAVEPOINT — a bad row for
+    one product shouldn't block the rest of the file."""
+    updated = 0
+    errors = []
+    for g in groups:
+        if not g["product"]:
+            errors.append({
+                "row": g["line_nos"][0], "name": g["name"],
+                "message": f"No active product named “{g['name']}” — add it first via the Products import or the Add Product form.",
+            })
+            continue
+        savepoint = db.begin_nested()
+        try:
+            _apply_unit_rows(g["product"], db, g["rows"])
+            savepoint.commit()
+            updated += 1
+        except Exception as exc:  # noqa: BLE001
+            savepoint.rollback()
+            errors.append({"row": g["line_nos"][0], "name": g["name"], "message": str(exc)})
+    if updated:
+        audit.record(
+            db, user=user, request=request, action="update", entity_type="product",
+            entity_label=filename,
+            summary=f"Bulk unit-conversion import from “{filename}”: {updated} product(s) updated, {len(errors)} skipped",
+        )
+    db.commit()
+    return {
+        "created": 0, "updated": updated, "skipped": 0,
+        "errors": errors, "total": len(groups), "filename": filename,
+    }
+
+
+@router.get("/products/import/units", response_class=HTMLResponse)
+def import_units_form(request: Request, user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    return templates.TemplateResponse(
+        "products/import_units.html",
+        {"request": request, "app_name": request.app.title, "user": user, "result": None},
+    )
+
+
+@router.post("/products/import/units", response_class=HTMLResponse)
+async def import_units_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+
+    contents = await file.read()
+    rows, error = _parse_upload(
+        file.filename, contents,
+        header_map=HEADER_MAP_UNITS, fields=FIELDS_UNITS,
+        required_field="product", required_label="Product Name",
+    )
+    if error:
+        return templates.TemplateResponse(
+            "products/import_units.html",
+            {"request": request, "app_name": request.app.title, "user": user, "result": {"error": error}},
+        )
+
+    groups = _classify_unit_import_rows(db, list(enumerate(rows, start=2)))
+    result = _run_unit_import(db, user, request, file.filename, groups)
+    return templates.TemplateResponse(
+        "products/import_units.html",
+        {"request": request, "app_name": request.app.title, "user": user, "result": result},
+    )
+
+
+@router.get("/products/import/units/template")
+def download_units_template(user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Units"
+    ws.append(TEMPLATE_HEADERS_UNITS)
+
+    header_fill = PatternFill("solid", fgColor="1F6FEB")
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+
+    # Example: a product whose base unit is "Kg" also sells by the Sack (25kg)
+    # and by the Elf Load, which is defined relative to Sack rather than base.
+    ws.append(["GRAVEL", "Sack", 25, "", 500, None, None])
+    ws.append(["GRAVEL", "Elf Load", 6, "Sack", 30000, None, None])
+
+    widths = [22, 16, 14, 22, 12, 10, 10]
+    for i, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="unit_conversion_import_template.xlsx"'},
     )

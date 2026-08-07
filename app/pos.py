@@ -6,8 +6,9 @@ deduction in base units, printable receipt.
 
 Deferred: customers/receivable, split payments, open-container display, returns.
 """
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -37,6 +38,29 @@ METHOD_LABELS = {
 VAT_RATE = Decimal("0.12")
 VAT_DIVISOR = Decimal("1.12")
 CENTS = Decimal("0.01")
+MANILA = ZoneInfo("Asia/Manila")
+
+
+def _resolve_txn_datetime(txn_date):
+    """Turn an optional 'YYYY-MM-DD' transaction date into a timezone-aware
+    Manila timestamp for a backdated entry. Blank/invalid -> None, which
+    lets the DB stamp the live 'now' as before. The chosen date is combined
+    with the current wall-clock time so several entries backdated to the
+    same day still keep their encoding order, and so it converts cleanly to
+    that same calendar date in every date-based report (which read in
+    Asia/Manila). A future date is rejected — you can't record a sale that
+    hasn't happened."""
+    raw = (txn_date or "").strip()
+    if not raw:
+        return None, None
+    try:
+        d = date.fromisoformat(raw)
+    except ValueError:
+        return None, "Enter a valid transaction date."
+    now = datetime.now(MANILA)
+    if d > now.date():
+        return None, "Transaction date can't be in the future."
+    return now.replace(year=d.year, month=d.month, day=d.day), None
 
 
 def _vat_of(gross: Decimal) -> Decimal:
@@ -132,8 +156,18 @@ def _product_payload_for_pos(p: models.Product) -> dict:
         units.append({"name": base_unit, "label": f"{base_unit} · Margin", "factor": 1.0,
                       "price": float(p.margin_price), "tier": "margin"})
     for u in p.units:
-        units.append({"name": u.name, "label": u.name, "factor": float(u.factor_to_base or 1),
-                      "price": float(u.price or 0), "tier": ""})
+        # Same "one price stays plain, markup/margin only show up once set"
+        # rule as the base unit above — an existing product with a flat
+        # per-unit price still looks exactly as it did before this existed.
+        if (u.price or 0) > 0 or ((u.markup_price or 0) <= 0 and (u.margin_price or 0) <= 0):
+            units.append({"name": u.name, "label": u.name, "factor": float(u.factor_to_base or 1),
+                          "price": float(u.price or 0), "tier": "fixed"})
+        if (u.markup_price or 0) > 0:
+            units.append({"name": u.name, "label": f"{u.name} · Markup", "factor": float(u.factor_to_base or 1),
+                          "price": float(u.markup_price), "tier": "markup"})
+        if (u.margin_price or 0) > 0:
+            units.append({"name": u.name, "label": f"{u.name} · Margin", "factor": float(u.factor_to_base or 1),
+                          "price": float(u.margin_price), "tier": "margin"})
     c = p.container
     container = None if not c else {
         "pack_name": c["pack_name"],
@@ -229,7 +263,7 @@ async def pos_quick_product(request: Request, db: Session = Depends(get_db), use
     return {"ok": True, "existed": False, "product": _product_payload_for_pos(product)}
 
 
-def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied, discount_total, lines, payments):
+def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied, discount_total, lines, payments, txn_date=None):
     """Create and commit a real Sale from line items + payments.
 
     Shared by POS checkout and by quotations converting to a paid sale, so the
@@ -242,9 +276,18 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
     if db.query(models.Sale).filter(models.Sale.invoice_no == invoice_no).first():
         return False, f"Invoice number '{invoice_no}' is already used."
 
+    # Optional backdating: the shop enters past transactions after the fact,
+    # so a real transaction date lands the sale on the day it happened in
+    # every report; blank keeps the live 'now'.
+    backdated, date_err = _resolve_txn_datetime(txn_date)
+    if date_err:
+        return False, date_err
+
     customer_name = (customer_name or "").strip()
     vat_applied = bool(vat_applied)
     sale = models.Sale(invoice_no=invoice_no, customer_name=customer_name or None, cashier_id=user.id)
+    if backdated:
+        sale.created_at = backdated
     db.add(sale)
 
     subtotal = Decimal("0")
@@ -360,10 +403,14 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
     customer = get_or_create_customer(db, customer_name) if customer_name else None
     if customer:
         sale.customer_id = customer.id
-        # Credit (and post-dated cheques) fall due after the customer's agreed terms.
+        # Credit (and post-dated cheques) fall due after the customer's agreed
+        # terms, counted from the transaction date — so a backdated credit
+        # sale is already correctly aged (or overdue) instead of getting a
+        # fresh clock from today.
         if receivable_amount > 0:
             days = customer.credit_days if customer.credit_days is not None else 15
-            sale.due_date = date.today() + timedelta(days=int(days))
+            base_date = backdated.date() if backdated else date.today()
+            sale.due_date = base_date + timedelta(days=int(days))
 
     for method, amount in method_rows:
         sale.payments.append(models.Payment(method=method, amount=_money(amount)))
@@ -411,6 +458,7 @@ async def pos_checkout(request: Request, db: Session = Depends(get_db), user=Dep
         discount_total=data.get("discount_total"),
         lines=lines,
         payments=data.get("payments") or [],
+        txn_date=data.get("txn_date"),
     )
     if not ok:
         return JSONResponse({"ok": False, "error": result}, status_code=400)

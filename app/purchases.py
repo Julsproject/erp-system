@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from . import audit, models, pricing, settings_store
 from .database import get_db
 from .deps import get_current_user, is_staff
+from .pos import _resolve_txn_datetime
 from .products import _get_or_create_category, _get_or_create_unit_type
 from .templating import templates
 
@@ -506,6 +507,13 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
     if not supplier_id:
         return JSONResponse({"ok": False, "error": "Choose a supplier."}, status_code=400)
 
+    # Optional backdating for a purchase entered after the fact — lands it on
+    # the day it happened in every date-based report; blank keeps live 'now'.
+    backdated, date_err = _resolve_txn_datetime(data.get("txn_date"))
+    if date_err:
+        return JSONResponse({"ok": False, "error": date_err}, status_code=400)
+    stamp = backdated if backdated else func.now()
+
     # For a return: optionally link back to the delivery it's coming from.
     original_purchase_id = None
     if txn_type == "return":
@@ -536,13 +544,15 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
     due_date = None
     if is_payable:
         days = supplier.payment_days if supplier and supplier.payment_days is not None else 30
-        due_date = date.today() + timedelta(days=int(days))
+        base_date = backdated.date() if backdated else date.today()
+        due_date = base_date + timedelta(days=int(days))
 
     purchase = models.Purchase(
         txn_type=txn_type,
         status="confirmed" if (txn_type == "return" or is_payable) else "paid",
-        confirmed_at=func.now(),
-        paid_at=func.now() if (txn_type == "receive" and not is_payable) else None,
+        created_at=stamp,
+        confirmed_at=stamp,
+        paid_at=stamp if (txn_type == "receive" and not is_payable) else None,
         payment_method=payment_method,
         due_date=due_date,
         supplier_id=supplier_id,

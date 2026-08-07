@@ -69,6 +69,9 @@
         <input id="customerName" type="text" placeholder="Walk-in — type to find existing" autocomplete="off">
         <div id="custResults" class="cust-dropdown" style="display:none;"></div>
       </label>
+      <label class="pos-customer">Transaction date <span class="muted">(blank = today)</span>
+        <input id="txnDate" type="date" autocomplete="off" title="Set the real date this sale happened when encoding a past transaction. Leave blank for a live sale today.">
+      </label>
     </div>
 
     <div id="cartAndTotals">
@@ -319,6 +322,7 @@ function toggleOverallDiscType() {
 const searchBox = document.getElementById('posSearch');
 const customerBox = document.getElementById('customerName');
 const invoiceBox = document.getElementById('invoiceNo');
+const txnDateBox = document.getElementById('txnDate');
 searchBox.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 180); });
 // A barcode scanner types the code then sends Enter — resolve immediately
 // (no debounce) and, if it matched exactly one product, add it straight to
@@ -541,7 +545,7 @@ async function createProduct() {
 
 function clearCart() {
   cart = []; payments = [{ method: 'cash', amount: '' }];
-  document.getElementById('overallDiscount').value = 0; customerBox.value = ''; invoiceBox.value = '';
+  document.getElementById('overallDiscount').value = 0; customerBox.value = ''; invoiceBox.value = ''; txnDateBox.value = '';
   document.getElementById('fullMethod').value = 'cash';
   document.getElementById('fullChequeFields').style.display = 'none';
   document.getElementById('fullChequeDate').value = ''; document.getElementById('fullChequeBank').value = ''; document.getElementById('fullChequeNo').value = '';
@@ -828,6 +832,7 @@ async function checkout() {
     const payload = {
       invoice_no: invoiceBox.value,
       customer_name: customerBox.value,
+      txn_date: txnDateBox.value,
       vat_applied: document.getElementById('vatOn').checked,
       discount_total: overallDiscAmt(subtotal),
       payments: payList,

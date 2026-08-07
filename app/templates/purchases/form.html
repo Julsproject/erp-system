@@ -74,8 +74,8 @@
     </div>
 
     <div class="pos-head-fields">
-      <label class="pos-customer">Delivery date
-        <input id="deliveryDate" type="date">
+      <label class="pos-customer">Delivery date <span class="muted">(blank = today)</span>
+        <input id="deliveryDate" type="date" title="The date this delivery actually happened. Set it when encoding a past purchase so it lands on the right day in reports; leave blank for a delivery received today.">
       </label>
       <label class="pos-customer">Notes
         <input id="notes" type="text" placeholder="optional" autocomplete="off">
@@ -441,6 +441,7 @@ async function savePurchase() {
     supplier_id: document.getElementById('supplierId').value,
     invoice_no: document.getElementById('invoiceNo').value,
     delivery_date: document.getElementById('deliveryDate').value,
+    txn_date: document.getElementById('deliveryDate').value,
     notes: document.getElementById('notes').value,
     original_purchase_id: returnAgainstId,
     payment_method: document.getElementById('paymentMethod') ? document.getElementById('paymentMethod').value : null,

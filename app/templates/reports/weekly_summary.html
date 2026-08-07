@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Weekly Summary · {{ app_name }}</title>
+  <style>
+    :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --brand:#4f46e5; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:#eef1f5; font-family:"Segoe UI",system-ui,sans-serif; color:var(--ink); }
+    .sheet { max-width:860px; margin:28px auto; background:#fff; border:1px solid var(--line); border-radius:12px; padding:32px 36px; box-shadow:0 6px 24px rgba(15,23,42,.08); }
+
+    .w-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; border-bottom:2px solid var(--ink); padding-bottom:14px; margin-bottom:18px; }
+    .w-store { font-size:19px; font-weight:800; letter-spacing:-.01em; }
+    .w-sub { color:var(--muted); font-size:12.5px; margin-top:2px; }
+    .w-doc-type { font-size:15px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; }
+    .w-range { font-size:13px; color:var(--muted); margin-top:4px; }
+    .w-range b { color:var(--ink); }
+
+    .w-controls { display:flex; gap:10px; align-items:flex-end; margin-bottom:20px; flex-wrap:wrap; }
+    .w-controls label { font-size:12px; color:var(--muted); display:flex; flex-direction:column; gap:4px; }
+    .w-controls input { padding:7px 9px; border:1px solid var(--line); border-radius:8px; font-size:13px; }
+    .w-controls button, .w-controls a.btn-week { padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:#fff; color:var(--ink); font-size:13px; font-weight:600; text-decoration:none; cursor:pointer; }
+    .w-controls button.primary { background:var(--brand); color:#fff; border-color:var(--brand); }
+
+    .w-grid { display:grid; grid-template-columns:repeat(4, 1fr); gap:12px; margin-bottom:24px; }
+    .w-card { border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+    .w-card .label { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); font-weight:700; }
+    .w-card .value { font-size:20px; font-weight:800; margin-top:4px; }
+    .w-card .sub { font-size:11.5px; color:var(--muted); margin-top:2px; }
+    .w-card.neg .value { color:#b91c1c; }
+    .w-card.pos .value { color:#15803d; }
+
+    .w-section { margin-top:26px; }
+    .w-section h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); border-bottom:1px solid var(--line); padding-bottom:8px; margin:0 0 10px; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    th { text-align:left; color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.04em; padding:6px 0; border-bottom:1px solid var(--line); }
+    td { padding:7px 0; border-bottom:1px solid #f1f5f9; }
+    .num { text-align:right; font-variant-numeric:tabular-nums; }
+    .muted { color:var(--muted); }
+    .empty-note { color:var(--muted); font-size:13px; padding:10px 0; }
+    .alert-row td { color:#b91c1c; }
+
+    .w-pl { border-top:1px dashed var(--line); margin-top:14px; padding-top:12px; }
+    .w-pl .row { display:flex; justify-content:space-between; font-size:14px; padding:4px 0; }
+    .w-pl .row b { color:var(--ink); }
+    .w-pl .row.grand { font-size:18px; font-weight:800; border-top:1px solid var(--line); margin-top:6px; padding-top:10px; }
+
+    .actions { max-width:860px; margin:0 auto 40px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
+    .btn { padding:10px 18px; border-radius:10px; border:none; cursor:pointer; font-size:14px; font-weight:600; text-decoration:none; }
+    .btn.print { background:var(--brand); color:#fff; }
+    .btn.back { background:#fff; color:#334155; border:1px solid var(--line); }
+
+    @media print {
+      body { background:#fff; }
+      .sheet { box-shadow:none; border:none; margin:0; max-width:none; }
+      .actions, .w-controls { display:none; }
+      @page { margin:10mm; }
+    }
+  </style>
+</head>
+<body>
+  <div class="sheet">
+    {% set biz = business_info() %}
+    <div class="w-head">
+      <div>
+        <div class="w-store">{{ biz.business_name or app_name }}</div>
+        {% if biz.receipt_address %}<div class="w-sub">{{ biz.receipt_address }}</div>{% endif %}
+      </div>
+      <div style="text-align:right;">
+        <div class="w-doc-type">Weekly Summary</div>
+        <div class="w-range">{{ period_start.strftime('%b %d') }} – {{ period_end.strftime('%b %d, %Y') }}</div>
+      </div>
+    </div>
+
+    <form class="w-controls" method="get" action="/reports/weekly-summary">
+      <label>From <input type="date" name="date_from" value="{{ date_from or period_start.isoformat() }}"></label>
+      <label>To <input type="date" name="date_to" value="{{ date_to or period_end.isoformat() }}"></label>
+      <button class="primary" type="submit">Show week</button>
+      <a class="btn-week" href="/reports/weekly-summary">This week</a>
+    </form>
+
+    <div class="w-grid">
+      <div class="w-card">
+        <div class="label">Sales revenue</div>
+        <div class="value">{{ revenue|peso }}</div>
+        <div class="sub">{{ sales_count }} transaction{{ '' if sales_count == 1 else 's' }}{% if refunds_total and refunds_total > 0 %} · {{ refunds_total|peso }} refunded{% endif %}</div>
+      </div>
+      <div class="w-card {{ 'pos' if gross_profit >= 0 else 'neg' }}">
+        <div class="label">Gross profit</div>
+        <div class="value">{{ gross_profit|peso }}</div>
+        <div class="sub">from sales, before expenses</div>
+      </div>
+      <div class="w-card">
+        <div class="label">Purchases received</div>
+        <div class="value">{{ purchases_total|peso }}</div>
+        <div class="sub">{{ purchases_count }} {{ 'delivery' if purchases_count == 1 else 'deliveries' }}</div>
+      </div>
+      <div class="w-card">
+        <div class="label">Credits collected</div>
+        <div class="value">{{ credits_collected|peso }}</div>
+        <div class="sub">payments against customer credit</div>
+      </div>
+    </div>
+
+    <div class="w-section">
+      <h2>Profit &amp; Loss</h2>
+      <div class="w-pl">
+        <div class="row"><span>Revenue</span><b>{{ revenue|peso }}</b></div>
+        <div class="row"><span>Gross profit</span><b>{{ gross_profit|peso }}</b></div>
+        <div class="row"><span>Expenses</span><b>− {{ total_expenses|peso }}</b></div>
+        {% if inventory_adjustment_total and inventory_adjustment_total != 0 %}
+        <div class="row"><span>Inventory adjustments</span><b>{{ inventory_adjustment_total|peso }}</b></div>
+        {% endif %}
+        <div class="row grand"><span>Net profit</span><span>{{ net_profit|peso }}</span></div>
+      </div>
+    </div>
+
+    <div class="w-section">
+      <h2>Top Selling Products</h2>
+      {% if top_products %}
+      <table>
+        <thead><tr><th>Product</th><th class="num">Qty sold</th><th class="num">Revenue</th><th class="num">Gross profit</th></tr></thead>
+        <tbody>
+          {% for r in top_products %}
+          <tr>
+            <td>{{ r.name }}</td>
+            <td class="num">{{ r.qty|qty }}</td>
+            <td class="num">{{ r.revenue|peso }}</td>
+            <td class="num">{{ r.profit|peso }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty-note">No sales in this period.</div>
+      {% endif %}
+    </div>
+
+    <div class="w-section">
+      <h2>Low Stock Alert ({{ low_stock|length }})</h2>
+      {% if low_stock %}
+      <table>
+        <thead><tr><th>Product</th><th class="num">On hand</th><th class="num">Alert at</th></tr></thead>
+        <tbody>
+          {% for p in low_stock %}
+          <tr class="alert-row">
+            <td>{{ p.name }}</td>
+            <td class="num">{{ p.total_qty|qty }}</td>
+            <td class="num">{{ p.reorder_level|qty if p.reorder_level and p.reorder_level > 0 else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty-note">Nothing at or below its alert level right now.</div>
+      {% endif %}
+    </div>
+
+    <div class="w-section">
+      <p class="muted" style="font-size:11.5px;">Generated {{ today.strftime('%b %d, %Y') }} for {{ user.full_name or user.username }}. Figures reflect all transactions dated within the range shown above, regardless of when they were entered into the system.</p>
+    </div>
+  </div>
+
+  <div class="actions">
+    <a class="btn back" href="/reports">← Back to Accounting</a>
+    <button class="btn print" onclick="window.print()">🖨 Print</button>
+  </div>
+</body>
+</html>

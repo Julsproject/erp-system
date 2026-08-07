@@ -210,8 +210,16 @@ class ProductUnit(Base):
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
     name = Column(String(40), nullable=False)
     factor_to_base = Column(Numeric(14, 4), nullable=False, server_default="1")
-    price = Column(Numeric(12, 2), nullable=False, server_default="0")
+    price = Column(Numeric(12, 2), nullable=False, server_default="0")  # the "Fixed" price
     sort_order = Column(Integer, nullable=False, server_default="0")
+
+    # Same three-tier pricing idea as Product (see pricing.py) — but scoped
+    # to THIS unit's own cost (base cost x factor_to_base), so e.g. a Sack
+    # can be priced by margin % independently of how the base is priced.
+    markup_pct = Column(Numeric(6, 2), nullable=False, server_default="0")
+    markup_price = Column(Numeric(12, 2), nullable=False, server_default="0")
+    margin_pct = Column(Numeric(6, 2), nullable=False, server_default="0")
+    margin_price = Column(Numeric(12, 2), nullable=False, server_default="0")
 
     # Optional chain link: this unit's factor can be entered relative to
     # another unit in the same ladder (e.g. "1 Elf Load = 6 Sack") instead of
@@ -598,6 +606,26 @@ class StockMovement(Base):
     value = Column(Numeric(14, 2), nullable=True)
     note = Column(String(255), nullable=True)           # reason code, e.g. "Damage / breakage"
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class MonthEndRolloverLine(Base):
+    """One row per product per month-end rollover — the exact amount that
+    moved from Stocks Qty into Actual Beginning that month. Kept separate
+    from StockMovement because a rollover doesn't change total on-hand
+    (it's a reclassification, beginning += stock_qty), so it isn't a real
+    "in" or "out" the way StockMovement.qty_base means everywhere else."""
+    __tablename__ = "month_end_rollover_lines"
+
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    product_name = Column(String(150), nullable=False)
+    period = Column(String(7), nullable=False)  # "2026-09"
+    qty_moved = Column(Numeric(14, 3), nullable=False)
+    old_beginning = Column(Numeric(14, 3), nullable=False)
+    new_beginning = Column(Numeric(14, 3), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    product = relationship("Product")
 
 
 class StockCount(Base):

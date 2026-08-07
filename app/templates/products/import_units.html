@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Import unit conversions · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Import unit conversions</h1>
+  <a class="btn-link" href="/products">← Back to inventory</a>
+</div>
+
+<div class="tabs" style="margin-bottom:16px;">
+  <a class="tab" href="/products/import">Normal products</a>
+  <a class="tab active" href="/products/import/units">Products with unit conversion</a>
+</div>
+
+{% if result and result.error %}
+  <div class="alert">{{ result.error }}</div>
+{% elif result %}
+  <div class="card result-card">
+    <h2 class="result-title">Import finished</h2>
+    <p class="muted">{{ result.filename }} — {{ result.total }} product{{ '' if result.total == 1 else 's' }} read.</p>
+    <div class="result-stats">
+      <div class="stat info"><span class="num">{{ result.updated }}</span><span>Updated</span></div>
+      <div class="stat {{ 'err' if result.errors else 'muted-stat' }}"><span class="num">{{ result.errors|length }}</span><span>Errors</span></div>
+    </div>
+    {% if result.errors %}
+    <table class="grid" style="margin-top:16px;">
+      <thead><tr><th>Row</th><th>Product</th><th>Problem</th></tr></thead>
+      <tbody>
+        {% for e in result.errors %}
+        <tr><td>{{ e.row }}</td><td>{{ e.name }}</td><td>{{ e.message }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    <div class="form-actions" style="margin-top:18px;">
+      <a class="btn" href="/products">View inventory</a>
+      <a class="btn-secondary" href="/products/import/units">Import another file</a>
+    </div>
+  </div>
+{% else %}
+  <div class="import-steps">
+    <div class="card step">
+      <div class="step-no">1</div>
+      <div>
+        <h2>Download the template</h2>
+        <p class="muted">An Excel file with the correct columns and one example product with two units. Delete the example rows and fill in your own.</p>
+        <a class="btn" href="/products/import/units/template">⬇ Download Excel template</a>
+      </div>
+    </div>
+
+    <div class="card step">
+      <div class="step-no">2</div>
+      <div>
+        <h2>Upload your filled-in file</h2>
+        <p class="muted">Accepts <strong>.xlsx</strong> or <strong>.csv</strong>. Each row adds one unit to a product's ladder — use several rows with the same Product Name to build up a full ladder for one item.</p>
+        <form method="post" action="/products/import/units" enctype="multipart/form-data" class="upload-form">
+          <input type="file" name="file" accept=".xlsx,.xlsm,.csv" required>
+          <button class="btn" type="submit">⬆ Import</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="hint-box">
+      <strong>This import is for the extra selling units only</strong> — the product itself must already exist
+      (add it first with the <a href="/products/import">Normal products import</a> or the
+      <a href="/products/new">Add Product</a> form).
+      Uploading a product's units here <strong>replaces its whole ladder</strong> with what's in the file, so
+      include every unit that product should have, not just the new one.
+      <br><br>
+      <strong>Columns:</strong> Product Name (must match an existing product), Unit Name, Equivalent Qty,
+      Of Unit (optional — leave blank to mean "relative to the product's base unit", or name another unit already
+      in the same file to chain it, e.g. Elf Load = 6 × Sack), Fixed Price, Markup %, Margin %.
+      <br><br>
+      <strong>Example:</strong> GRAVEL's base unit is Kg. One row says "Sack = 25 Kg" at ₱500 fixed.
+      A second row says "Elf Load = 6, of Sack" at ₱30,000 fixed — that's 6 sacks (150 kg) per Elf Load.
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

@@ -159,7 +159,10 @@
             <th>Sell as</th>
             <th class="num">1 unit =</th>
             <th>of</th>
-            <th class="num">Selling price (₱)</th>
+            <th class="num">Cost</th>
+            <th class="num">Fixed ₱</th>
+            <th class="num">Markup %</th>
+            <th class="num">Margin %</th>
             <th></th>
           </tr>
         </thead>
@@ -171,7 +174,10 @@
               <td class="num"><input name="unit_factor" type="number" step="0.0001" min="0" value="{{ (u.relative_factor if u.relative_factor is not none else u.factor_to_base)|qty }}" class="w-md"></td>
               <td><input name="unit_relative_to" list="relTo-list" class="w-md" placeholder="Base"
                      value="{{ u.relative_to_unit.name if u.relative_to_unit else '' }}"></td>
-              <td class="num"><input name="unit_price" type="number" step="1" min="0" value="{{ '%.2f'|format(u.price) }}" class="w-sm"></td>
+              <td class="num muted">{{ u.cost_as_this_unit|peso if u.cost_as_this_unit else '—' }}</td>
+              <td class="num"><input name="unit_price" type="number" step="1" min="0" value="{{ '%.2f'|format(u.price) }}" class="w-sm" title="Fixed price"></td>
+              <td class="num"><input name="unit_markup_pct" type="number" step="0.01" min="0" value="{{ '%.2f'|format(u.markup_pct) if u.markup_pct else '' }}" class="w-sm pct-in" title="Markup %"></td>
+              <td class="num"><input name="unit_margin_pct" type="number" step="0.01" min="0" max="99.99" value="{{ '%.2f'|format(u.margin_pct) if u.margin_pct else '' }}" class="w-sm pct-in" title="Margin %"></td>
               <td><button type="button" class="btn-link danger" onclick="this.closest('tr').remove()">Remove</button></td>
             </tr>
             {% endfor %}
@@ -221,7 +227,10 @@
       '<td><div class="rz"><input name="unit_name" placeholder="e.g. Sack, Box, Roll" oninput="refreshRelToList()"></div></td>' +
       '<td class="num"><input name="unit_factor" type="number" step="0.0001" min="0" class="w-md"></td>' +
       '<td><input name="unit_relative_to" list="relTo-list" class="w-md" placeholder="Base"></td>' +
-      '<td class="num"><input name="unit_price" type="number" step="1" min="0" class="w-sm"></td>' +
+      '<td class="num muted" title="Shows after you save">—</td>' +
+      '<td class="num"><input name="unit_price" type="number" step="1" min="0" class="w-sm" title="Fixed price"></td>' +
+      '<td class="num"><input name="unit_markup_pct" type="number" step="0.01" min="0" class="w-sm pct-in" title="Markup %"></td>' +
+      '<td class="num"><input name="unit_margin_pct" type="number" step="0.01" min="0" max="99.99" class="w-sm pct-in" title="Margin %"></td>' +
       '<td><button type="button" class="btn-link danger" onclick="this.closest(\'tr\').remove(); refreshRelToList();">Remove</button></td>';
     document.getElementById('ladderBody').appendChild(tr);
     tr.querySelector('input').focus();

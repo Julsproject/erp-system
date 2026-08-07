@@ -307,6 +307,12 @@ table.grid tr:last-child td { border-bottom: none; }
 /* ---------- Forms ---------- */
 .form { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 22px; max-width: 820px; }
 @media (min-width: 1300px) { .form { grid-template-columns: 1fr 1fr 1fr; max-width: 1180px; } }
+/* The units ladder is a wide data table (7 columns) — on large monitors
+   there's room to spare in .content (max 1680px), so let the whole form
+   use more of it instead of squeezing the table into the same 1180px cap
+   used by simple label+input fields. Gated to a wide breakpoint so this
+   never risks overflowing a narrower "≥1300px" laptop screen. */
+@media (min-width: 1700px) { .form { max-width: 1560px; } }
 /* Grid items default to min-width:auto, so a wide child (the units table) can
    push the columns past the card edge. Let them shrink and scroll instead. */
 .form > * { min-width: 0; }
@@ -370,8 +376,8 @@ table.grid tr:last-child td { border-bottom: none; }
 .ladder-table th, .ladder-table td { padding: 9px 12px; }
 .ladder-table input { width: 100%; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 8px; font-size: 13.5px; }
 .ladder-table input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
-.ladder-table input.w-sm { max-width: 130px; }
-.ladder-table input.w-md { min-width: 140px; max-width: 220px; }
+.ladder-table input.w-sm { max-width: 160px; }
+.ladder-table input.w-md { min-width: 140px; max-width: 240px; }
 
 /* "Sell as" cell: wide enough to read by default, and drag the bottom-right
    corner to widen it further (drag back when you're done). */

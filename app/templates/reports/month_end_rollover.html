@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Month-End Rollover History · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Month-End Rollover History</h1>
+    <p class="muted">Exactly how much Stocks Qty got folded into Actual Beginning, per product, per month.</p>
+  </div>
+</div>
+
+<form class="toolbar" method="get" action="/reports/month-end-rollover">
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search product name…">
+  <select name="period" onchange="this.form.submit()">
+    <option value="">All months</option>
+    {% for p in periods %}
+    <option value="{{ p }}" {{ 'selected' if period == p }}>{{ p }}</option>
+    {% endfor %}
+  </select>
+  <button class="btn-secondary" type="submit">Search</button>
+  {% if q or period %}<a class="btn-link" href="/reports/month-end-rollover">Clear</a>{% endif %}
+</form>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ rows|length }}</span><span>Rollover line(s)</span></div>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Month</th><th>Product</th><th class="num">Qty Moved</th><th class="num">Old Beginning</th><th class="num">New Beginning</th><th>When</th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="strong">{{ r.period }}</td>
+        <td><a class="btn-link" href="/reports/month-end-rollover?q={{ r.product_name }}">{{ r.product_name }}</a></td>
+        <td class="num strong">{{ r.qty_moved|qty }}</td>
+        <td class="num muted">{{ r.old_beginning|qty }}</td>
+        <td class="num">{{ r.new_beginning|qty }}</td>
+        <td class="muted">{{ r.created_at.strftime('%b %d, %Y %I:%M %p') if r.created_at else '' }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No month-end rollovers recorded {{ 'that match this filter' if (q or period) else 'yet' }}.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<p class="hint" style="margin-top:14px;">This total is a reclassification, not a stock gain or loss — Total Qty for each product doesn't change here, only the split between Actual Beginning and Stocks Qty.</p>
+{% endblock %}

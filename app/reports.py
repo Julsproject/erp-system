@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from . import models, settings_store
 from .database import get_db
 from .deps import get_current_user, is_staff
+from .products import low_stock_expr
 from .templating import templates
 
 router = APIRouter()
@@ -701,5 +702,162 @@ def inventory_adjustments(
             "period_start": period_start, "period_end": period_end, "custom": custom,
             "month_start": month_start, "today": today, "this_month": this_month,
             "rows": rows, "loss_total": loss_total, "gain_total": gain_total, "net_total": net_total,
+        },
+    )
+
+
+@router.get("/reports/month-end-rollover", response_class=HTMLResponse)
+def month_end_rollover_history(
+    request: Request,
+    q: str = "",
+    period: str = "",
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """History of month-end rollover: for each product, exactly how much
+    Stocks Qty got folded into Actual Beginning, and when — so "what number
+    got added to this item's beginning stock in September" has a real
+    answer instead of just one summary line in the Activity Log."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    q = (q or "").strip()
+    periods = [
+        p[0] for p in db.query(models.MonthEndRolloverLine.period)
+        .distinct().order_by(models.MonthEndRolloverLine.period.desc()).all()
+    ]
+
+    query = db.query(models.MonthEndRolloverLine)
+    if q:
+        query = query.filter(models.MonthEndRolloverLine.product_name.ilike(f"%{q}%"))
+    if period:
+        query = query.filter(models.MonthEndRolloverLine.period == period)
+    rows = query.order_by(
+        models.MonthEndRolloverLine.period.desc(),
+        models.MonthEndRolloverLine.product_name,
+    ).all()
+
+    return templates.TemplateResponse(
+        "reports/month_end_rollover.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "q": q, "period": period, "periods": periods, "rows": rows,
+        },
+    )
+
+
+def _week_bounds(today: date) -> tuple[date, date]:
+    """Monday..Sunday of the week containing `today`."""
+    monday = today - timedelta(days=today.weekday())
+    return monday, monday + timedelta(days=6)
+
+
+def _weekly_summary_data(db: Session, period_start: date, period_end: date):
+    """Everything for one page: the same P&L numbers as the Dashboard, plus
+    purchasing, credit collections and a low-stock snapshot — the batch of
+    numbers an owner who only checks in once a week actually wants together."""
+    pl = _pl_data(db, period_start, period_end)
+
+    sales_count = (
+        db.query(func.count(models.Sale.id))
+        .filter(models.Sale.txn_type == "sale", _local_date(models.Sale.created_at).between(period_start, period_end))
+        .scalar()
+    ) or 0
+    refunds_total = (
+        db.query(func.coalesce(func.sum(-models.Sale.total), 0))
+        .filter(models.Sale.txn_type == "refund", _local_date(models.Sale.created_at).between(period_start, period_end))
+        .scalar()
+    )
+    refunds_total = Decimal(str(refunds_total or 0))
+
+    purchases_total = (
+        db.query(func.coalesce(func.sum(models.Purchase.total), 0))
+        .filter(
+            models.Purchase.txn_type == "receive", models.Purchase.status != "cancelled",
+            _local_date(models.Purchase.confirmed_at).between(period_start, period_end),
+        )
+        .scalar()
+    )
+    purchases_total = Decimal(str(purchases_total or 0))
+    purchases_count = (
+        db.query(func.count(models.Purchase.id))
+        .filter(
+            models.Purchase.txn_type == "receive", models.Purchase.status != "cancelled",
+            _local_date(models.Purchase.confirmed_at).between(period_start, period_end),
+        )
+        .scalar()
+    ) or 0
+
+    credits_collected = (
+        db.query(func.coalesce(func.sum(models.ReceivableSettlement.amount), 0))
+        .filter(_local_date(models.ReceivableSettlement.created_at).between(period_start, period_end))
+        .scalar()
+    )
+    credits_collected = Decimal(str(credits_collected or 0))
+
+    expenses_paid = (
+        db.query(func.coalesce(func.sum(models.Expense.amount), 0))
+        .filter(models.Expense.is_voided.is_(False), models.Expense.expense_date.between(period_start, period_end))
+        .scalar()
+    )
+    expenses_paid = Decimal(str(expenses_paid or 0))
+
+    top_products = _sales_by_product(db, period_start, period_end)[:8]
+
+    low_stock = (
+        db.query(models.Product)
+        .filter(models.Product.is_active.is_(True), low_stock_expr(settings_store.default_low_stock_pct()))
+        .order_by(models.Product.name)
+        .all()
+    )
+
+    return {
+        **pl,
+        "sales_count": sales_count,
+        "refunds_total": refunds_total,
+        "purchases_total": purchases_total,
+        "purchases_count": purchases_count,
+        "credits_collected": credits_collected,
+        "expenses_paid": expenses_paid,
+        "top_products": top_products,
+        "low_stock": low_stock,
+    }
+
+
+@router.get("/reports/weekly-summary", response_class=HTMLResponse)
+def weekly_summary(
+    request: Request,
+    date_from: str = "",
+    date_to: str = "",
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    today = _today()
+    df, dt = _parse_date(date_from), _parse_date(date_to)
+    if df and dt:
+        if dt > today:
+            dt = today
+        if df > dt:
+            df, dt = dt, df
+        period_start, period_end = df, dt
+    else:
+        period_start, period_end = _week_bounds(today)
+
+    data = _weekly_summary_data(db, period_start, period_end)
+
+    return templates.TemplateResponse(
+        "reports/weekly_summary.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "period_start": period_start, "period_end": period_end,
+            "date_from": date_from, "date_to": date_to,
+            "today": today, **data,
         },
     )

@@ -6,6 +6,11 @@
   <a class="btn-link" href="/products">← Back to inventory</a>
 </div>
 
+<div class="tabs" style="margin-bottom:16px;">
+  <a class="tab active" href="/products/import">Normal products</a>
+  <a class="tab" href="/products/import/units">Products with unit conversion</a>
+</div>
+
 {% if result and result.error %}
   <div class="alert">{{ result.error }}</div>
 {% elif result %}
