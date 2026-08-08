@@ -6,10 +6,19 @@ from fastapi.templating import Jinja2Templates
 templates = Jinja2Templates(directory="app/templates")
 
 
+def _to_decimal(value) -> Decimal:
+    """Decimal(some_float) expands the float's exact binary value (e.g.
+    Decimal(8.6) -> 8.5999999999999996447286321199499070644378662109375)
+    instead of the clean "8.6" you'd expect — routing through str() first
+    avoids that for any float that came from a JSON round-trip (e.g. a
+    dict built for a JS fetch response) before it reaches a template."""
+    return Decimal(str(value)) if value not in (None, "") else Decimal(0)
+
+
 def peso(value) -> str:
     """Format a number as Philippine peso with thousands separators."""
     try:
-        return "₱{:,.2f}".format(Decimal(value or 0))
+        return "₱{:,.2f}".format(_to_decimal(value))
     except (InvalidOperation, TypeError, ValueError):
         return "₱0.00"
 
@@ -17,7 +26,7 @@ def peso(value) -> str:
 def qty(value) -> str:
     """Format a quantity, trimming trailing zeros (e.g. 12.000 -> 12, 5.500 -> 5.5)."""
     try:
-        d = Decimal(value or 0)
+        d = _to_decimal(value)
     except (InvalidOperation, TypeError, ValueError):
         return "0"
     d = d.normalize()
@@ -32,7 +41,7 @@ def whole_qty(value) -> str:
     has to read one number for how many full units are on the shelf.
     """
     try:
-        d = Decimal(value or 0)
+        d = _to_decimal(value)
     except (InvalidOperation, TypeError, ValueError):
         return "0"
     return str(d.to_integral_value(rounding=ROUND_FLOOR))
