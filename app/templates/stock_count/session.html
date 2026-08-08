@@ -55,25 +55,33 @@
   {% for s in shelves %}<option value="{{ s.name }}">{% endfor %}
 </datalist>
 
+{% if count.status == 'open' %}
+<div class="head-actions" style="margin-bottom:10px;align-items:flex-end;">
+  <label style="margin:0;font-size:12.5px;color:var(--muted);">Set checked items to shelf
+    <input type="text" list="shelf-datalist" id="bulkShelfInput" placeholder="e.g. Shelf 1" style="display:block;margin-top:4px;max-width:200px;">
+  </label>
+  <button type="button" class="btn-secondary" onclick="applyBulkShelf()">Save</button>
+  <span class="muted" id="bulkShelfMsg" style="font-size:12px;"></span>
+</div>
+{% endif %}
+
 <div class="table-wrap">
   <table class="grid" id="linesTable">
     <thead>
-      <tr><th>Product</th><th>Shelf</th><th class="num">System Qty</th><th class="num">Counted</th><th class="num">Variance</th></tr>
+      <tr>
+        {% if count.status == 'open' %}<th><input type="checkbox" id="selectAllLines" onchange="toggleAllLines(this)"></th>{% endif %}
+        <th>Product</th><th class="num">System Qty</th><th class="num">Counted</th><th class="num">Variance</th>
+      </tr>
     </thead>
     <tbody>
       {% for l in lines %}
       <tr data-line-id="{{ l.id }}" data-shelf="{{ l.shelf or '' }}">
+        {% if count.status == 'open' %}<td><input type="checkbox" class="lineChk" data-line-id="{{ l.id }}"></td>{% endif %}
         <td class="strong">
           {{ l.name }}
           {% if l.units %}
           <button type="button" class="btn-link" style="font-size:11.5px;" onclick="toggleUnitRow({{ l.id }})">per-unit count ▾</button>
           {% endif %}
-        </td>
-        <td>
-          {% if count.status == 'open' %}
-          <input type="text" list="shelf-datalist" class="shelfInput" data-line-id="{{ l.id }}"
-                 value="{{ l.shelf or '' }}" placeholder="—" style="width:120px;" onchange="setShelf(this)">
-          {% else %}{{ l.shelf or '—' }}{% endif %}
         </td>
         <td class="num">{{ l.system_qty|qty }}</td>
         <td class="num">
@@ -86,7 +94,7 @@
       </tr>
       {% if l.units %}
       <tr class="unit-row" id="unitRow{{ l.id }}" style="display:none;">
-        <td colspan="5" style="background:rgba(255,255,255,0.02);padding:10px 12px;">
+        <td colspan="{{ 5 if count.status == 'open' else 4 }}" style="background:rgba(255,255,255,0.02);padding:10px 12px;">
           <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;">
             {% for u in l.units %}
             <label style="margin:0;font-size:12px;">{{ u.name }}
@@ -104,7 +112,7 @@
       </tr>
       {% endif %}
       {% else %}
-      <tr><td colspan="5" class="empty">Nothing scanned yet.</td></tr>
+      <tr><td colspan="{{ 5 if count.status == 'open' else 4 }}" class="empty">Nothing scanned yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -151,8 +159,6 @@ function upsertRow(line) {
   const varText = (variance > 0 ? '+' : '') + fmtQty(variance);
   if (row) {
     row.dataset.shelf = line.shelf || '';
-    const shelfInput = row.querySelector('.shelfInput');
-    if (shelfInput && document.activeElement !== shelfInput) shelfInput.value = line.shelf || '';
     row.querySelector('.countedInput').value = fmtQty(line.counted_qty);
     const varCell = row.querySelector('.varCell');
     varCell.textContent = varText;
@@ -165,13 +171,12 @@ function upsertRow(line) {
       ? ' <button type="button" class="btn-link" style="font-size:11.5px;" onclick="toggleUnitRow(' + line.id + ')">per-unit count ▾</button>'
       : '';
     row.innerHTML =
+      '<td><input type="checkbox" class="lineChk" data-line-id="' + line.id + '"></td>' +
       '<td class="strong"></td>' +
-      '<td><input type="text" list="shelf-datalist" class="shelfInput" data-line-id="' + line.id + '" placeholder="—" style="width:120px;" onchange="setShelf(this)"></td>' +
       '<td class="num"></td>' +
       '<td class="num"><input type="number" step="0.001" min="0" class="countedInput" data-line-id="' + line.id + '" style="width:90px;text-align:right;" onchange="setCounted(this)"></td>' +
       '<td class="num varCell"></td>';
-    row.children[0].innerHTML = escapeHtml(line.name) + toggleBtn;
-    row.querySelector('.shelfInput').value = line.shelf || '';
+    row.children[1].innerHTML = escapeHtml(line.name) + toggleBtn;
     row.children[2].textContent = fmtQty(line.system_qty);
     row.querySelector('.countedInput').value = fmtQty(line.counted_qty);
     row.children[4].textContent = varText;
@@ -334,15 +339,34 @@ function refreshShelfOptions(shelves) {
   });
 }
 
-async function setShelf(input) {
-  const lineId = input.dataset.lineId;
-  const res = await fetch('/stock-count/' + countId + '/line/' + lineId + '/set-shelf', {
-    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({shelf: input.value}),
+function toggleAllLines(checkbox) {
+  document.querySelectorAll('.lineChk').forEach(function (c) { c.checked = checkbox.checked; });
+}
+
+async function applyBulkShelf() {
+  const checked = Array.from(document.querySelectorAll('.lineChk:checked')).map(function (c) { return c.dataset.lineId; });
+  const shelfInput = document.getElementById('bulkShelfInput');
+  const shelfName = shelfInput.value.trim();
+  const msg = document.getElementById('bulkShelfMsg');
+  if (!checked.length) { msg.textContent = 'Select at least one product first.'; return; }
+  if (!shelfName) { msg.textContent = 'Type or pick a shelf name.'; return; }
+  msg.textContent = 'Saving…';
+  const res = await fetch('/stock-count/' + countId + '/bulk-set-shelf', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({line_ids: checked, shelf: shelfName}),
   });
   const data = await res.json();
-  if (!data.ok) { alert(data.error || 'Could not set shelf.'); return; }
-  upsertRow(data.line);
+  if (!data.ok) { msg.textContent = data.error || 'Could not save.'; return; }
+  data.lines.forEach(function (line) {
+    const row = document.querySelector('tr[data-line-id="' + line.id + '"]');
+    if (row) row.dataset.shelf = line.shelf || '';
+  });
   refreshShelfOptions(data.shelves);
+  document.querySelectorAll('.lineChk:checked').forEach(function (c) { c.checked = false; });
+  const selectAll = document.getElementById('selectAllLines');
+  if (selectAll) selectAll.checked = false;
+  shelfInput.value = '';
+  msg.textContent = 'Assigned ' + data.updated + ' item(s) to ' + data.shelf + '.';
 }
 
 async function addShelf() {

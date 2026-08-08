@@ -318,32 +318,50 @@ async def stock_count_set_line_units(count_id: int, line_id: int, request: Reque
     return {"ok": True, "line": _line_dict(line)}
 
 
-@router.post("/stock-count/{count_id:int}/line/{line_id:int}/set-shelf")
-async def stock_count_set_line_shelf(count_id: int, line_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    """Assign (or clear) the product's shelf right from the count — staff are
-    already standing at the shelf while counting, so this is the natural
-    place to record it for anything that doesn't have one yet, instead of
-    making a separate trip to the product's own edit form."""
+@router.post("/stock-count/{count_id:int}/bulk-set-shelf")
+async def stock_count_bulk_set_shelf(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Assign many already-counted lines to one shelf in a single save —
+    the client's actual workflow is importing products with no shelf yet,
+    then walking the store shelf by shelf during Stock Count: scan/add
+    everything physically on that shelf, tick them, pick the shelf name
+    once, save. Typing a new shelf name creates it on the fly."""
     if not user or not is_staff(user):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     count = db.get(models.StockCount, count_id)
     if not count or count.status != "open":
         return JSONResponse({"ok": False, "error": "This count isn't open anymore."}, status_code=400)
-    line = db.get(models.StockCountLine, line_id)
-    if not line or line.stock_count_id != count.id:
-        return JSONResponse({"ok": False, "error": "Line not found."}, status_code=404)
-    product = line.product
-    if not product:
-        return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
 
     data = await request.json()
+    raw_ids = data.get("line_ids") or []
     shelf_name = (data.get("shelf") or "").strip()
-    product.shelf = _get_or_create_shelf(db, shelf_name) if shelf_name else None
+    if not raw_ids:
+        return JSONResponse({"ok": False, "error": "Select at least one product first."}, status_code=400)
+    if not shelf_name:
+        return JSONResponse({"ok": False, "error": "Type or pick a shelf name."}, status_code=400)
+    try:
+        line_ids = [int(i) for i in raw_ids]
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "error": "Invalid selection."}, status_code=400)
+
+    shelf = _get_or_create_shelf(db, shelf_name)
+    lines = (
+        db.query(models.StockCountLine)
+        .filter(models.StockCountLine.stock_count_id == count.id, models.StockCountLine.id.in_(line_ids))
+        .all()
+    )
+    updated = []
+    for line in lines:
+        if line.product:
+            line.product.shelf = shelf
+            updated.append(line)
     db.commit()
     # Return every shelf (not just this one) so the page can refresh its
     # "add a whole shelf"/filter dropdowns in case this just created a new one.
     shelves = [{"id": s.id, "name": s.name} for s in db.query(models.Shelf).order_by(models.Shelf.name).all()]
-    return {"ok": True, "line": _line_dict(line), "shelves": shelves}
+    return {
+        "ok": True, "shelf": shelf.name, "updated": len(updated),
+        "lines": [_line_dict(l) for l in updated], "shelves": shelves,
+    }
 
 
 @router.post("/stock-count/{count_id:int}/complete")
