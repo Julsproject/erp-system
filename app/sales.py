@@ -90,7 +90,10 @@ def _filtered_sales_query(db: Session, q: str, type_filter: str, date_from, date
     query = (
         db.query(models.Sale)
         .outerjoin(settled_sub, settled_sub.c.sid == models.Sale.id)
-        .filter(models.Sale.receivable_amount <= func.coalesce(settled_sub.c.paid, 0))
+        .filter(
+            models.Sale.receivable_amount <= func.coalesce(settled_sub.c.paid, 0),
+            models.Sale.is_voided.is_(False),
+        )
     )
     if q:
         like = f"%{q}%"
@@ -286,6 +289,34 @@ def sales_exchanges(request: Request, page: int = 1, db: Session = Depends(get_d
 
     return templates.TemplateResponse(
         "sales/exchanges.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "rows": rows, "total_count": total_count, "page": page, "pages": pages},
+    )
+
+
+@router.get("/sales/voided", response_class=HTMLResponse)
+def sales_voided(request: Request, page: int = 1, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Every voided sale, most recent first — voiding erases a sale from
+    every other list/report (Cash Sales, Dashboard, P&L, ...), so this is the
+    one place left to see what got voided, by whom, and why."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    page = max(page, 1)
+
+    query = (
+        db.query(models.Sale)
+        .filter(models.Sale.is_voided.is_(True))
+        .order_by(models.Sale.voided_at.desc().nullslast(), models.Sale.id.desc())
+    )
+    total_count = query.count()
+    pages = max((total_count + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+    page = min(page, pages)
+    rows = query.offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE).all()
+
+    return templates.TemplateResponse(
+        "sales/voided.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "rows": rows, "total_count": total_count, "page": page, "pages": pages},
     )

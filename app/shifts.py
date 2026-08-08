@@ -80,6 +80,7 @@ def expected_cash_for(db: Session, cashier_id: int, start, end) -> Decimal:
         db.query(func.coalesce(func.sum(models.Sale.change_amount), 0))
         .filter(
             models.Sale.cashier_id == cashier_id,
+            models.Sale.is_voided.is_(False),
             models.Sale.created_at >= start, models.Sale.created_at < end,
         )
         .scalar()

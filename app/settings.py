@@ -83,6 +83,7 @@ async def save_settings(request: Request, db: Session = Depends(get_db), user=De
         settings_store.set_setting(db, key, value)
     settings_store.set_setting(db, "min_margin_pct", raw_margin)
     settings_store.set_setting(db, "default_low_stock_pct", raw_low_stock)
+    settings_store.set_setting(db, "cashier_can_void", "1" if form.get("cashier_can_void") else "")
     db.flush()
     after = settings_store.get_all(db)
     changes = audit.diff(before, after)

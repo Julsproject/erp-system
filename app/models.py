@@ -70,6 +70,17 @@ class UnitType(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class Shelf(Base):
+    """Where a product physically sits in the store (e.g. "Shelf 1", "Shelf
+    A") — same simple lookup-table pattern as Category/SubCategory/UnitType,
+    used for browsing/filtering rather than anything computed."""
+    __tablename__ = "shelves"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(80), nullable=False, unique=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class Product(Base):
     __tablename__ = "products"
 
@@ -79,6 +90,7 @@ class Product(Base):
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
     subcategory_id = Column(Integer, ForeignKey("sub_categories.id"), nullable=True)
     unit_type_id = Column(Integer, ForeignKey("unit_types.id"), nullable=True)
+    shelf_id = Column(Integer, ForeignKey("shelves.id"), nullable=True)
 
     # Manual for now; sourced from the Supplier module later.
     cost_price = Column(Numeric(12, 2), nullable=False, server_default="0")
@@ -113,6 +125,7 @@ class Product(Base):
     category = relationship("Category")
     subcategory = relationship("SubCategory")
     unit_type = relationship("UnitType")
+    shelf = relationship("Shelf")
     units = relationship(
         "ProductUnit",
         back_populates="product",
@@ -300,6 +313,15 @@ class Sale(Base):
     # spot-check, which is why these are surfaced in Notifications.
     no_invoice_return = Column(Boolean, nullable=False, server_default="false")
 
+    # A voided sale is a data-entry mistake being erased from every report —
+    # stock and payment are reversed at void time (see pos.void_sale), it's
+    # never re-editable, and it stays here (not deleted) purely so the
+    # invoice # and audit trail don't disappear.
+    is_voided = Column(Boolean, nullable=False, server_default="false")
+    void_reason = Column(String(255), nullable=True)
+    voided_at = Column(DateTime(timezone=True), nullable=True)
+    voided_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     lines = relationship("SaleLine", back_populates="sale", cascade="all, delete-orphan")
@@ -308,8 +330,9 @@ class Sale(Base):
         "ReceivableSettlement", back_populates="sale", cascade="all, delete-orphan",
         foreign_keys="ReceivableSettlement.sale_id",
     )
-    cashier = relationship("User")
+    cashier = relationship("User", foreign_keys=[cashier_id])
     customer = relationship("Customer")
+    voided_by = relationship("User", foreign_keys=[voided_by_id])
 
 
 class SaleLine(Base):

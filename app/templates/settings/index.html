@@ -58,6 +58,18 @@
       </span>
     </label>
 
+    <div class="full">
+      <label class="checkbox" style="margin:0 0 4px;">
+        <input type="checkbox" name="cashier_can_void" value="1" {{ 'checked' if values.cashier_can_void == '1' }}>
+        <span>Allow cashiers to void their own sales</span>
+      </label>
+      <span class="hint">
+        Off by default — only Admin/Manager can void a sale. Turn this on if cashiers should be able to fix a
+        same-day mistake (wrong item, qty or price) themselves instead of waiting for a manager. Voiding only
+        works on a plain sale with no credit, refund, exchange or post-dated cheque attached to it.
+      </span>
+    </div>
+
     <div class="form-actions full">
       <button class="btn" type="submit">Save changes</button>
     </div>

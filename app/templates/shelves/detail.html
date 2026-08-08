@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ shelf.name }} · Shelves · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{{ shelf.name }}</h1>
+    <p class="muted">{{ products|length }} product{{ '' if products|length == 1 else 's' }} on this shelf.</p>
+  </div>
+  <a class="btn-link" href="/shelves">← Back to Shelves</a>
+</div>
+
+<div class="card" style="max-width:420px; margin-bottom:18px;">
+  <h2 style="margin:0 0 12px; font-size:16px;">Rename shelf</h2>
+  <form class="form" method="post" action="/shelves/{{ shelf.id }}/rename" style="grid-template-columns:1fr auto; align-items:end; gap:10px;">
+    <label style="margin:0;">Name
+      <input type="text" name="name" value="{{ shelf.name }}" maxlength="80" required>
+    </label>
+    <button class="btn" type="submit">Save</button>
+  </form>
+  <form method="post" action="/shelves/{{ shelf.id }}/delete" style="margin-top:12px;"
+        onsubmit="return confirm('Delete {{ shelf.name|e }}? Only works if no products are still assigned to it.');">
+    <button class="btn-link danger" type="submit">Delete this shelf</button>
+  </form>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Product Name</th><th>Category</th><th class="num">Total Qty</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for p in products %}
+      <tr>
+        <td class="strong">{{ p.name }}</td>
+        <td>{{ p.category.name if p.category else '—' }}</td>
+        <td class="num">{{ p.total_qty|whole_qty }}</td>
+        <td class="row-actions"><a class="btn-link" href="/products/{{ p.id }}/edit">Edit</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">Nothing assigned to this shelf yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

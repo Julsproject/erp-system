@@ -32,6 +32,10 @@ DEFAULTS = {
     # at 0 (i.e. nobody set one). Blank = disabled, so an unset product stays
     # silent until either this or its own reorder level is configured.
     "default_low_stock_pct": "",
+    # Off by default: voiding a sale is admin/manager-only. Set to "1" to
+    # let a cashier void their own sales too (e.g. a busy shop where waiting
+    # for a manager to fix a same-day typo isn't practical).
+    "cashier_can_void": "",
 }
 
 
@@ -103,5 +107,18 @@ def default_low_stock_pct():
         return float(raw) if raw not in (None, "") else None
     except Exception:
         return None
+    finally:
+        db.close()
+
+
+def cashier_can_void() -> bool:
+    """Whether a cashier (not just admin/manager) is allowed to void a sale.
+    Standalone lookup (opens its own session) so the POS void route doesn't
+    need a request-scoped db session just for this one check."""
+    db = SessionLocal()
+    try:
+        return get_setting(db, "cashier_can_void", "") == "1"
+    except Exception:
+        return False
     finally:
         db.close()

@@ -151,7 +151,7 @@ def customer_history(customer_id: int, request: Request, db: Session = Depends(g
 
     sales = (
         db.query(models.Sale)
-        .filter(models.Sale.customer_id == customer_id)
+        .filter(models.Sale.customer_id == customer_id, models.Sale.is_voided.is_(False))
         .order_by(models.Sale.id.desc())
         .all()
     )
@@ -201,7 +201,7 @@ def export_customer_history_excel(customer_id: int, db: Session = Depends(get_db
 
     sales = (
         db.query(models.Sale)
-        .filter(models.Sale.customer_id == customer_id)
+        .filter(models.Sale.customer_id == customer_id, models.Sale.is_voided.is_(False))
         .order_by(models.Sale.id.desc())
         .all()
     )
@@ -266,7 +266,7 @@ def export_customer_history_pdf(customer_id: int, db: Session = Depends(get_db),
 
     sales = (
         db.query(models.Sale)
-        .filter(models.Sale.customer_id == customer_id)
+        .filter(models.Sale.customer_id == customer_id, models.Sale.is_voided.is_(False))
         .order_by(models.Sale.id.desc())
         .all()
     )

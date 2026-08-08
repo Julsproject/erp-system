@@ -10,15 +10,15 @@ from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from . import models, settings_store
+from . import audit, models, settings_store
 from .customers import get_or_create_customer
 from .database import get_db
-from .deps import get_current_user
+from .deps import get_current_user, is_staff
 from .products import _get_or_create_category, _get_or_create_unit_type
 from .templating import templates
 
@@ -95,6 +95,14 @@ def _deduct_stock(product: models.Product, base_qty: Decimal):
 def _add_stock(product: models.Product, base_qty: Decimal):
     """Add base_qty back to on-hand (used by refunds and exchange returns)."""
     product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
+
+
+def _can_void_sale(user) -> bool:
+    """Admin/Manager can always void; a cashier only if the owner has
+    explicitly turned that on in Settings (off by default)."""
+    if is_staff(user):
+        return True
+    return (user.role or "").lower() == "cashier" and settings_store.cashier_can_void()
 
 
 def _sale_outstanding(db: Session, sale) -> Decimal:
@@ -475,7 +483,7 @@ def pos_lookup(invoice: str = "", db: Session = Depends(get_db), user=Depends(ge
     invoice = (invoice or "").strip()
     sale = (
         db.query(models.Sale)
-        .filter(models.Sale.invoice_no == invoice, models.Sale.txn_type == "sale")
+        .filter(models.Sale.invoice_no == invoice, models.Sale.txn_type == "sale", models.Sale.is_voided.is_(False))
         .first()
     )
     if not sale:
@@ -847,6 +855,7 @@ def pos_receipt(
     cust: int = 0,
     quote: int = 0,
     thermal: int = 0,
+    void_error: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -880,8 +889,96 @@ def pos_receipt(
         "receipt.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "sale": sale, "from": from_, "cust": cust, "quote": quote, "thermal": thermal,
-         "linked": linked, "original": original, "credit_outstanding": credit_outstanding},
+         "linked": linked, "original": original, "credit_outstanding": credit_outstanding,
+         "can_void": _can_void_sale(user), "void_error": VOID_ERRORS.get(void_error)},
     )
+
+
+# Phase 1 of Void a Sale: only a clean, standalone "sale" can be voided —
+# nothing with credit, a linked refund/exchange, or a post-dated cheque
+# already touching it. Those cases involve money that's moved somewhere
+# else and need to be unwound by hand first; this covers the actual everyday
+# case (a same-day data-entry typo caught before anything else built on it).
+VOID_ERRORS = {
+    "reason": "Enter a reason for voiding this sale.",
+    "voided": "This sale is already voided.",
+    "type": "Only a plain sale can be voided here — not a refund or exchange.",
+    "credit": "This sale has a credit balance — settle or write it off before voiding.",
+    "linked": "This sale has a refund or exchange linked to it — void that first.",
+    "pdc": "This sale has a post-dated cheque recorded against it.",
+    "denied": "You don't have permission to void sales.",
+}
+
+
+@router.post("/pos/receipt/{sale_id:int}/void")
+def void_sale(
+    sale_id: int,
+    request: Request,
+    reason: str = Form(""),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    sale = db.get(models.Sale, sale_id)
+    if not sale:
+        return RedirectResponse("/pos", status_code=302)
+
+    def _back(err=None):
+        suffix = f"&void_error={err}" if err else ""
+        return RedirectResponse(f"/pos/receipt/{sale_id}?from=sales{suffix}", status_code=302)
+
+    if not _can_void_sale(user):
+        return _back("denied")
+    if sale.is_voided:
+        return _back("voided")
+    if sale.txn_type != "sale":
+        return _back("type")
+    reason = (reason or "").strip()
+    if not reason:
+        return _back("reason")
+    if (sale.receivable_amount or 0) > 0:
+        return _back("credit")
+    linked_exists = db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id).first()
+    if linked_exists:
+        return _back("linked")
+    pdc_exists = db.query(models.PostDatedCheque.id).filter(models.PostDatedCheque.sale_id == sale.id).first()
+    if pdc_exists:
+        return _back("pdc")
+
+    for line in sale.lines:
+        if not line.product_id:
+            continue
+        product = db.get(models.Product, line.product_id, with_for_update=True)
+        if not product:
+            continue
+        base_qty = Decimal(str(line.qty or 0)) * Decimal(str(line.unit_factor or 1))
+        _add_stock(product, base_qty)
+        unit_cost = Decimal(str(line.unit_cost or 0))
+        db.add(models.StockMovement(
+            product_id=product.id, qty_base=base_qty, reason="void",
+            ref=sale.invoice_no, unit_cost=unit_cost, value=base_qty * unit_cost,
+            note=f"Void: {reason}",
+        ))
+
+    # No settlements/PDC exist at this point (checked above), so any Payment
+    # rows here were plain cash/gcash/card/etc. for this sale alone — remove
+    # them so cashier-shift and payment-method totals don't still count money
+    # attributed to a sale that no longer counts as having happened.
+    db.query(models.Payment).filter(models.Payment.sale_id == sale.id).delete(synchronize_session=False)
+
+    sale.is_voided = True
+    sale.void_reason = reason[:255]
+    sale.voided_at = datetime.now(MANILA)
+    sale.voided_by_id = user.id
+
+    audit.record(
+        db, user=user, request=request, action="void", entity_type="sale",
+        entity_id=sale.id, entity_label=sale.invoice_no,
+        summary=f"Voided sale {sale.invoice_no}: {reason}",
+    )
+    db.commit()
+    return _back()
 
 
 @router.get("/pos/receipt/{sale_id:int}/pdf")

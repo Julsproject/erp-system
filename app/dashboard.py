@@ -44,7 +44,10 @@ def _sales_between(db: Session, start: date, end: date) -> Decimal:
     """Net sales (sales minus refunds, plus exchange differences)."""
     total = (
         db.query(func.coalesce(func.sum(models.Sale.total), 0))
-        .filter(_local_date(models.Sale.created_at).between(start, end))
+        .filter(
+            _local_date(models.Sale.created_at).between(start, end),
+            models.Sale.is_voided.is_(False),
+        )
         .scalar()
     )
     return Decimal(str(total or 0))
@@ -58,6 +61,7 @@ def _profit_between(db: Session, start: date, end: date) -> Decimal:
         .join(models.Sale, models.SaleLine.sale_id == models.Sale.id)
         .filter(
             models.Sale.txn_type == "sale",
+            models.Sale.is_voided.is_(False),
             _local_date(models.Sale.created_at).between(start, end),
         )
         .scalar()
@@ -183,7 +187,10 @@ def dashboard(
             _local_date(models.Sale.created_at).label("d"),
             func.coalesce(func.sum(models.Sale.total), 0),
         )
-        .filter(_local_date(models.Sale.created_at).between(period_start, period_end))
+        .filter(
+            _local_date(models.Sale.created_at).between(period_start, period_end),
+            models.Sale.is_voided.is_(False),
+        )
         .group_by("d")
         .all()
     )
@@ -227,7 +234,10 @@ def dashboard(
     # bucket, or a day with any overpaid split/exchange would overstate cash.
     change_given = Decimal(str(
         db.query(func.coalesce(func.sum(models.Sale.change_amount), 0))
-        .filter(_local_date(models.Sale.created_at).between(period_start, period_end))
+        .filter(
+            _local_date(models.Sale.created_at).between(period_start, period_end),
+            models.Sale.is_voided.is_(False),
+        )
         .scalar() or 0
     ))
     if "cash" in pay_totals or change_given > 0:
@@ -332,6 +342,7 @@ def dashboard(
         .join(models.Sale, models.SaleLine.sale_id == models.Sale.id)
         .filter(
             models.Sale.txn_type == "sale",
+            models.Sale.is_voided.is_(False),
             _local_date(models.Sale.created_at).between(period_start, period_end),
         )
         .group_by(models.SaleLine.product_id, models.SaleLine.product_name)
@@ -354,7 +365,10 @@ def dashboard(
     sold_ids = {
         r[0] for r in db.query(models.SaleLine.product_id)
         .join(models.Sale, models.SaleLine.sale_id == models.Sale.id)
-        .filter(_local_date(models.Sale.created_at) >= today - timedelta(days=30))
+        .filter(
+            _local_date(models.Sale.created_at) >= today - timedelta(days=30),
+            models.Sale.is_voided.is_(False),
+        )
         .distinct()
         .all()
         if r[0]
@@ -364,7 +378,13 @@ def dashboard(
         dead_q = dead_q.filter(~models.Product.id.in_(sold_ids))
     dead_stock = dead_q.order_by(models.Product.name).limit(8).all()
 
-    recent = db.query(models.Sale).order_by(models.Sale.id.desc()).limit(10).all()
+    recent = (
+        db.query(models.Sale)
+        .filter(models.Sale.is_voided.is_(False))
+        .order_by(models.Sale.id.desc())
+        .limit(10)
+        .all()
+    )
 
     # ---- backup health ---------------------------------------------------
     lb = latest_backup()

@@ -21,6 +21,17 @@
   <input id="scanBox" class="search pos-search" type="search" placeholder="Scan a barcode, or type a product name…" autofocus autocomplete="off">
   <div id="scanChoices" class="pos-results" style="display:none;"></div>
   <p class="muted" id="scanMsg" style="font-size:12.5px;margin:8px 0 0;"></p>
+  {% if shelves %}
+  <div style="display:flex;gap:8px;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid var(--line);">
+    <label style="margin:0;font-size:12.5px;color:var(--muted);">Or add a whole shelf at once
+      <select id="shelfAddSelect" style="display:block;margin-top:4px;">
+        <option value="">Pick a shelf…</option>
+        {% for s in shelves %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="button" class="btn-secondary" style="margin-top:14px;" onclick="addShelf()">+ Add all products on this shelf</button>
+  </div>
+  {% endif %}
 </section>
 {% endif %}
 
@@ -29,6 +40,17 @@
   <div class="mini-stat" id="statVarianceBox"><span class="mini-num" id="statVariance">{{ variance_count }}</span><span>With a variance</span></div>
 </div>
 
+{% if shelves %}
+<div style="margin-bottom:10px;">
+  <label style="margin:0;font-size:12.5px;color:var(--muted);">Filter this list by shelf
+    <select id="shelfFilterSelect" style="display:block;margin-top:4px;max-width:220px;" onchange="filterByShelf(this.value)">
+      <option value="">All shelves</option>
+      {% for s in shelves %}<option value="{{ s.name }}">{{ s.name }}</option>{% endfor %}
+    </select>
+  </label>
+</div>
+{% endif %}
+
 <div class="table-wrap">
   <table class="grid" id="linesTable">
     <thead>
@@ -36,7 +58,7 @@
     </thead>
     <tbody>
       {% for l in lines %}
-      <tr data-line-id="{{ l.id }}">
+      <tr data-line-id="{{ l.id }}" data-shelf="{{ l.shelf or '' }}">
         <td class="strong">
           {{ l.name }}
           {% if l.units %}
@@ -118,6 +140,7 @@ function upsertRow(line) {
   const varClass = variance !== 0 ? 'owed' : '';
   const varText = (variance > 0 ? '+' : '') + fmtQty(variance);
   if (row) {
+    row.dataset.shelf = line.shelf || '';
     row.querySelector('.countedInput').value = fmtQty(line.counted_qty);
     const varCell = row.querySelector('.varCell');
     varCell.textContent = varText;
@@ -125,6 +148,7 @@ function upsertRow(line) {
   } else {
     row = document.createElement('tr');
     row.setAttribute('data-line-id', line.id);
+    row.dataset.shelf = line.shelf || '';
     const toggleBtn = line.units.length
       ? ' <button type="button" class="btn-link" style="font-size:11.5px;" onclick="toggleUnitRow(' + line.id + ')">per-unit count ▾</button>'
       : '';
@@ -271,6 +295,32 @@ async function setCounted(input) {
   });
   const data = await res.json();
   if (data.ok) upsertRow(data.line);
+}
+
+async function addShelf() {
+  const select = document.getElementById('shelfAddSelect');
+  const shelfId = select.value;
+  if (!shelfId) { scanMsg.textContent = 'Pick a shelf first.'; return; }
+  scanMsg.textContent = 'Adding…';
+  const res = await fetch('/stock-count/' + countId + '/add-shelf', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({shelf_id: shelfId}),
+  });
+  const data = await res.json();
+  if (!data.ok) { scanMsg.textContent = data.error || 'Could not add that shelf.'; return; }
+  data.lines.forEach(upsertRow);
+  scanMsg.textContent = data.added
+    ? data.added + ' product(s) added from ' + select.options[select.selectedIndex].text + '.'
+    : 'Everything on that shelf was already in this count.';
+  select.value = '';
+}
+
+function filterByShelf(shelfName) {
+  document.querySelectorAll('#linesTable tbody tr[data-line-id]').forEach(function (row) {
+    const match = !shelfName || row.dataset.shelf === shelfName;
+    row.style.display = match ? '' : 'none';
+    const unitRow = document.getElementById('unitRow' + row.getAttribute('data-line-id'));
+    if (unitRow && !match) unitRow.style.display = 'none';
+  });
 }
 
 updateStats();

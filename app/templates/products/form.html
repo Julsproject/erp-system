@@ -50,6 +50,15 @@
     <small class="hint">This is the base unit for the ladder below.</small>
   </label>
 
+  <label>Shelf
+    <input name="shelf" list="shelf-list" placeholder="Optional — e.g. Shelf 1, Shelf A"
+           value="{{ product.shelf.name if product and product.shelf else '' }}">
+    <datalist id="shelf-list">
+      {% for s in shelves %}<option value="{{ s.name }}">{% endfor %}
+    </datalist>
+    <small class="hint">Where this item is physically kept. Type a new one to create it, or pick an existing shelf.</small>
+  </label>
+
   <label>Cost of Sales (₱)
     <input name="cost_price" type="number" step="1" min="0" inputmode="decimal"
            placeholder="leave blank if not yet known"

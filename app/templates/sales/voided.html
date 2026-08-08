@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Voided Sales · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Voided Sales</h1>
+</div>
+
+<div class="tabs">
+  <a class="tab" href="/sales">Cash Sales</a>
+  <a class="tab" href="/sales/receivables">Credit Sales (Accounts Receivable)</a>
+  <a class="tab" href="/quotations">Sales Quotation</a>
+  <a class="tab" href="/sales/returns">Sales Returns</a>
+  <a class="tab" href="/sales/exchanges">Exchange of Items</a>
+  <a class="tab active" href="/sales/voided">Voided Sales</a>
+  <a class="tab" href="/customers">Customers</a>
+</div>
+
+<p class="muted" style="margin:-6px 0 16px;">
+  Sales cancelled after the fact — stock and payment were reversed at void time, and they no longer count in
+  Cash Sales, the Dashboard, or any report. This list is the only place they still show up.
+</p>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Invoice #</th><th>Sale Date</th><th>Customer</th><th class="num">Amount</th><th>Voided</th><th>By</th><th>Reason</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for s in rows %}
+      <tr>
+        <td class="strong">{{ s.invoice_no }}</td>
+        <td>{{ s.created_at.strftime('%b %d, %Y %I:%M %p') if s.created_at else '' }}</td>
+        <td>{{ s.customer_name or 'Walk-in' }}</td>
+        <td class="num strong">{{ s.total|peso }}</td>
+        <td>{{ s.voided_at.strftime('%b %d, %Y %I:%M %p') if s.voided_at else '—' }}</td>
+        <td>{{ (s.voided_by.full_name or s.voided_by.username) if s.voided_by else '—' }}</td>
+        <td>{{ s.void_reason or '—' }}</td>
+        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales">Receipt</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="empty">No voided sales{{ '' }}.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn-secondary" href="/sales/voided?page={{ page - 1 }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-secondary" href="/sales/voided?page={{ page + 1 }}">Next →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

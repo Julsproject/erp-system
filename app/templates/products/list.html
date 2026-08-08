@@ -12,6 +12,7 @@
   <div class="head-actions">
     <a class="btn-secondary" href="/products/export.xlsx?q={{ q }}&category_id={{ category_id }}&subcategory_id={{ subcategory_id }}&alert={{ 1 if alert else 0 }}">⬇ Export Excel</a>
     <a class="btn-secondary" href="/products/archived">🗄 Archived</a>
+    <a class="btn-secondary" href="/shelves">🗂 Shelves</a>
     <a class="btn-secondary" href="/products/import">⬆ Import Excel</a>
     <a class="btn" href="/products/new">+ Add product</a>
   </div>
@@ -67,13 +68,25 @@
 </div>
 {% endif %}
 
+{% if shelves %}
+<div class="cat-pills">
+  <a class="cat-pill {{ 'active' if not shelf_id }}" href="/products?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}{{ 'subcategory_id=' ~ subcategory_id ~ '&' if subcategory_id }}shelf_id=0">All shelves</a>
+  {% for s in shelves %}
+  <a class="cat-pill {{ 'active' if shelf_id == s.id }}" href="/products?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}{{ 'subcategory_id=' ~ subcategory_id ~ '&' if subcategory_id }}shelf_id={{ s.id }}">
+    {{ s.name }} <span class="cat-pill-count">{{ shelf_counts.get(s.id, 0) }}</span>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
 <form class="toolbar" method="get" action="/products">
   {% if alert %}<input type="hidden" name="alert" value="1">{% endif %}
   {% if category_id %}<input type="hidden" name="category_id" value="{{ category_id }}">{% endif %}
   {% if subcategory_id %}<input type="hidden" name="subcategory_id" value="{{ subcategory_id }}">{% endif %}
+  {% if shelf_id %}<input type="hidden" name="shelf_id" value="{{ shelf_id }}">{% endif %}
   <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search product name or scan barcode…" autofocus>
   <button class="btn-secondary" type="submit">Search</button>
-  {% if q or category_id or subcategory_id %}<a class="btn-link" href="/products{{ '?alert=1' if alert }}">Clear</a>{% endif %}
+  {% if q or category_id or subcategory_id or shelf_id %}<a class="btn-link" href="/products{{ '?alert=1' if alert }}">Clear</a>{% endif %}
 </form>
 
 <form id="bulkForm" method="post">
@@ -87,6 +100,7 @@
         <th>Category</th>
         <th>Sub Category</th>
         <th>Unit Type</th>
+        <th>Shelf</th>
         <th class="num">Cost of Sales</th>
         {% if is_admin_user %}<th class="num">Selling Price</th>{% endif %}
         <th class="num">Actual Beginning</th>
@@ -118,6 +132,7 @@
         <td>{{ p.category.name if p.category else '—' }}</td>
         <td>{{ p.subcategory.name if p.subcategory else '—' }}</td>
         <td>{{ p.unit_type.name if p.unit_type else '—' }}</td>
+        <td>{{ p.shelf.name if p.shelf else '—' }}</td>
         <td class="num">
           {% if p.cost_price and p.cost_price > 0 %}{{ p.cost_price|peso }}
           {% else %}<span class="muted">not set</span>{% endif %}
@@ -144,7 +159,7 @@
       {% if p.unit_breakdown %}
       {% set tiers = p.unit_breakdown %}
       <tr class="container-row">
-        <td colspan="{{ 12 if is_admin_user else 11 }}" class="container-line">
+        <td colspan="{{ 13 if is_admin_user else 12 }}" class="container-line">
           ↳
           {% for tier in tiers %}
             {%- set is_last = loop.last and tiers|length > 1 -%}
@@ -202,9 +217,9 @@
 
 {% if pages > 1 %}
 <div class="pager">
-  {% if page > 1 %}<a class="btn-secondary" href="/products?page={{ page - 1 }}&q={{ q }}{{ '&alert=1' if alert }}{{ '&category_id=' ~ category_id if category_id }}{{ '&subcategory_id=' ~ subcategory_id if subcategory_id }}">← Prev</a>{% endif %}
+  {% if page > 1 %}<a class="btn-secondary" href="/products?page={{ page - 1 }}&q={{ q }}{{ '&alert=1' if alert }}{{ '&category_id=' ~ category_id if category_id }}{{ '&subcategory_id=' ~ subcategory_id if subcategory_id }}{{ '&shelf_id=' ~ shelf_id if shelf_id }}">← Prev</a>{% endif %}
   <span class="muted">Page {{ page }} of {{ pages }}</span>
-  {% if page < pages %}<a class="btn-secondary" href="/products?page={{ page + 1 }}&q={{ q }}{{ '&alert=1' if alert }}{{ '&category_id=' ~ category_id if category_id }}{{ '&subcategory_id=' ~ subcategory_id if subcategory_id }}">Next →</a>{% endif %}
+  {% if page < pages %}<a class="btn-secondary" href="/products?page={{ page + 1 }}&q={{ q }}{{ '&alert=1' if alert }}{{ '&category_id=' ~ category_id if category_id }}{{ '&subcategory_id=' ~ subcategory_id if subcategory_id }}{{ '&shelf_id=' ~ shelf_id if shelf_id }}">Next →</a>{% endif %}
 </div>
 {% endif %}
 

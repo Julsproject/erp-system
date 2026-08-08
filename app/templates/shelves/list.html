@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Shelves · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Shelves</h1>
+    <p class="muted">Where products are physically kept in the store. Click a shelf to see what's on it.</p>
+  </div>
+  <a class="btn-link" href="/products">← Back to inventory</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<div class="card" style="max-width:420px; margin-bottom:18px;">
+  <h2 style="margin:0 0 12px; font-size:16px;">Add a shelf</h2>
+  <form class="form" method="post" action="/shelves" style="grid-template-columns:1fr;">
+    <label>Shelf name
+      <input type="text" name="name" placeholder="e.g. Shelf 1, Shelf A" maxlength="80" required>
+    </label>
+    <div class="form-actions">
+      <button class="btn" type="submit">+ Add shelf</button>
+    </div>
+  </form>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Shelf</th><th class="num">Products</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for s in shelves %}
+      <tr>
+        <td class="strong">{{ s.name }}</td>
+        <td class="num">{{ counts.get(s.id, 0) }}</td>
+        <td class="row-actions"><a class="btn-link" href="/shelves/{{ s.id }}">View items</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="empty">No shelves yet — add one above.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

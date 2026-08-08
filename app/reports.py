@@ -80,7 +80,10 @@ def _pl_data(db: Session, period_start: date, period_end: date):
     totals); Gross Profit = revenue from 'sale' lines minus their frozen cost."""
     revenue = (
         db.query(func.coalesce(func.sum(models.Sale.total), 0))
-        .filter(_local_date(models.Sale.created_at).between(period_start, period_end))
+        .filter(
+            _local_date(models.Sale.created_at).between(period_start, period_end),
+            models.Sale.is_voided.is_(False),
+        )
         .scalar()
     )
     revenue = Decimal(str(revenue or 0))
@@ -89,7 +92,11 @@ def _pl_data(db: Session, period_start: date, period_end: date):
     gross_profit = (
         db.query(func.coalesce(func.sum(models.SaleLine.line_total - cogs_expr), 0))
         .join(models.Sale, models.SaleLine.sale_id == models.Sale.id)
-        .filter(models.Sale.txn_type == "sale", _local_date(models.Sale.created_at).between(period_start, period_end))
+        .filter(
+            models.Sale.txn_type == "sale",
+            models.Sale.is_voided.is_(False),
+            _local_date(models.Sale.created_at).between(period_start, period_end),
+        )
         .scalar()
     )
     gross_profit = Decimal(str(gross_profit or 0))
@@ -252,7 +259,11 @@ def _sales_by_product(db: Session, period_start: date, period_end: date):
             func.coalesce(func.sum(models.SaleLine.line_total - cogs_expr), 0).label("profit"),
         )
         .join(models.Sale, models.SaleLine.sale_id == models.Sale.id)
-        .filter(models.Sale.txn_type == "sale", _local_date(models.Sale.created_at).between(period_start, period_end))
+        .filter(
+            models.Sale.txn_type == "sale",
+            models.Sale.is_voided.is_(False),
+            _local_date(models.Sale.created_at).between(period_start, period_end),
+        )
         .group_by(models.SaleLine.product_name)
         .all()
     )
@@ -366,6 +377,7 @@ def _sales_by_unit(db: Session, period_start: date, period_end: date):
         .join(models.Sale, models.SaleLine.sale_id == models.Sale.id)
         .filter(
             models.Sale.txn_type == "sale",
+            models.Sale.is_voided.is_(False),
             models.SaleLine.qty > 0,
             _local_date(models.Sale.created_at).between(period_start, period_end),
         )
@@ -762,7 +774,11 @@ def _weekly_summary_data(db: Session, period_start: date, period_end: date):
 
     sales_count = (
         db.query(func.count(models.Sale.id))
-        .filter(models.Sale.txn_type == "sale", _local_date(models.Sale.created_at).between(period_start, period_end))
+        .filter(
+            models.Sale.txn_type == "sale",
+            models.Sale.is_voided.is_(False),
+            _local_date(models.Sale.created_at).between(period_start, period_end),
+        )
         .scalar()
     ) or 0
     refunds_total = (

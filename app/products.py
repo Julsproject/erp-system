@@ -243,6 +243,19 @@ def _get_or_create_unit_type(db: Session, name: str):
     return unit
 
 
+def _get_or_create_shelf(db: Session, name: str):
+    name = (name or "").strip()
+    if not name:
+        return None
+    existing = db.query(models.Shelf).filter(func.lower(models.Shelf.name) == name.lower()).first()
+    if existing:
+        return existing
+    shelf = models.Shelf(name=name)
+    db.add(shelf)
+    db.flush()
+    return shelf
+
+
 _needs_review_expr = pricing.needs_review_expr
 
 
@@ -282,6 +295,7 @@ def list_products(
     alert: int = 0,
     category_id: int = 0,
     subcategory_id: int = 0,
+    shelf_id: int = 0,
     bulk_msg: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
@@ -307,6 +321,8 @@ def list_products(
         query = query.filter(models.Product.category_id == category_id)
     if subcategory_id:
         query = query.filter(models.Product.subcategory_id == subcategory_id)
+    if shelf_id:
+        query = query.filter(models.Product.shelf_id == shelf_id)
 
     total = query.count()
     pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
@@ -371,6 +387,21 @@ def list_products(
         .all()
     ) if subcat_counts else []
 
+    # Shelf pills: same live-count idea, independent of Category/Sub Category
+    # (a shelf can hold products from any category).
+    shelf_counts = dict(
+        base_for_counts.filter(models.Product.shelf_id.isnot(None))
+        .with_entities(models.Product.shelf_id, func.count(models.Product.id))
+        .group_by(models.Product.shelf_id)
+        .all()
+    )
+    shelves = (
+        db.query(models.Shelf)
+        .filter(models.Shelf.id.in_(shelf_counts.keys()))
+        .order_by(models.Shelf.name)
+        .all()
+    ) if shelf_counts else []
+
     return templates.TemplateResponse(
         "products/list.html",
         {
@@ -392,6 +423,9 @@ def list_products(
             "subcategory_id": subcategory_id,
             "subcategories": subcategories,
             "subcat_counts": subcat_counts,
+            "shelf_id": shelf_id,
+            "shelves": shelves,
+            "shelf_counts": shelf_counts,
             "last_rollover_period": settings_store.get_setting(db, MONTH_END_SETTING_KEY, ""),
         },
     )
@@ -468,6 +502,7 @@ def _render_form(request, db, user, product=None, error=None):
     categories = db.query(models.Category).order_by(models.Category.name).all()
     subcategories = db.query(models.SubCategory).order_by(models.SubCategory.name).all()
     unit_types = db.query(models.UnitType).order_by(models.UnitType.name).all()
+    shelves = db.query(models.Shelf).order_by(models.Shelf.name).all()
     return templates.TemplateResponse(
         "products/form.html",
         {
@@ -478,6 +513,7 @@ def _render_form(request, db, user, product=None, error=None):
             "categories": categories,
             "subcategories": subcategories,
             "unit_types": unit_types,
+            "shelves": shelves,
             "adjustment_reasons": ADJUSTMENT_REASONS,
             "error": error,
         },
@@ -507,6 +543,7 @@ def _save_from_form(product: models.Product, db: Session, form):
     product.category = _get_or_create_category(db, form.get("category"))
     product.subcategory = _get_or_create_subcategory(db, form.get("subcategory"), product.category)
     product.unit_type = _get_or_create_unit_type(db, form.get("unit_type"))
+    product.shelf = _get_or_create_shelf(db, form.get("shelf"))
     product.cost_price = _to_decimal(form.get("cost_price"))
     # Selling prices are set on the Add-product form and from then on only
     # through the dedicated Selling Price tab (see /products/pricing) — the

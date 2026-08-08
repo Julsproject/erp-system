@@ -79,6 +79,7 @@ def _line_dict(line: models.StockCountLine) -> dict:
         "counted_qty": float(line.counted_qty or 0),
         "variance": float(variance),
         "units": units if len(units) > 1 else [],  # only worth showing when there's an actual ladder
+        "shelf": (product.shelf.name if product and product.shelf else None),
     }
 
 
@@ -136,11 +137,12 @@ def stock_count_view(count_id: int, request: Request, db: Session = Depends(get_
     )
     lines = [_line_dict(l) for l in line_rows]
     variance_count = sum(1 for l in lines if l["counted_qty"] != l["system_qty"])
+    shelves = db.query(models.Shelf).order_by(models.Shelf.name).all()
     return templates.TemplateResponse(
         "stock_count/session.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "count": count, "lines": lines, "variance_count": variance_count,
-         "adjustment_reasons": ADJUSTMENT_REASONS},
+         "adjustment_reasons": ADJUSTMENT_REASONS, "shelves": shelves},
     )
 
 
@@ -186,6 +188,53 @@ async def stock_count_scan(count_id: int, request: Request, db: Session = Depend
     line.counted_qty = Decimal(str(line.counted_qty or 0)) + add_qty
     db.commit()
     return {"ok": True, "line": _line_dict(line)}
+
+
+@router.post("/stock-count/{count_id:int}/add-shelf")
+async def stock_count_add_shelf(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Bulk-add every product on one shelf as a line (counted_qty starts at
+    0, same as a freshly-scanned line) — lets a count be worked shelf by
+    shelf instead of hunting the alphabetical product list."""
+    if not user or not is_staff(user):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    count = db.get(models.StockCount, count_id)
+    if not count or count.status != "open":
+        return JSONResponse({"ok": False, "error": "This count isn't open anymore."}, status_code=400)
+
+    data = await request.json()
+    shelf_id = data.get("shelf_id")
+    if not shelf_id:
+        return JSONResponse({"ok": False, "error": "Pick a shelf."}, status_code=400)
+    products = (
+        db.query(models.Product)
+        .filter(models.Product.shelf_id == int(shelf_id), models.Product.is_active.is_(True))
+        .all()
+    )
+    if not products:
+        return JSONResponse({"ok": False, "error": "No products are assigned to that shelf yet."}, status_code=404)
+
+    existing_ids = {
+        pid for (pid,) in db.query(models.StockCountLine.product_id)
+        .filter(models.StockCountLine.stock_count_id == count.id).all()
+    }
+    added = 0
+    for product in products:
+        if product.id in existing_ids:
+            continue
+        db.add(models.StockCountLine(
+            stock_count_id=count.id, product_id=product.id, product_name=product.name,
+            system_qty=Decimal(str(product.total_qty or 0)), counted_qty=Decimal("0"),
+        ))
+        added += 1
+    db.commit()
+
+    line_rows = (
+        db.query(models.StockCountLine)
+        .filter(models.StockCountLine.stock_count_id == count.id)
+        .order_by(models.StockCountLine.product_name)
+        .all()
+    )
+    return {"ok": True, "added": added, "lines": [_line_dict(l) for l in line_rows]}
 
 
 @router.get("/stock-count/{count_id:int}/search")
