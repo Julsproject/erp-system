@@ -8,24 +8,54 @@ line snapshots system_qty the moment it's first scanned, and Complete
 applies (counted - system_qty) as a signed stock movement, so it's still
 correct even if sales happen elsewhere on the system while counting.
 """
+import io
 import json
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+import openpyxl
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from . import audit, models
 from .database import get_db
 from .deps import get_current_user, is_staff
-from .products import ADJUSTMENT_REASON_LABELS, ADJUSTMENT_REASONS
+from .products import ADJUSTMENT_REASON_LABELS, ADJUSTMENT_REASONS, _parse_upload
 from .templating import templates
 
 router = APIRouter()
 
 PAGE_SIZE = 15
+
+# --- Bulk import (Excel / CSV) — fill in a count sheet instead of scanning
+# every item by hand. Columns read by header name, like the Products import.
+# Anything NOT listed here is treated as a per-unit column named after one of
+# the product's own units (Sack, Elf Load, ...), so the reference-only columns
+# below must be mapped even though nothing reads their value — otherwise a
+# filled "Unit" cell would be misread as a unit quantity.
+HEADER_MAP_COUNT = {
+    "barcode": "barcode", "bar code": "barcode", "upc": "barcode", "ean": "barcode",
+    "product name": "name", "name": "name", "product": "name",
+    "counted qty": "counted", "counted": "counted", "count": "counted", "qty": "counted", "quantity": "counted",
+    "unit": "unit_label", "base unit": "unit_label",
+    "system qty (reference only)": "system_ref", "system qty": "system_ref", "system": "system_ref",
+}
+FIELDS_COUNT = ["barcode", "name", "counted", "unit_label", "system_ref"]
+BASE_HEADERS_COUNT = ["Barcode", "Product Name", "Unit", "System Qty (reference only)", "Counted Qty"]
+
+
+# Cells the count sheet writes as "not applicable" for a unit this product
+# doesn't have. They read as filled-in text, so they'd otherwise come back on
+# re-import looking like a quantity.
+_BLANK_CELLS = {"", "—", "–", "-", "n/a", "na"}
+
+
+def _is_blank_cell(value) -> bool:
+    return str(value or "").strip().lower() in _BLANK_CELLS
 
 
 def _dec(value, default="0") -> Decimal:
@@ -83,6 +113,155 @@ def _line_dict(line: models.StockCountLine) -> dict:
     }
 
 
+def _classify_count_import_rows(db: Session, count: models.StockCount, numbered_rows):
+    """Read-only pass: match each row to a product (barcode wins, else exact
+    name), skipping rows with nothing counted (a count sheet is filled in
+    gradually, so most rows may still be blank).
+
+    A row can express its count either as a plain base-unit number in the
+    Counted Qty column, or spread across the per-unit columns (Sack, Elf
+    Load, ...) — or both, which simply add up. Every unit is converted to
+    base units via factor_to_base, exactly like the per-unit entry in the
+    scan UI, because stock is stored as one base-unit number."""
+    existing_line_by_product = {l.product_id: l for l in count.lines}
+    classified = []
+    for line_no, record in numbered_rows:
+        barcode = (record["barcode"] or "").strip()
+        name = (record["name"] or "").strip()
+        counted_raw = (record["counted"] or "").strip()
+        extra = {k: v for k, v in (record.get("_extra") or {}).items() if not _is_blank_cell(v)}
+        if not barcode and not name:
+            continue
+        if not counted_raw and not extra:
+            classified.append({"line_no": line_no, "name": name or barcode, "action": "blank"})
+            continue
+
+        product = None
+        if barcode:
+            product = (
+                db.query(models.Product)
+                .filter(models.Product.is_active.is_(True), models.Product.barcode == barcode)
+                .first()
+            )
+        if not product and name:
+            product = (
+                db.query(models.Product)
+                .filter(models.Product.is_active.is_(True), func.lower(models.Product.name) == name.lower())
+                .first()
+            )
+        if not product:
+            classified.append({
+                "line_no": line_no, "name": name or barcode, "action": "error",
+                "message": f"No active product matches {'barcode ' + barcode if barcode else 'name “' + name + '”'}.",
+            })
+            continue
+
+        base_name = product.unit_type.name if product.unit_type else "unit"
+        factor_by_key = {base_name.strip().lower(): (base_name, Decimal("1"))}
+        for u in product.units:
+            factor_by_key[u.name.strip().lower()] = (u.name, Decimal(str(u.factor_to_base or 0)))
+
+        total = Decimal("0")
+        breakdown = {}
+        err = None
+        for raw_label, raw_val in [(base_name, counted_raw)] + list(extra.items()):
+            val = str(raw_val or "").strip()
+            if not val:
+                continue
+            hit = factor_by_key.get(raw_label.strip().lower())
+            if not hit:
+                # A per-unit column that this particular product doesn't have
+                # is normal — the sheet carries one column per unit found
+                # across ALL products, so most rows leave most of them blank.
+                # A *filled* one, though, is a real mistake worth reporting.
+                err = f"“{raw_label}” isn't a unit of {product.name}."
+                break
+            unit_name, factor = hit
+            try:
+                qty = Decimal(val.replace(",", ""))
+            except InvalidOperation:
+                err = f"“{val}” isn't a valid quantity for {unit_name}."
+                break
+            if qty < 0:
+                err = f"Quantity for {unit_name} can't be negative."
+                break
+            total += qty * factor
+            breakdown[unit_name] = val
+        if err:
+            classified.append({"line_no": line_no, "name": product.name, "action": "error", "message": err})
+            continue
+
+        classified.append({
+            "line_no": line_no, "name": product.name, "action": "set",
+            "product": product, "counted": total,
+            # Only worth recording a breakdown when more than the base unit was
+            # used — a plain number stays a plain number, same as a typed edit.
+            "breakdown": breakdown if len(breakdown) > 1 or (breakdown and base_name not in breakdown) else None,
+            "line": existing_line_by_product.get(product.id),
+        })
+    return classified
+
+
+def _run_count_import(db: Session, count: models.StockCount, classified):
+    """Apply each matched row's Counted Qty as a line's new count — same
+    effect as typing it into the Counted field by hand. A later row for the
+    same product in the same file simply overwrites an earlier one."""
+    applied = skipped = 0
+    errors = []
+    lines_by_product = {}
+    for item in classified:
+        line_no, name, action = item["line_no"], item["name"], item["action"]
+        if action == "blank":
+            skipped += 1
+            continue
+        if action == "error":
+            errors.append({"row": line_no, "name": name, "message": item["message"]})
+            continue
+        product = item["product"]
+        line = lines_by_product.get(product.id) or item["line"]
+        if not line:
+            line = models.StockCountLine(
+                stock_count_id=count.id, product_id=product.id, product_name=product.name,
+                system_qty=Decimal(str(product.total_qty or 0)), counted_qty=Decimal("0"),
+            )
+            db.add(line)
+        line.counted_qty = item["counted"]
+        line.unit_breakdown = json.dumps(item["breakdown"]) if item.get("breakdown") else None
+        lines_by_product[product.id] = line
+        applied += 1
+    db.commit()
+    return {
+        "applied": applied, "skipped": skipped, "errors": errors,
+        "total": len(classified),
+    }
+
+
+def _uncounted_negatives(db: Session, count: models.StockCount):
+    """Active products sitting at negative on-hand that aren't in this count.
+
+    Negative stock is normal while a backlog of past sales is being encoded
+    against an inventory that was never opened — but by the time a count is
+    completed, every one of those should have been physically counted and
+    corrected. Anything still negative and *not* in the count is a product
+    nobody put eyes on, and completing without it leaves that negative on the
+    books indefinitely. Surfaced as a warning (not a block) — a shop may
+    legitimately be counting only one shelf.
+    """
+    counted_ids = {
+        pid for (pid,) in db.query(models.StockCountLine.product_id)
+        .filter(models.StockCountLine.stock_count_id == count.id).all()
+    }
+    on_hand = func.coalesce(models.Product.beginning_stock, 0) + func.coalesce(models.Product.stock_qty, 0)
+    q = (
+        db.query(models.Product)
+        .filter(models.Product.is_active.is_(True), on_hand < 0)
+        .order_by(on_hand, models.Product.name)
+    )
+    if counted_ids:
+        q = q.filter(~models.Product.id.in_(counted_ids))
+    return q.all()
+
+
 @router.get("/stock-count", response_class=HTMLResponse)
 def stock_count_list(request: Request, page: int = 1, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
@@ -138,11 +317,13 @@ def stock_count_view(count_id: int, request: Request, db: Session = Depends(get_
     lines = [_line_dict(l) for l in line_rows]
     variance_count = sum(1 for l in lines if l["counted_qty"] != l["system_qty"])
     shelves = db.query(models.Shelf).order_by(models.Shelf.name).all()
+    missing_negatives = _uncounted_negatives(db, count) if count.status == "open" else []
     return templates.TemplateResponse(
         "stock_count/session.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "count": count, "lines": lines, "variance_count": variance_count,
-         "adjustment_reasons": ADJUSTMENT_REASONS, "shelves": shelves},
+         "adjustment_reasons": ADJUSTMENT_REASONS, "shelves": shelves,
+         "missing_negatives": missing_negatives},
     )
 
 
@@ -239,6 +420,166 @@ async def stock_count_add_shelf(count_id: int, request: Request, db: Session = D
         .all()
     )
     return {"ok": True, "added": added, "lines": [_line_dict(l) for l in line_rows]}
+
+
+@router.post("/stock-count/{count_id:int}/add-negatives")
+def stock_count_add_negatives(count_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Pull every still-negative uncounted product into this count in one go,
+    so the shop can go count exactly those instead of hunting them down from
+    the warning list by hand."""
+    if not user or not is_staff(user):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    count = db.get(models.StockCount, count_id)
+    if not count or count.status != "open":
+        return JSONResponse({"ok": False, "error": "This count isn't open anymore."}, status_code=400)
+
+    for product in _uncounted_negatives(db, count):
+        db.add(models.StockCountLine(
+            stock_count_id=count.id, product_id=product.id, product_name=product.name,
+            system_qty=Decimal(str(product.total_qty or 0)), counted_qty=Decimal("0"),
+        ))
+    db.commit()
+    return RedirectResponse(f"/stock-count/{count.id}", status_code=302)
+
+
+@router.get("/stock-count/{count_id:int}/import", response_class=HTMLResponse)
+def stock_count_import_form(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    count = db.get(models.StockCount, count_id)
+    if not count or count.status != "open":
+        return RedirectResponse("/stock-count", status_code=302)
+    shelves = db.query(models.Shelf).order_by(models.Shelf.name).all()
+    return templates.TemplateResponse(
+        "stock_count/import.html",
+        {"request": request, "app_name": request.app.title, "user": user, "count": count,
+         "shelves": shelves, "result": None},
+    )
+
+
+@router.post("/stock-count/{count_id:int}/import", response_class=HTMLResponse)
+async def stock_count_import_upload(
+    count_id: int, request: Request, file: UploadFile = File(...),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    count = db.get(models.StockCount, count_id)
+    if not count or count.status != "open":
+        return RedirectResponse("/stock-count", status_code=302)
+
+    contents = await file.read()
+    rows, error = _parse_upload(
+        file.filename, contents,
+        header_map=HEADER_MAP_COUNT, fields=FIELDS_COUNT,
+        required_field="name", required_label="Product Name",
+        keep_extra_columns=True,  # the per-unit columns are named per product
+    )
+    if error:
+        return templates.TemplateResponse(
+            "stock_count/import.html",
+            {"request": request, "app_name": request.app.title, "user": user, "count": count,
+             "result": {"error": error}},
+        )
+
+    classified = _classify_count_import_rows(db, count, list(enumerate(rows, start=2)))
+    result = _run_count_import(db, count, classified)
+    result["filename"] = file.filename
+    if result["applied"]:
+        audit.record(
+            db, user=user, request=request, action="stock_count", entity_type="stock_count",
+            entity_id=count.id, entity_label=count.ref_no,
+            summary=f"Stock count {count.ref_no}: bulk import from “{file.filename}” set {result['applied']} line(s)",
+        )
+        db.commit()
+    return templates.TemplateResponse(
+        "stock_count/import.html",
+        {"request": request, "app_name": request.app.title, "user": user, "count": count, "result": result},
+    )
+
+
+@router.get("/stock-count/{count_id:int}/import/template")
+def stock_count_import_template(count_id: int, shelf_id: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    count = db.get(models.StockCount, count_id)
+    if not count:
+        return RedirectResponse("/stock-count", status_code=302)
+
+    existing_by_product = {l.product_id: l for l in count.lines}
+    query = db.query(models.Product).filter(models.Product.is_active.is_(True))
+    shelf = db.get(models.Shelf, shelf_id) if shelf_id else None
+    if shelf:
+        query = query.filter(models.Product.shelf_id == shelf.id)
+    products = query.order_by(models.Product.name).all()
+
+    # One extra column per distinct unit found across the products being
+    # exported, so a product sold by the Sack can be counted as "2 Sack"
+    # instead of forcing the counter to work out 2 x 25 = 50 kg by hand.
+    # A shop with no unit ladders gets the plain 5-column sheet unchanged.
+    reserved = set(HEADER_MAP_COUNT)
+    unit_headers, seen = [], set()
+    for p in products:
+        for u in p.units:
+            label = (u.name or "").strip()
+            key = label.lower()
+            if label and key not in seen and key not in reserved:
+                seen.add(key)
+                unit_headers.append(label)
+    unit_headers.sort()
+    headers = BASE_HEADERS_COUNT + unit_headers
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = shelf.name[:31] if shelf else "Count Sheet"
+    ws.append(headers)
+    header_fill = PatternFill("solid", fgColor="1F6FEB")
+    unit_fill = PatternFill("solid", fgColor="0F766E")  # per-unit columns read as a distinct group
+    for i, cell in enumerate(ws[1]):
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = unit_fill if i >= len(BASE_HEADERS_COUNT) else header_fill
+
+    for p in products:
+        line = existing_by_product.get(p.id)
+        base_name = p.unit_type.name if p.unit_type else "unit"
+        try:
+            breakdown = json.loads(line.unit_breakdown) if line and line.unit_breakdown else {}
+        except (ValueError, TypeError):
+            breakdown = {}
+        # Pre-fill from however the count was already entered: a per-unit
+        # breakdown goes back into its own columns, a plain number into
+        # Counted Qty — so re-downloading mid-count shows the real state.
+        if breakdown:
+            base_cell = breakdown.get(base_name, "")
+        else:
+            base_cell = float(line.counted_qty) if line else ""
+        row = [p.barcode or "", p.name, base_name, float(p.total_qty or 0), base_cell]
+        own_units = {(u.name or "").strip().lower() for u in p.units}
+        for label in unit_headers:
+            key = label.lower()
+            row.append(breakdown.get(label, "") if key in own_units else "—")
+        ws.append(row)
+
+    widths = [18, 32, 12, 22, 14] + [12] * len(unit_headers)
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = "C2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    suffix = f"_{shelf.name}" if shelf else ""
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{count.ref_no}{suffix}_count_sheet.xlsx"'},
+    )
 
 
 @router.get("/stock-count/{count_id:int}/search")

@@ -75,10 +75,11 @@ def _back_url(user, sale=None) -> str:
     return "/credits"
 
 
-def _filtered_sales_query(db: Session, q: str, type_filter: str, date_from, date_to):
-    """Fully-paid sales, filtered by search text / type / date. Filtering (not
-    just fetch-then-check) happens at the SQL level so pagination counts and
-    the Excel export both see the same accurate result set."""
+def _filtered_sales_query(db: Session, q: str, type_filter: str, date_from, date_to, receipt_type: str = ""):
+    """Fully-paid sales, filtered by search text / type / date / booklet.
+    Filtering (not just fetch-then-check) happens at the SQL level so
+    pagination counts and the Excel export both see the same accurate
+    result set."""
     settled_sub = (
         db.query(
             models.ReceivableSettlement.sale_id.label("sid"),
@@ -108,6 +109,8 @@ def _filtered_sales_query(db: Session, q: str, type_filter: str, date_from, date
         query = query.filter(_local_date(models.Sale.created_at) >= date_from)
     if date_to:
         query = query.filter(_local_date(models.Sale.created_at) <= date_to)
+    if receipt_type:
+        query = query.filter(models.Sale.receipt_type == receipt_type)
     return query
 
 
@@ -118,6 +121,7 @@ def sales_history(
     type_filter: str = "",
     date_from: str = "",
     date_to: str = "",
+    receipt_type: str = "",
     page: int = 1,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
@@ -130,7 +134,7 @@ def sales_history(
     page = max(page, 1)
     df, dt = _parse_date(date_from), _parse_date(date_to)
 
-    query = _filtered_sales_query(db, q, type_filter, df, dt)
+    query = _filtered_sales_query(db, q, type_filter, df, dt, receipt_type)
 
     if type_filter == "sale":
         # "Sale" should read as sales only — an exchange's Total is netted
@@ -169,6 +173,7 @@ def sales_history(
          "sales": sales_page, "totals": totals, "tab": tab, "q": q,
          "row_totals": row_totals,
          "type_filter": type_filter, "date_from": date_from, "date_to": date_to,
+         "receipt_type": receipt_type,
          "types": TYPE_LABELS, "page": page, "pages": pages},
     )
 
@@ -179,6 +184,7 @@ def export_sales(
     type_filter: str = "",
     date_from: str = "",
     date_to: str = "",
+    receipt_type: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -189,7 +195,7 @@ def export_sales(
     q = (q or "").strip()
     df, dt = _parse_date(date_from), _parse_date(date_to)
 
-    query = _filtered_sales_query(db, q, type_filter, df, dt)
+    query = _filtered_sales_query(db, q, type_filter, df, dt, receipt_type)
     sales = query.order_by(models.Sale.id.desc()).all()
 
     wb = openpyxl.Workbook()
@@ -224,6 +230,8 @@ def export_sales(
     fname_bits = ["sales"]
     if type_filter in TYPE_LABELS:
         fname_bits.append(type_filter)
+    if receipt_type:
+        fname_bits.append(receipt_type)
     if date_from:
         fname_bits.append(date_from)
     if date_to and date_to != date_from:

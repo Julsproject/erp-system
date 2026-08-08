@@ -299,6 +299,9 @@ def list_products(
     subcategory_id: int = 0,
     shelf_id: int = 0,
     bulk_msg: str = "",
+    deleted: int = 0,
+    delete_blocked: int = 0,
+    delete_blocked_name: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -419,6 +422,9 @@ def list_products(
             "total_retail_value": total_retail_value,
             "alert": alert,
             "bulk_msg": bulk_msg,
+            "deleted": deleted,
+            "delete_blocked": delete_blocked,
+            "delete_blocked_name": delete_blocked_name,
             "category_id": category_id,
             "categories": categories,
             "cat_counts": cat_counts,
@@ -872,6 +878,57 @@ def archive_product(product_id: int, request: Request, db: Session = Depends(get
     return RedirectResponse("/products", status_code=status.HTTP_302_FOUND)
 
 
+def _product_has_history(db: Session, product_id: int) -> bool:
+    """True if this product is referenced anywhere real activity would be
+    lost from — a sale, purchase, quotation, stock movement, stock count, or
+    month-end rollover. Those foreign keys aren't ON DELETE CASCADE (on
+    purpose — the whole point is that a sale/adjustment from three months ago
+    must never silently disappear), so a hard DELETE on a product with any of
+    these would either fail outright or, worse, quietly erase history. Only a
+    product nobody has ever transacted against is safe to truly delete."""
+    checks = [
+        (models.SaleLine, models.SaleLine.product_id),
+        (models.QuotationLine, models.QuotationLine.product_id),
+        (models.PurchaseLine, models.PurchaseLine.product_id),
+        (models.StockMovement, models.StockMovement.product_id),
+        (models.StockCountLine, models.StockCountLine.product_id),
+        (models.MonthEndRolloverLine, models.MonthEndRolloverLine.product_id),
+    ]
+    for model, col in checks:
+        if db.query(model.id).filter(col == product_id).first():
+            return True
+    return False
+
+
+@router.post("/products/{product_id:int}/delete")
+def delete_product(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Permanently remove a product — only allowed when it has never been
+    transacted against (see _product_has_history). Anything with real
+    activity has to go through Archive instead, which is reversible and
+    doesn't touch its history."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    product = db.get(models.Product, product_id)
+    if not product:
+        return RedirectResponse("/products", status_code=status.HTTP_302_FOUND)
+
+    if _product_has_history(db, product.id):
+        return RedirectResponse(
+            f"/products?delete_blocked={product.id}&delete_blocked_name={product.name}",
+            status_code=status.HTTP_302_FOUND,
+        )
+
+    name = product.name
+    audit.record(
+        db, user=user, request=request, action="delete", entity_type="product",
+        entity_id=product.id, entity_label=name,
+        summary=f"Deleted “{name}” (never had any activity)",
+    )
+    db.delete(product)
+    db.commit()
+    return RedirectResponse("/products?deleted=1", status_code=status.HTTP_302_FOUND)
+
+
 @router.get("/products/archived", response_class=HTMLResponse)
 def list_archived_products(
     request: Request, q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user),
@@ -1068,7 +1125,8 @@ MOVEMENT_LABELS = {
     "sale": "Sale", "refund": "Refund (returned)",
     "exchange-return": "Exchange — returned in", "exchange-sale": "Exchange — sold out",
     "purchase": "Purchase received", "purchase-return": "Purchase return",
-    "adjustment": "Manual adjustment",
+    "adjustment": "Manual adjustment", "void": "Sale voided",
+    "sale-edit-reverse": "Item correction (reversed)",
 }
 
 
@@ -1261,10 +1319,17 @@ def _parse_bool(value: str) -> bool:
 
 
 def _parse_upload(filename: str, contents: bytes, header_map=None, fields=None,
-                   required_field="name", required_label="Product Name"):
+                   required_field="name", required_label="Product Name",
+                   keep_extra_columns=False):
     """Return (rows, error). rows is a list of dicts keyed by `fields`
     (defaults to the products FIELDS list; the Units & Conversions import
-    passes HEADER_MAP_UNITS/FIELDS_UNITS instead)."""
+    passes HEADER_MAP_UNITS/FIELDS_UNITS instead).
+
+    keep_extra_columns=True additionally puts every column the header_map
+    doesn't recognise into record["_extra"] as {header label: value}. The
+    stock-count sheet needs this: its per-unit columns are named after each
+    product's own units (Sack, Elf Load, ...), so they can't be known ahead
+    of time the way a fixed header map requires."""
     header_map = header_map if header_map is not None else HEADER_MAP
     fields = fields if fields is not None else FIELDS
     name = (filename or "").lower()
@@ -1286,10 +1351,14 @@ def _parse_upload(filename: str, contents: bytes, header_map=None, fields=None,
 
     header = table[0]
     idx = {}
+    extra_idx = {}
     for i, cell in enumerate(header):
-        key = str(cell or "").strip().lower()
+        label = str(cell or "").strip()
+        key = label.lower()
         if key in header_map:
             idx[header_map[key]] = i
+        elif keep_extra_columns and label:
+            extra_idx[label] = i
     if required_field not in idx:
         return None, (
             f"Missing a '{required_label}' column. Download the template to see the "
@@ -1308,8 +1377,15 @@ def _parse_upload(filename: str, contents: bytes, header_map=None, fields=None,
         if not raw:
             continue
         record = {f: cell(raw, f) for f in fields}
-        if not any(record[f] for f in fields):  # skip blank rows
+        extra = {}
+        if keep_extra_columns:
+            for label, i in extra_idx.items():
+                val = raw[i] if i < len(raw) else None
+                extra[label] = "" if val is None else str(val).strip()
+        if not any(record[f] for f in fields) and not any(extra.values()):  # skip blank rows
             continue
+        if keep_extra_columns:
+            record["_extra"] = extra
         # Shelf is the one column where "not in the file at all" has to stay
         # distinguishable from "in the file but blank": a re-import of an
         # updated price/stock list has no reason to mention shelves, and must

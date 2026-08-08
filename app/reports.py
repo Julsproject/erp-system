@@ -355,6 +355,147 @@ def export_sales_by_product(
     )
 
 
+def _price_override_rows(db: Session, period_start: date, period_end: date):
+    """Sale lines charged at a different price than what the product is
+    CURRENTLY listed at for that same price tier (fixed/markup/margin) —
+    either a cashier typed a lower number to give a customer a break, or a
+    higher one (a special/rush order, a small item priced up to round the
+    total, etc). Neither shows up anywhere else: the receipt just shows
+    whatever price was typed, no flag either way.
+
+    Compared against today's set price, not a historical snapshot (none is
+    kept per line) — so a genuine price change since the sale can make an
+    old, perfectly correct sale look flagged here. Reading from the most
+    recent sale downward keeps that mostly a non-issue in practice."""
+    rows = (
+        db.query(models.SaleLine, models.Sale, models.Product)
+        .join(models.Sale, models.SaleLine.sale_id == models.Sale.id)
+        .join(models.Product, models.SaleLine.product_id == models.Product.id)
+        .filter(
+            models.Sale.txn_type == "sale",
+            models.Sale.is_voided.is_(False),
+            models.SaleLine.qty > 0,
+            _local_date(models.Sale.created_at).between(period_start, period_end),
+        )
+        .order_by(models.Sale.created_at.desc())
+        .all()
+    )
+    out = []
+    for line, sale, product in rows:
+        tier = line.price_tier or "fixed"
+        if tier == "markup":
+            benchmark = Decimal(str(product.markup_price or 0))
+        elif tier == "margin":
+            benchmark = Decimal(str(product.margin_price or 0))
+        else:
+            benchmark = Decimal(str(product.selling_price or 0))
+        if benchmark <= 0:
+            continue  # nothing set for this tier to compare against
+        unit_price = Decimal(str(line.unit_price or 0))
+        diff = unit_price - benchmark  # >0 = charged more than list, <0 = charged less
+        if abs(diff) <= Decimal("0.01"):  # a one-centavo gap is rounding, not an override
+            continue
+        qty = Decimal(str(line.qty or 0))
+        out.append({
+            "sale": sale, "product": product, "tier": tier,
+            "benchmark": benchmark, "unit_price": unit_price, "qty": qty,
+            "direction": "over" if diff > 0 else "under",
+            "diff_per_unit": abs(diff), "diff_total": abs(diff) * qty,
+        })
+    out.sort(key=lambda r: r["diff_total"], reverse=True)
+    return out
+
+
+@router.get("/reports/price-overrides", response_class=HTMLResponse)
+def price_overrides(
+    request: Request,
+    days: int = 30,
+    date_from: str = "",
+    date_to: str = "",
+    direction: str = "",
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    period_start, period_end, custom = _resolve_period(days, date_from, date_to)
+    all_rows = _price_override_rows(db, period_start, period_end)
+    direction = direction if direction in ("under", "over") else ""
+    rows = [r for r in all_rows if not direction or r["direction"] == direction]
+    total_under = sum((r["diff_total"] for r in all_rows if r["direction"] == "under"), ZERO)
+    total_over = sum((r["diff_total"] for r in all_rows if r["direction"] == "over"), ZERO)
+    return templates.TemplateResponse(
+        "reports/price_overrides.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "days": days, "date_from": date_from, "date_to": date_to,
+            "period_start": period_start, "period_end": period_end, "custom": custom,
+            "direction": direction, "rows": rows,
+            "under_count": sum(1 for r in all_rows if r["direction"] == "under"),
+            "over_count": sum(1 for r in all_rows if r["direction"] == "over"),
+            "total_under": total_under, "total_over": total_over,
+        },
+    )
+
+
+@router.get("/reports/price-overrides/export")
+def export_price_overrides(
+    days: int = 30,
+    date_from: str = "",
+    date_to: str = "",
+    direction: str = "",
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    period_start, period_end, _ = _resolve_period(days, date_from, date_to)
+    direction = direction if direction in ("under", "over") else ""
+    rows = _price_override_rows(db, period_start, period_end)
+    if direction:
+        rows = [r for r in rows if r["direction"] == direction]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Price Overrides"
+    headers = ["Invoice #", "Date", "Cashier", "Product", "Direction", "Qty", "List Price", "Sold At", "Diff/Unit", "Total Diff"]
+    ws.append(headers)
+    header_fill = PatternFill("solid", fgColor="1F6FEB")
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+    for r in rows:
+        sale = r["sale"]
+        ws.append([
+            sale.invoice_no,
+            sale.created_at.strftime("%Y-%m-%d %H:%M") if sale.created_at else "",
+            (sale.cashier.full_name or sale.cashier.username) if sale.cashier else "",
+            r["product"].name, "Charged more" if r["direction"] == "over" else "Charged less",
+            float(r["qty"]), float(r["benchmark"]), float(r["unit_price"]),
+            float(r["diff_per_unit"]), float(r["diff_total"]),
+        ])
+    widths = [14, 16, 16, 32, 14, 10, 12, 12, 12, 14]
+    for i, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"price_overrides_{period_start.isoformat()}_{period_end.isoformat()}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 def _sales_by_unit(db: Session, period_start: date, period_end: date):
     """Which selling unit actually moves for each product — e.g. is GRAVEL
     going out as whole FORWARD loads or mostly as Elf 1/4?

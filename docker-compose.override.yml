@@ -1,0 +1,11 @@
+# Local dev only — automatically picked up by `docker compose up` alongside
+# docker-compose.yml. Bind-mounts the app source so edits on the host show up
+# without a rebuild, and runs uvicorn with --reload to pick them up live.
+# Not used in production deploys (those don't copy this file).
+services:
+  app:
+    volumes:
+      - ./app:/app/app
+      - ./migrations:/app/migrations
+      - ./alembic.ini:/app/alembic.ini
+    command: sh -c "alembic upgrade head && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"

@@ -13,7 +13,12 @@
       {% if count.completed_at %} · {{ 'Completed' if count.status == 'completed' else 'Cancelled' }} {{ count.completed_at.strftime('%b %d, %Y %I:%M %p') }}{% endif %}
     </p>
   </div>
-  <a class="btn-link" href="/stock-count">← Back to Stock Count</a>
+  <div class="head-actions">
+    {% if count.status == 'open' %}
+    <a class="btn-secondary" href="/stock-count/{{ count.id }}/import">⬆ Import count sheet</a>
+    {% endif %}
+    <a class="btn-link" href="/stock-count">← Back to Stock Count</a>
+  </div>
 </div>
 
 {% if count.status == 'open' %}
@@ -33,6 +38,33 @@
   </div>
   {% endif %}
 </section>
+{% endif %}
+
+{% if missing_negatives %}
+<div class="alert" style="background:#fffbeb;border-color:#fde68a;color:#92400e;">
+  <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;">
+    <div>
+      <strong>{{ missing_negatives|length }} product{{ 's' if missing_negatives|length != 1 else '' }} still showing negative stock {{ 'are' if missing_negatives|length != 1 else 'is' }} not in this count.</strong>
+      <p style="margin:6px 0 0;font-size:12.5px;">
+        Negative on-hand is normal while past sales are being encoded — but completing the count without these
+        leaves them negative on the books. Count them too, unless you're deliberately counting only part of the store.
+      </p>
+      <details style="margin-top:8px;">
+        <summary style="cursor:pointer;font-size:12.5px;">Show the list</summary>
+        <ul style="margin:8px 0 0;padding-left:18px;font-size:12.5px;max-height:200px;overflow-y:auto;">
+          {% for p in missing_negatives %}
+          <li>{{ p.name }} — <strong>{{ p.total_qty|qty }}</strong>{% if p.shelf %} · {{ p.shelf.name }}{% endif %}</li>
+          {% endfor %}
+        </ul>
+      </details>
+    </div>
+    {% if count.status == 'open' %}
+    <form method="post" action="/stock-count/{{ count.id }}/add-negatives">
+      <button class="btn-secondary" type="submit" style="white-space:nowrap;">+ Add all to this count</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
 {% endif %}
 
 <div class="stat-row">
@@ -69,7 +101,7 @@
         <td class="num">
           {% if count.status == 'open' %}
           <input type="number" step="0.001" min="0" class="countedInput" data-line-id="{{ l.id }}"
-                 value="{{ l.counted_qty }}" style="width:90px;text-align:right;" onchange="setCounted(this)">
+                 value="{{ l.counted_qty|qty }}" style="width:90px;text-align:right;" onchange="setCounted(this)">
           {% else %}{{ l.counted_qty|qty }}{% endif %}
         </td>
         <td class="num varCell {{ 'owed' if l.variance != 0 }}">{{ '+' if l.variance > 0 }}{{ l.variance|qty }}</td>
@@ -106,7 +138,7 @@
     <button class="btn-secondary" type="submit">Cancel count</button>
   </form>
   <form method="post" action="/stock-count/{{ count.id }}/complete"
-        onsubmit="return confirm('Complete this count? Every product with a variance will have its stock corrected to match what was counted. This cannot be undone in bulk.');" style="display:inline-flex;gap:10px;align-items:flex-end;">
+        onsubmit="return confirmComplete();" style="display:inline-flex;gap:10px;align-items:flex-end;">
     <label style="margin:0;">Reason for variances
       <select name="reason">
         {% for value, label in adjustment_reasons %}<option value="{{ value }}" {{ 'selected' if value == 'count_correction' }}>{{ label }}</option>{% endfor %}
@@ -123,6 +155,19 @@
 {% if count.status == 'open' %}
 <script>
 const countId = {{ count.id }};
+const missingNegatives = {{ missing_negatives|length }};
+
+// Completing is irreversible in bulk, so the confirm spells out what's about
+// to change — and calls out any still-negative product that never got counted,
+// since that negative would otherwise stay on the books after this closes.
+function confirmComplete() {
+  let msg = 'Complete this count? Every product with a variance will have its stock corrected to match what was counted. This cannot be undone in bulk.';
+  if (missingNegatives > 0) {
+    msg = missingNegatives + ' product(s) still have negative stock and are NOT in this count — '
+        + 'they will stay negative after this is completed.\n\n' + msg;
+  }
+  return confirm(msg);
+}
 const scanBox = document.getElementById('scanBox');
 const scanChoices = document.getElementById('scanChoices');
 const scanMsg = document.getElementById('scanMsg');

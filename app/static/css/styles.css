@@ -226,6 +226,14 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 .cat-pill-count { font-size: 11.5px; font-weight: 700; opacity: .75; }
 .cat-pill.active .cat-pill-count { opacity: .85; }
 
+/* Category/Sub Category/Shelf filters — each is a <details class="filter-drop">
+   dropdown (see the shared rule below) instead of dumping every pill on
+   screen at once; a shop with dozens of categories/shelves needs this
+   collapsed by default, opened only when actually picking one. */
+.pill-filter-bar { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 16px; }
+.pills-panel { width: min(720px, 90vw); max-height: 360px; overflow-y: auto; }
+.pills-panel .cat-pills { margin: 0; }
+
 /* ---------- Bulk selection bar (Inventory) ---------- */
 .bulk-bar {
   position: sticky; bottom: 16px; z-index: 5;
@@ -408,8 +416,8 @@ table.grid tr:last-child td { border-bottom: none; }
 
 .pos-cart-panel { padding: 20px; }
 .pos-customer { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); font-weight: 500; margin-bottom: 14px; }
-.pos-customer input { padding: 10px 12px; border: 1px solid var(--line-2); border-radius: var(--radius-sm); font-size: 14px; }
-.pos-customer input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
+.pos-customer input, .pos-customer select { padding: 10px 12px; border: 1px solid var(--line-2); border-radius: var(--radius-sm); font-size: 14px; }
+.pos-customer input:focus, .pos-customer select:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
 
 .cust-field { position: relative; }
 .cust-dropdown {

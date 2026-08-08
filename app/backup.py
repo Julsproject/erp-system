@@ -23,8 +23,10 @@ from .templating import templates
 router = APIRouter()
 
 BACKUP_DIR = Path("/backups")
-# Only ever serve files that look like our own backups.
-SAFE_NAME = re.compile(r"^hardware_erp_[0-9]{4}-[0-9]{2}-[0-9]{2}\.sql$")
+# Only ever serve files that look like our own backups — either the daily
+# automatic one (hardware_erp_YYYY-MM-DD.sql) or an on-demand snapshot saved
+# via /backup/snapshot (hardware_erp_manual_YYYY-MM-DD_HHMMSS.sql).
+SAFE_NAME = re.compile(r"^hardware_erp_(manual_)?[0-9]{4}-[0-9]{2}-[0-9]{2}(_[0-9]{6})?\.sql$")
 
 
 def _db_parts():
@@ -66,7 +68,7 @@ def _list_backups():
     if not BACKUP_DIR.is_dir():
         return []
     out = []
-    for f in sorted(BACKUP_DIR.glob("hardware_erp_*.sql"), reverse=True):
+    for f in BACKUP_DIR.glob("hardware_erp_*.sql"):
         try:
             st = f.stat()
         except OSError:
@@ -75,12 +77,17 @@ def _list_backups():
             "name": f.name,
             "size": st.st_size,
             "when": datetime.fromtimestamp(st.st_mtime),
+            "manual": f.name.startswith("hardware_erp_manual_"),
         })
+    # Newest first by actual mtime — NOT by filename, since a manual
+    # snapshot's "hardware_erp_manual_..." name would otherwise sort above
+    # every dated automatic backup regardless of when either was made.
+    out.sort(key=lambda r: r["when"], reverse=True)
     return out
 
 
 @router.get("/backup", response_class=HTMLResponse)
-def backup_page(request: Request, error: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+def backup_page(request: Request, error: str = "", saved: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
@@ -91,9 +98,33 @@ def backup_page(request: Request, error: str = "", db: Session = Depends(get_db)
         {
             "request": request, "app_name": request.app.title, "user": user,
             "files": files, "latest": files[0] if files else None,
-            "folder_mounted": BACKUP_DIR.is_dir(), "error": error,
+            "folder_mounted": BACKUP_DIR.is_dir(), "error": error, "saved": saved,
         },
     )
+
+
+@router.post("/backup/snapshot")
+def backup_snapshot(user=Depends(get_current_user)):
+    """Dump the database right now and save it into the same folder the
+    automatic daily backup writes to, so it shows up in the list below and
+    survives independently of this browser — e.g. right before ending a work
+    session, without waiting for tonight's scheduled backup."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+    if not BACKUP_DIR.is_dir():
+        return RedirectResponse("/backup?error=Backup+folder+isn't+mounted+in+this+container.", status_code=302)
+    sql, err = run_pg_dump()
+    if err:
+        return RedirectResponse(f"/backup?error={err[:200]}", status_code=302)
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    path = BACKUP_DIR / f"hardware_erp_manual_{stamp}.sql"
+    try:
+        path.write_bytes(sql)
+    except OSError as exc:
+        return RedirectResponse(f"/backup?error=Could+not+save+the+backup:+{str(exc)[:150]}", status_code=302)
+    return RedirectResponse("/backup?saved=1", status_code=302)
 
 
 @router.get("/backup/download")

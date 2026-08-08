@@ -33,6 +33,9 @@
       <label>Category
         <input id="npCategory" type="text" list="np-cats" placeholder="optional" autocomplete="off">
       </label>
+      <label>Sub category <span class="muted">— optional</span>
+        <input id="npSubcategory" type="text" list="np-subcats" placeholder="optional" autocomplete="off">
+      </label>
       <label>Unit type
         <input id="npUnit" type="text" list="np-units" placeholder="Piece" autocomplete="off">
       </label>
@@ -57,11 +60,27 @@
     </div>
   </div>
   <datalist id="np-cats">{% for c in categories %}<option value="{{ c.name }}">{% endfor %}</datalist>
+  <datalist id="np-subcats">{% for sc in subcategories %}<option value="{{ sc.name }}">{% endfor %}</datalist>
   <datalist id="np-units">{% for u in unit_types %}<option value="{{ u.name }}">{% endfor %}</datalist>
 
   <!-- RIGHT: cart -->
   <section class="card pos-cart-panel">
+    <div id="draftBanner" class="alert" style="display:none;background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8;margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">
+        <span><strong>Unfinished sale restored.</strong> Nasa ibaba pa rin ang huli mong pinasok — hindi pa ito na-complete.</span>
+        <button type="button" class="btn-secondary" onclick="discardDraft()" style="white-space:nowrap;">Discard &amp; start fresh</button>
+      </div>
+    </div>
+
     <div class="pos-head-fields">
+      <label class="pos-customer">Receipt <span class="muted">(which booklet)</span>
+        <select id="receiptType" onchange="onReceiptTypeChange()">
+          <option value="">— select —</option>
+          <option value="DRS">DRS</option>
+          <option value="DRB">DRB</option>
+          <option value="SI">SI</option>
+        </select>
+      </label>
       <label class="pos-customer">Invoice # <span class="muted">(from your booklet)</span>
         <input id="invoiceNo" type="text" placeholder="e.g. 000145" autocomplete="off">
       </label>
@@ -69,8 +88,10 @@
         <input id="customerName" type="text" placeholder="Walk-in — type to find existing" autocomplete="off">
         <div id="custResults" class="cust-dropdown" style="display:none;"></div>
       </label>
-      <label class="pos-customer">Transaction date <span class="muted">(blank = today)</span>
-        <input id="txnDate" type="date" autocomplete="off" title="Set the real date this sale happened when encoding a past transaction. Leave blank for a live sale today.">
+      <label class="pos-customer">Transaction date <span class="muted">(MM/DD — year is automatic, blank = today)</span>
+        <input id="txnDate" type="text" placeholder="e.g. 8/8" autocomplete="off" oninput="updateTxnDatePreview()"
+               title="Set the real date this sale happened when encoding a past transaction. Type just month/day — the year fills in automatically (this year, or last year if that day hasn't happened yet this year). Leave blank for a live sale today.">
+        <span id="txnDatePreview" class="muted" style="font-size:12px;min-height:15px;display:block;"></span>
       </label>
     </div>
 
@@ -247,9 +268,16 @@
     </section>
 
     <section class="card pos-cart-panel">
+      <div id="quoDraftBanner" class="alert" style="display:none;background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8;margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">
+          <span><strong>Unfinished quotation restored.</strong> Nasa ibaba pa rin ang huli mong pinasok — hindi pa ito na-save.</span>
+          <button type="button" class="btn-secondary" onclick="quoDiscardDraft()" style="white-space:nowrap;">Discard &amp; start fresh</button>
+        </div>
+      </div>
+
       <div class="pos-head-fields">
         <label class="pos-customer">Customer <span class="muted">(optional)</span>
-          <input id="quoCustomerName" type="text" placeholder="Walk-in" autocomplete="off">
+          <input id="quoCustomerName" type="text" placeholder="Walk-in" autocomplete="off" oninput="quoSaveDraft()">
         </label>
       </div>
 
@@ -322,7 +350,92 @@ function toggleOverallDiscType() {
 const searchBox = document.getElementById('posSearch');
 const customerBox = document.getElementById('customerName');
 const invoiceBox = document.getElementById('invoiceNo');
+const receiptTypeBox = document.getElementById('receiptType');
 const txnDateBox = document.getElementById('txnDate');
+const txnDatePreview = document.getElementById('txnDatePreview');
+
+// Quick date entry: cashier types just "8/8" (or "8-8", "8/8/26" if they
+// really want a specific year) and the year is filled in automatically —
+// this year, or last year if that month/day hasn't happened yet this year
+// (a backdated entry is never in the future, so "12/30" typed in January
+// means last December, not next December).
+function quickDateToISO(raw) {
+  raw = (raw || '').trim();
+  if (!raw) return { iso: '', error: null };
+  const m = raw.match(/^(\d{1,2})[\/\-. ](\d{1,2})(?:[\/\-. ](\d{2,4}))?$/);
+  if (!m) return { iso: null, error: 'Type it as month/day, e.g. 8/8.' };
+  const month = parseInt(m[1], 10), day = parseInt(m[2], 10);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return { iso: null, error: 'That\'s not a real month/day.' };
+  // All comparisons stay in local-Date-object land (never reparsed as a bare
+  // "YYYY-MM-DD" string, which JS treats as UTC and can silently shift a day
+  // off local midnight) so "today" always means today, not off-by-one.
+  const now = new Date();
+  const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let year;
+  if (m[3]) {
+    year = parseInt(m[3], 10);
+    if (year < 100) year += 2000;
+  } else {
+    year = now.getFullYear();
+    if (new Date(year, month - 1, day) > todayMidnight) year -= 1;  // hasn't happened yet this year -> must mean last year
+  }
+  const d = new Date(year, month - 1, day);
+  if (d.getMonth() !== month - 1 || d.getDate() !== day) return { iso: null, error: 'That\'s not a real month/day.' };
+  if (d > todayMidnight) return { iso: null, error: "Can't be in the future." };
+  const iso = year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+  return { iso, error: null };
+}
+
+function updateTxnDatePreview() {
+  const { iso, error } = quickDateToISO(txnDateBox.value);
+  if (error) { txnDatePreview.textContent = error; txnDatePreview.style.color = 'var(--danger, #dc2626)'; }
+  else if (iso) { txnDatePreview.textContent = '→ ' + new Date(iso + 'T00:00:00').toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' }); txnDatePreview.style.color = ''; }
+  else { txnDatePreview.textContent = ''; }
+  saveTxnDatePref();
+}
+
+// Sticky transaction date — remembered per browser (separate from the draft,
+// which only survives an UNFINISHED sale) so a batch of backdated entries
+// for the same day doesn't need the date retyped before every single one.
+// Stored as the raw text ("8/2"), not a resolved date, so it's re-evaluated
+// against "today" fresh every time it's restored — never goes stale.
+function saveTxnDatePref() {
+  const v = txnDateBox.value.trim();
+  if (v) localStorage.setItem('pos_txn_date', v); else localStorage.removeItem('pos_txn_date');
+}
+function restoreTxnDatePref() {
+  if (txnDateBox.value.trim()) return;  // a restored draft already set something real — don't override it
+  const saved = localStorage.getItem('pos_txn_date');
+  if (!saved) return;
+  txnDateBox.value = saved;
+  updateTxnDatePreview();
+}
+
+// Picking a booklet auto-fills the next invoice # in that booklet's own
+// sequence (last invoice saved under this receipt_type, +1) — only when the
+// field is still empty, so it never clobbers something the cashier already
+// typed. Typing a different number by hand is fine; it just becomes the new
+// starting point the next time this booklet is picked.
+async function onReceiptTypeChange() {
+  const type = receiptTypeBox.value;
+  localStorage.setItem('pos_receipt_type', type);
+  saveDraft();
+  if (!type || invoiceBox.value.trim()) return;
+  try {
+    const res = await fetch('/pos/next-invoice?receipt_type=' + encodeURIComponent(type));
+    const data = await res.json();
+    // Re-check: a restored draft (or fast typing) may have filled the box
+    // while this request was in flight, and it must not be clobbered.
+    if (data.invoice_no && !invoiceBox.value.trim()) { invoiceBox.value = data.invoice_no; computeTotals(); }
+  } catch (e) { /* no suggestion available — cashier just types it in */ }
+}
+// Remembering the last booklet picked (per browser) and re-checking the
+// suggestion both happen once, at the very end of page init (see the bottom
+// of this script) — AFTER restoreDraft() has already set whatever it's
+// going to set. Doing it there, last, is what guarantees this can't be
+// clobbered by the draft restore that runs afterward; doing it here at
+// parse time raced restoreDraft() and could leave the invoice blank even
+// with a booklet already selected.
 searchBox.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 180); });
 // A barcode scanner types the code then sends Enter — resolve immediately
 // (no debounce) and, if it matched exactly one product, add it straight to
@@ -355,6 +468,7 @@ function addFoundProduct(p) {
   else addToCart(p);
 }
 invoiceBox.addEventListener('input', computeTotals);
+txnDateBox.addEventListener('input', computeTotals);
 
 /* ---- customer lookup ---- */
 const custResults = document.getElementById('custResults');
@@ -527,6 +641,7 @@ async function createProduct() {
   const payload = {
     name: name,
     category: document.getElementById('npCategory').value,
+    subcategory: document.getElementById('npSubcategory').value,
     unit_type: document.getElementById('npUnit').value,
     cost_price: document.getElementById('npCost').value,
     beginning_stock: document.getElementById('npBeginning').value,
@@ -539,13 +654,21 @@ async function createProduct() {
   addToCart(data.product, true);
   hideNewProduct();
   document.getElementById('npName').value = ''; document.getElementById('npCategory').value = '';
+  document.getElementById('npSubcategory').value = '';
   document.getElementById('npUnit').value = ''; document.getElementById('npCost').value = '';
   document.getElementById('npBeginning').value = ''; document.getElementById('npStockQty').value = ''; document.getElementById('npReorder').value = '';
 }
 
 function clearCart() {
+  clearDraft();
+  document.getElementById('draftBanner').style.display = 'none';
   cart = []; payments = [{ method: 'cash', amount: '' }];
-  document.getElementById('overallDiscount').value = 0; customerBox.value = ''; invoiceBox.value = ''; txnDateBox.value = '';
+  document.getElementById('overallDiscount').value = 0; customerBox.value = ''; invoiceBox.value = '';
+  // Transaction date is deliberately NOT reset here — when encoding a batch
+  // of backlogged sales for the same day, retyping "8/2" before every single
+  // one gets old fast. It stays put until the cashier types a different
+  // date; see saveTxnDatePref/restoreTxnDatePref for how it survives Clear,
+  // Complete Sale, and even a fresh page load.
   document.getElementById('fullMethod').value = 'cash';
   document.getElementById('fullChequeFields').style.display = 'none';
   document.getElementById('fullChequeDate').value = ''; document.getElementById('fullChequeBank').value = ''; document.getElementById('fullChequeNo').value = '';
@@ -622,7 +745,77 @@ function toggleRow(rowId, show, valId, val) {
   if (show) document.getElementById(valId).textContent = peso(val);
 }
 
+/* ===== Draft persistence =====
+   A cashier who taps Back, checks Inventory in another tab, or reloads by
+   accident shouldn't lose a half-typed sale — nothing is written to the
+   server until Complete Sale, so without this the whole cart is simply
+   gone. The draft lives in localStorage (per browser, per till), is saved
+   on every change via computeTotals, and is dropped the moment the sale is
+   actually submitted or the cashier hits Clear. Return/exchange state is
+   deliberately NOT saved: it's tied to a looked-up invoice and is safer to
+   re-enter deliberately than to half-restore. */
+const DRAFT_KEY = 'pos_sale_draft';
+const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;  // a day-old draft is stale, not helpful
+let draftReady = false;  // don't save while the page is still building itself
+
+function saveDraft() {
+  if (!draftReady) return;
+  const hasAnything = cart.length || invoiceBox.value.trim() || customerBox.value.trim() || txnDateBox.value.trim();
+  if (!hasAnything) { localStorage.removeItem(DRAFT_KEY); return; }
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({
+      savedAt: Date.now(),
+      cart: cart,
+      invoice: invoiceBox.value,
+      receiptType: receiptTypeBox.value,
+      customer: customerBox.value,
+      txnDate: txnDateBox.value,
+      vat: document.getElementById('vatOn').checked,
+      discount: document.getElementById('overallDiscount').value,
+      discType: overallDiscType,
+      paymentMode: paymentMode,
+      payments: payments,
+      fullMethod: document.getElementById('fullMethod').value,
+    }));
+  } catch (e) { /* quota/private mode — the sale still works, it just won't survive a reload */ }
+}
+
+function clearDraft() {
+  try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
+}
+
+function discardDraft() {
+  clearDraft();
+  document.getElementById('draftBanner').style.display = 'none';
+  clearCart();
+}
+
+function restoreDraft() {
+  let d = null;
+  try { d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch (e) { d = null; }
+  if (!d || !d.savedAt || (Date.now() - d.savedAt) > DRAFT_MAX_AGE_MS) { clearDraft(); return false; }
+  const hasAnything = (d.cart && d.cart.length) || (d.invoice || '').trim() || (d.customer || '').trim();
+  if (!hasAnything) { clearDraft(); return false; }
+
+  cart = Array.isArray(d.cart) ? d.cart : [];
+  invoiceBox.value = d.invoice || '';
+  if (d.receiptType) receiptTypeBox.value = d.receiptType;
+  customerBox.value = d.customer || '';
+  txnDateBox.value = d.txnDate || '';
+  updateTxnDatePreview();
+  document.getElementById('vatOn').checked = !!d.vat;
+  document.getElementById('overallDiscount').value = d.discount || 0;
+  overallDiscType = d.discType === 'pct' ? 'pct' : 'amt';
+  document.getElementById('overallDiscTypeBtn').textContent = overallDiscType === 'pct' ? '%' : '₱';
+  if (Array.isArray(d.payments) && d.payments.length) payments = d.payments;
+  if (d.fullMethod) document.getElementById('fullMethod').value = d.fullMethod;
+  setPaymentMode(d.paymentMode === 'split' ? 'split' : 'full');
+  document.getElementById('draftBanner').style.display = 'block';
+  return true;
+}
+
 function computeTotals() {
+  saveDraft();
   let subtotal = 0;
   cart.forEach(line => { subtotal += lineTotalOf(line); });
   // VAT is INCLUSIVE: total ÷ 1.12 = net of VAT, total − net = VAT.
@@ -786,9 +979,11 @@ function computeTotals() {
 
   const custName = customerBox.value.trim();
   const invoice = invoiceBox.value.trim();
+  const txnDateCheck = quickDateToISO(txnDateBox.value);
   let ok = cart.length > 0, warn = '';
   if (cart.length === 0) { ok = false; }
   else if (!invoice) { ok = false; warn = 'Enter the invoice number (from your booklet).'; }
+  else if (txnDateCheck.error) { ok = false; warn = 'Transaction date: ' + txnDateCheck.error; }
   else if ((receivable > 0 || chequeAmt > 0) && !custName) { ok = false; warn = 'Receivable (credit) or a cheque payment needs a customer name above.'; }
   else if (chequeDateMissing) { ok = false; warn = 'Enter the cheque date (the date printed on the cheque).'; }
   else if (remaining > 0.009) { ok = false; warn = 'Short by ' + peso(remaining) + ' — add a payment, cheque, or receivable.'; }
@@ -831,8 +1026,9 @@ async function checkout() {
     let subtotal = 0; cart.forEach(l => subtotal += lineTotalOf(l));
     const payload = {
       invoice_no: invoiceBox.value,
+      receipt_type: receiptTypeBox.value,
       customer_name: customerBox.value,
-      txn_date: txnDateBox.value,
+      txn_date: quickDateToISO(txnDateBox.value).iso,
       vat_applied: document.getElementById('vatOn').checked,
       discount_total: overallDiscAmt(subtotal),
       payments: payList,
@@ -846,7 +1042,7 @@ async function checkout() {
     try {
       const res = await fetch('/pos/checkout', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
       const data = await res.json();
-      if (data.ok) { window.location = '/pos/receipt/' + data.sale_id; }
+      if (data.ok) { clearDraft(); window.location = '/pos/receipt/' + data.sale_id; }
       else { showError(data.error || 'Checkout failed.'); btn.disabled = false; btn.textContent = 'Complete Sale'; }
     } catch (e) {
       showError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Complete Sale';
@@ -885,7 +1081,7 @@ async function checkout() {
     try {
       const res = await fetch('/pos/refund', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
       const data = await res.json();
-      if (data.ok) { window.location = '/pos/receipt/' + data.sale_id; }
+      if (data.ok) { clearDraft(); window.location = '/pos/receipt/' + data.sale_id; }
       else { showError(data.error || 'Return failed.'); btn.disabled = false; btn.textContent = 'Complete Sale'; }
     } catch (e) {
       showError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Complete Sale';
@@ -918,7 +1114,7 @@ async function checkout() {
   try {
     const res = await fetch('/pos/exchange', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
     const data = await res.json();
-    if (data.ok) { window.location = '/pos/receipt/' + data.sale_id; }
+    if (data.ok) { clearDraft(); window.location = '/pos/receipt/' + data.sale_id; }
     else { showError(data.error || 'Exchange failed.'); btn.disabled = false; btn.textContent = 'Complete Sale'; }
   } catch (e) {
     showError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Complete Sale';
@@ -1200,6 +1396,8 @@ function quoSetQty(i, v) { quoCart[i].qty = parseFloat(v) || 0; quoRefreshComput
 function quoSetDisc(i, v) { quoCart[i].discount = parseFloat(v) || 0; quoRefreshComputed(); }
 function quoRemove(i) { quoCart.splice(i, 1); quoRenderCart(); }
 function quoClear() {
+  quoClearDraft();
+  document.getElementById('quoDraftBanner').style.display = 'none';
   quoCart = [];
   document.getElementById('quoDiscount').value = 0;
   document.getElementById('quoCustomerName').value = '';
@@ -1207,7 +1405,54 @@ function quoClear() {
   quoDiscType = 'amt'; document.getElementById('quoDiscTypeBtn').textContent = '₱';
   quoRenderCart(); document.getElementById('quoSearch').focus();
 }
+/* ===== Quotation draft persistence — same idea as saveDraft() for the Sale
+   tab: nothing is written to the server until Save Quotation, so an
+   accidental Back/reload would otherwise wipe the whole quote. ===== */
+const QUO_DRAFT_KEY = 'pos_quo_draft';
+let quoDraftReady = false;
+
+function quoSaveDraft() {
+  if (!quoDraftReady) return;
+  const hasAnything = quoCart.length || document.getElementById('quoCustomerName').value.trim();
+  if (!hasAnything) { localStorage.removeItem(QUO_DRAFT_KEY); return; }
+  try {
+    localStorage.setItem(QUO_DRAFT_KEY, JSON.stringify({
+      savedAt: Date.now(),
+      cart: quoCart,
+      customer: document.getElementById('quoCustomerName').value,
+      vat: document.getElementById('quoVatOn').checked,
+      discount: document.getElementById('quoDiscount').value,
+      discType: quoDiscType,
+    }));
+  } catch (e) { /* quota/private mode — the quote still works, it just won't survive a reload */ }
+}
+function quoClearDraft() {
+  try { localStorage.removeItem(QUO_DRAFT_KEY); } catch (e) {}
+}
+function quoDiscardDraft() {
+  quoClearDraft();
+  document.getElementById('quoDraftBanner').style.display = 'none';
+  quoClear();
+}
+function quoRestoreDraft() {
+  let d = null;
+  try { d = JSON.parse(localStorage.getItem(QUO_DRAFT_KEY) || 'null'); } catch (e) { d = null; }
+  if (!d || !d.savedAt || (Date.now() - d.savedAt) > DRAFT_MAX_AGE_MS) { quoClearDraft(); return false; }
+  const hasAnything = (d.cart && d.cart.length) || (d.customer || '').trim();
+  if (!hasAnything) { quoClearDraft(); return false; }
+
+  quoCart = Array.isArray(d.cart) ? d.cart : [];
+  document.getElementById('quoCustomerName').value = d.customer || '';
+  document.getElementById('quoVatOn').checked = !!d.vat;
+  document.getElementById('quoDiscount').value = d.discount || 0;
+  quoDiscType = d.discType === 'pct' ? 'pct' : 'amt';
+  document.getElementById('quoDiscTypeBtn').textContent = quoDiscType === 'pct' ? '%' : '₱';
+  document.getElementById('quoDraftBanner').style.display = 'block';
+  return true;
+}
+
 function quoComputeTotals() {
+  quoSaveDraft();
   let subtotal = 0;
   quoCart.forEach(l => subtotal += quoLineTotalOf(l));
   // VAT is inclusive, same convention as a normal sale: total never changes.
@@ -1237,7 +1482,7 @@ async function quoSave() {
   try {
     const res = await fetch('/quotations', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
     const data = await res.json();
-    if (data.ok) { window.location = '/quotations/' + data.quotation_id; }
+    if (data.ok) { quoClearDraft(); window.location = '/quotations/' + data.quotation_id; }
     else { showQuoError(data.error || 'Save failed.'); btn.disabled = false; btn.textContent = 'Save Quotation'; }
   } catch (e) {
     showQuoError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Save Quotation';
@@ -1246,9 +1491,33 @@ async function quoSave() {
 function showQuoError(msg) { const e = document.getElementById('quoError'); e.textContent = msg; e.style.display = 'block'; }
 
 tick(); setInterval(tick, 30000);
+// Pull back any unfinished sale before the first paint, then arm saving —
+// restoring must not itself write a draft mid-way through rebuilding state.
+restoreDraft();
+draftReady = true;
+quoRestoreDraft();
+quoDraftReady = true;
 renderPayments();
 renderCart();
 quoRenderCart();
 onFullMethodChange();
+
+// Last step, on purpose: if nothing above already picked a booklet, fall
+// back to the last one used on this browser — and either way, if a booklet
+// is selected but Invoice # is still blank, go fetch what the next number
+// should be. Running this AFTER restoreDraft() (rather than at parse time)
+// is what makes it correct: it always sees the invoice box's final
+// pre-suggestion state instead of racing a draft restore that could still
+// overwrite it with an old, blank value.
+if (!receiptTypeBox.value) {
+  const savedType = localStorage.getItem('pos_receipt_type');
+  if (savedType && [...receiptTypeBox.options].some(o => o.value === savedType)) {
+    receiptTypeBox.value = savedType;
+  }
+}
+if (receiptTypeBox.value && !invoiceBox.value.trim()) {
+  onReceiptTypeChange();
+}
+restoreTxnDatePref();
 </script>
 {% endblock %}

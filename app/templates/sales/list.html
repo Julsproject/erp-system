@@ -30,7 +30,8 @@
 {% set qs = qs ~ ('&type_filter=' ~ type_filter if type_filter else '') %}
 {% set qs = qs ~ ('&date_from=' ~ date_from if date_from else '') %}
 {% set qs = qs ~ ('&date_to=' ~ date_to if date_to else '') %}
-{% set filter_count = (1 if type_filter else 0) + (1 if date_from else 0) + (1 if date_to else 0) %}
+{% set qs = qs ~ ('&receipt_type=' ~ receipt_type if receipt_type else '') %}
+{% set filter_count = (1 if type_filter else 0) + (1 if date_from else 0) + (1 if date_to else 0) + (1 if receipt_type else 0) %}
 
 <form class="toolbar" method="get" action="/sales">
   <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search invoice # or customer…">
@@ -50,6 +51,15 @@
           {% for t, label in types.items() %}
           <option value="{{ t }}" {{ 'selected' if type_filter == t }}>{{ label }}</option>
           {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Booklet</label>
+        <select name="receipt_type">
+          <option value="">All booklets</option>
+          <option value="DRS" {{ 'selected' if receipt_type == 'DRS' }}>DRS</option>
+          <option value="DRB" {{ 'selected' if receipt_type == 'DRB' }}>DRB</option>
+          <option value="SI" {{ 'selected' if receipt_type == 'SI' }}>SI</option>
         </select>
       </div>
       <div class="field-row">
@@ -74,7 +84,7 @@
     <tbody>
       {% for s in sales %}
       <tr>
-        <td class="strong">{{ s.invoice_no }}</td>
+        <td class="strong">{{ s.invoice_no }}{% if s.receipt_type %} <span class="muted" style="font-size:11px;font-weight:600;">({{ s.receipt_type }})</span>{% endif %}</td>
         <td><span class="txn txn-{{ s.txn_type }}">{{ types.get(s.txn_type, s.txn_type|capitalize) }}</span></td>
         <td>{{ s.created_at.strftime('%b %d, %Y %I:%M %p') if s.created_at else '' }}</td>
         <td>{{ s.customer_name or 'Walk-in' }}</td>

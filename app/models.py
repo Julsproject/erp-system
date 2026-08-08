@@ -287,6 +287,12 @@ class Sale(Base):
 
     id = Column(Integer, primary_key=True)
     invoice_no = Column(String(20), unique=True, index=True)
+    # Which physical receipt booklet this invoice # was written on (DRS, DRB,
+    # SI, ...) — the shop keeps a separate numbered sequence per booklet, so
+    # this is what "next invoice #" is computed against (see pos.py's
+    # /pos/next-invoice). Free text, not an enum: new booklet types shouldn't
+    # need a migration.
+    receipt_type = Column(String(10), nullable=True)
     txn_type = Column(String(12), nullable=False, server_default="sale")  # sale | refund | exchange
     original_sale_id = Column(Integer, ForeignKey("sales.id"), nullable=True)
     customer_name = Column(String(150))

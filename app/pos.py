@@ -6,6 +6,8 @@ deduction in base units, printable receipt.
 
 Deferred: customers/receivable, split payments, open-container display, returns.
 """
+import json
+import re
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
@@ -19,7 +21,7 @@ from . import audit, models, settings_store
 from .customers import get_or_create_customer
 from .database import get_db
 from .deps import get_current_user, is_staff
-from .products import _get_or_create_category, _get_or_create_unit_type
+from .products import _get_or_create_category, _get_or_create_subcategory, _get_or_create_unit_type
 from .templating import templates
 
 router = APIRouter()
@@ -137,11 +139,12 @@ def pos_page(request: Request, db: Session = Depends(get_db), user=Depends(get_c
     if not user:
         return RedirectResponse("/login", status_code=302)
     categories = db.query(models.Category).order_by(models.Category.name).all()
+    subcategories = db.query(models.SubCategory).order_by(models.SubCategory.name).all()
     unit_types = db.query(models.UnitType).order_by(models.UnitType.name).all()
     return templates.TemplateResponse(
         "pos.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "categories": categories, "unit_types": unit_types},
+         "categories": categories, "subcategories": subcategories, "unit_types": unit_types},
     )
 
 
@@ -264,6 +267,7 @@ async def pos_quick_product(request: Request, db: Session = Depends(get_db), use
         is_active=True,
     )
     product.category = _get_or_create_category(db, data.get("category"))
+    product.subcategory = _get_or_create_subcategory(db, data.get("subcategory"), product.category)
     product.unit_type = _get_or_create_unit_type(db, data.get("unit_type") or "Piece")
     db.add(product)
     db.commit()
@@ -271,7 +275,7 @@ async def pos_quick_product(request: Request, db: Session = Depends(get_db), use
     return {"ok": True, "existed": False, "product": _product_payload_for_pos(product)}
 
 
-def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied, discount_total, lines, payments, txn_date=None):
+def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied, discount_total, lines, payments, txn_date=None, receipt_type=None):
     """Create and commit a real Sale from line items + payments.
 
     Shared by POS checkout and by quotations converting to a paid sale, so the
@@ -291,9 +295,28 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
     if date_err:
         return False, date_err
 
+    # A backdated sale is a past transaction being encoded after the fact —
+    # its goods already physically left the shelf, so they're already missing
+    # from any count in progress. A stock count line snapshots system_qty when
+    # the product is first scanned and Complete applies (counted - snapshot),
+    # so encoding one now would deduct the same goods a second time and leave
+    # the count short. Live sales during a count are fine (that's what the
+    # delta design is for) — only backdated ones have to wait.
+    if backdated:
+        open_count = db.query(models.StockCount).filter(models.StockCount.status == "open").first()
+        if open_count:
+            return False, (
+                f"Stock count {open_count.ref_no} is open. Finish (or cancel) it before encoding "
+                "backdated sales — otherwise those goods get deducted twice and the count comes out short. "
+                "A sale dated today still works normally."
+            )
+
     customer_name = (customer_name or "").strip()
     vat_applied = bool(vat_applied)
-    sale = models.Sale(invoice_no=invoice_no, customer_name=customer_name or None, cashier_id=user.id)
+    sale = models.Sale(
+        invoice_no=invoice_no, receipt_type=(receipt_type or "").strip() or None,
+        customer_name=customer_name or None, cashier_id=user.id,
+    )
     if backdated:
         sale.created_at = backdated
     db.add(sale)
@@ -321,12 +344,13 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
         subtotal += line_total
 
         base_qty = qty * factor
-        available = product.total_qty
-        if base_qty > available:
-            return False, (
-                f"Not enough stock for {product.name}. "
-                f"Available: {float(available):g}, needed: {float(base_qty):g}."
-            )
+        # Deliberately no insufficient-stock guard: the shop encodes a backlog
+        # of past sales before its opening stock is ever loaded, so on-hand is
+        # routinely 0 (or already negative) for items that genuinely sold. A
+        # hard block would make that backlog impossible to enter. Stock is
+        # allowed to go negative and the next Stock Count reconciles it to the
+        # real shelf count — see _deduct_stock, and the "over stock" badge the
+        # POS already shows on these lines.
         _deduct_stock(product, base_qty)
         sale_unit_cost = Decimal(str(product.cost_price or 0))
         db.add(models.StockMovement(
@@ -467,12 +491,41 @@ async def pos_checkout(request: Request, db: Session = Depends(get_db), user=Dep
         lines=lines,
         payments=data.get("payments") or [],
         txn_date=data.get("txn_date"),
+        receipt_type=data.get("receipt_type"),
     )
     if not ok:
         return JSONResponse({"ok": False, "error": result}, status_code=400)
 
     sale = result
     return {"ok": True, "sale_id": sale.id, "invoice_no": sale.invoice_no}
+
+
+@router.get("/pos/next-invoice")
+def pos_next_invoice(receipt_type: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Suggest the next invoice # for a receipt booklet (DRS/DRB/SI/...) by
+    incrementing the last one used for that same type — each booklet has its
+    own physical numbering, separate from the others. Returns "" when there's
+    no prior invoice of that type to count from, or its number doesn't end in
+    digits to increment."""
+    if not user:
+        return JSONResponse({"invoice_no": ""}, status_code=401)
+    receipt_type = (receipt_type or "").strip()
+    if not receipt_type:
+        return {"invoice_no": ""}
+    last = (
+        db.query(models.Sale)
+        .filter(models.Sale.receipt_type == receipt_type, models.Sale.txn_type == "sale")
+        .order_by(models.Sale.id.desc())
+        .first()
+    )
+    if not last or not last.invoice_no:
+        return {"invoice_no": ""}
+    m = re.match(r"^(.*?)(\d+)$", last.invoice_no)
+    if not m:
+        return {"invoice_no": ""}
+    prefix, digits = m.group(1), m.group(2)
+    next_no = str(int(digits) + 1).zfill(len(digits))
+    return {"invoice_no": f"{prefix}{next_no}"}
 
 
 @router.get("/pos/lookup")
@@ -711,16 +764,7 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
         product = db.get(models.Product, int(ln["product_id"]), with_for_update=True) if ln.get("product_id") else None
         if product:
             base_qty = qty * factor
-            available = product.total_qty
-            if base_qty > available:
-                return JSONResponse({
-                    "ok": False,
-                    "error": (
-                        f"Not enough stock for {product.name}. "
-                        f"Available: {float(available):g}, needed: {float(base_qty):g}."
-                    ),
-                }, status_code=400)
-            _deduct_stock(product, base_qty)
+            _deduct_stock(product, base_qty)  # oversell allowed — see _finalize_sale
             ex_sale_cost = Decimal(str(product.cost_price or 0))
             db.add(models.StockMovement(
                 product_id=product.id, qty_base=-base_qty, reason="exchange-sale",
@@ -856,6 +900,8 @@ def pos_receipt(
     quote: int = 0,
     thermal: int = 0,
     void_error: str = "",
+    edit_date_error: str = "",
+    edit_items_error: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -890,7 +936,11 @@ def pos_receipt(
         {"request": request, "app_name": request.app.title, "user": user,
          "sale": sale, "from": from_, "cust": cust, "quote": quote, "thermal": thermal,
          "linked": linked, "original": original, "credit_outstanding": credit_outstanding,
-         "can_void": _can_void_sale(user), "void_error": VOID_ERRORS.get(void_error)},
+         "can_void": _can_void_sale(user), "void_error": VOID_ERRORS.get(void_error),
+         "can_edit_date": is_staff(user), "edit_date_error": EDIT_DATE_ERRORS.get(edit_date_error),
+         "today_iso": datetime.now(MANILA).date().isoformat(),
+         "can_edit_items": is_staff(user) and _can_edit_sale_items(db, sale) is None,
+         "edit_items_error": EDIT_ITEMS_ERRORS.get(edit_items_error)},
     )
 
 
@@ -908,6 +958,50 @@ VOID_ERRORS = {
     "pdc": "This sale has a post-dated cheque recorded against it.",
     "denied": "You don't have permission to void sales.",
 }
+
+EDIT_DATE_ERRORS = {
+    "denied": "You don't have permission to edit a sale's transaction date.",
+    "voided": "This sale is voided — its date can't be edited.",
+    "invalid": "Enter a valid date.",
+    "future": "Transaction date can't be in the future.",
+}
+
+# Editing a sale's items in place is only offered for the simple, common
+# case — a same-day walk-in mistake caught before anything else built on
+# it. Anything involving credit, a cheque, a split payment, or a linked
+# refund/exchange has to go through Void instead: those cases have money or
+# stock already moved somewhere an in-place edit can't safely follow.
+EDIT_ITEMS_ERRORS = {
+    "denied": "You don't have permission to edit a sale's items.",
+    "voided": "This sale is voided.",
+    "type": "Only a plain sale can be edited here — not a refund or exchange.",
+    "credit": "This sale has a credit or cheque payment — void it instead of editing.",
+    "split": "This sale was paid with more than one payment method — void it instead of editing.",
+    "linked": "This sale has a refund or exchange linked to it — void that first.",
+    "pdc": "This sale has a post-dated cheque recorded against it.",
+    "empty": "A sale needs at least one item.",
+}
+
+
+def _can_edit_sale_items(db: Session, sale: models.Sale):
+    """Returns an EDIT_ITEMS_ERRORS key, or None if this sale is eligible for
+    in-place item editing. Same underlying restrictions as void (see
+    void_sale) — an edit is really "reverse the old lines, apply new ones to
+    the same invoice" under the hood, so anywhere void wouldn't be safe,
+    editing isn't either."""
+    if sale.is_voided:
+        return "voided"
+    if sale.txn_type != "sale":
+        return "type"
+    if (sale.receivable_amount or 0) > 0:
+        return "credit"
+    if len(sale.payments) != 1:
+        return "split"
+    if db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id).first():
+        return "linked"
+    if db.query(models.PostDatedCheque.id).filter(models.PostDatedCheque.sale_id == sale.id).first():
+        return "pdc"
+    return None
 
 
 @router.post("/pos/receipt/{sale_id:int}/void")
@@ -979,6 +1073,202 @@ def void_sale(
     )
     db.commit()
     return _back()
+
+
+@router.post("/pos/receipt/{sale_id:int}/edit-date")
+def edit_sale_date(
+    sale_id: int,
+    request: Request,
+    new_date: str = Form(""),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Correct the transaction date recorded on an already-saved sale — for
+    fixing backlog encoding mistakes (e.g. today's date got left on a sale
+    that actually happened last week). Admin/manager only: this quietly
+    moves the sale between reporting periods (Sales list, Reports, Inventory
+    Adjustments all key off created_at), so it isn't exposed to cashiers the
+    way Void is. Only the date changes — the original time-of-day is kept,
+    same as a manual DB fix would, so ordering among that day's other sales
+    stays sensible."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    sale = db.get(models.Sale, sale_id)
+    if not sale:
+        return RedirectResponse("/pos", status_code=302)
+
+    def _back(err=None):
+        suffix = f"&edit_date_error={err}" if err else ""
+        return RedirectResponse(f"/pos/receipt/{sale_id}?from=sales{suffix}", status_code=302)
+
+    if not is_staff(user):
+        return _back("denied")
+    if sale.is_voided:
+        return _back("voided")
+
+    try:
+        new_d = date.fromisoformat((new_date or "").strip())
+    except ValueError:
+        return _back("invalid")
+    today = datetime.now(MANILA).date()
+    if new_d > today:
+        return _back("future")
+
+    old_created_at = sale.created_at
+    old_time = old_created_at.timetz() if old_created_at else datetime.now(MANILA).timetz()
+    new_created_at = datetime.combine(new_d, old_time)
+    if new_created_at == old_created_at:
+        return _back()
+
+    sale.created_at = new_created_at
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="sale",
+        entity_id=sale.id, entity_label=sale.invoice_no,
+        summary=f"Corrected transaction date for sale {sale.invoice_no}",
+        changes={"created_at": [old_created_at.isoformat() if old_created_at else None, new_created_at.isoformat()]},
+    )
+    db.commit()
+    return _back()
+
+
+@router.get("/pos/receipt/{sale_id:int}/edit", response_class=HTMLResponse)
+def edit_sale_items_form(sale_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    sale = db.get(models.Sale, sale_id)
+    if not sale:
+        return RedirectResponse("/pos", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse(f"/pos/receipt/{sale_id}?from=sales&edit_items_error=denied", status_code=302)
+    block_reason = _can_edit_sale_items(db, sale)
+    if block_reason:
+        return RedirectResponse(f"/pos/receipt/{sale_id}?from=sales&edit_items_error={block_reason}", status_code=302)
+
+    lines_payload = []
+    for line in sale.lines:
+        lines_payload.append({
+            "product_id": line.product_id,
+            "name": line.product_name,
+            "unit_name": line.unit_name or "Unit",
+            "factor": float(line.unit_factor or 1),
+            "qty": float(line.qty or 0),
+            "unit_price": float(line.unit_price or 0),
+            "discount": float(line.discount or 0),
+            "tier": line.price_tier or "fixed",
+        })
+    return templates.TemplateResponse(
+        "edit_sale.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user, "sale": sale,
+            "lines_json": json.dumps(lines_payload),
+            "vat_applied": bool(sale.lines and sale.lines[0].is_vat),
+        },
+    )
+
+
+@router.post("/pos/receipt/{sale_id:int}/edit")
+async def edit_sale_items(sale_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    sale = db.get(models.Sale, sale_id)
+    if not sale:
+        return JSONResponse({"ok": False, "error": "Sale not found."}, status_code=404)
+    if not is_staff(user):
+        return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS["denied"]}, status_code=403)
+    block_reason = _can_edit_sale_items(db, sale)
+    if block_reason:
+        return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS[block_reason]}, status_code=400)
+
+    data = await request.json()
+    new_lines = data.get("lines") or []
+    if not new_lines:
+        return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS["empty"]}, status_code=400)
+    vat_applied = bool(data.get("vat_applied"))
+    discount_total = _dec(data.get("discount_total"))
+
+    old_total = sale.total
+    old_line_count = len(sale.lines)
+
+    # Reverse every existing line's stock effect first — same mechanics as
+    # Void — but keep the original StockMovement rows as history; only add
+    # compensating entries, don't delete them.
+    for line in sale.lines:
+        if not line.product_id:
+            continue
+        product = db.get(models.Product, line.product_id, with_for_update=True)
+        if not product:
+            continue
+        base_qty = Decimal(str(line.qty or 0)) * Decimal(str(line.unit_factor or 1))
+        _add_stock(product, base_qty)
+        unit_cost = Decimal(str(line.unit_cost or 0))
+        db.add(models.StockMovement(
+            product_id=product.id, qty_base=base_qty, reason="sale-edit-reverse",
+            ref=sale.invoice_no, unit_cost=unit_cost, value=base_qty * unit_cost,
+            note="Reversed for item correction",
+        ))
+    sale.lines = []  # cascade="all, delete-orphan" removes the old rows
+
+    subtotal = Decimal("0")
+    for ln in new_lines:
+        product = db.get(models.Product, int(ln["product_id"]), with_for_update=True) if ln.get("product_id") else None
+        if not product:
+            continue
+        qty = _dec(ln.get("qty"))
+        unit_price = _dec(ln.get("unit_price"))
+        factor = _dec(ln.get("factor"), "1")
+        discount = _dec(ln.get("discount"))
+
+        line_total = qty * unit_price - discount
+        if line_total < 0:
+            line_total = Decimal("0")
+        subtotal += line_total
+
+        base_qty = qty * factor
+        _deduct_stock(product, base_qty)
+        unit_cost = Decimal(str(product.cost_price or 0))
+        db.add(models.StockMovement(
+            product_id=product.id, qty_base=-base_qty, reason="sale", ref=sale.invoice_no,
+            unit_cost=unit_cost, value=-base_qty * unit_cost, note="Corrected item",
+        ))
+        sale.lines.append(models.SaleLine(
+            product_id=product.id, product_name=product.name, unit_name=ln.get("unit_name"),
+            unit_factor=factor, qty=qty, unit_price=unit_price, discount=discount,
+            line_total=_money(line_total), is_vat=vat_applied,
+            price_tier=(ln.get("tier") or "fixed"), unit_cost=_money(product.cost_price or 0),
+        ))
+
+    if not sale.lines:
+        db.rollback()
+        return JSONResponse({"ok": False, "error": "None of the items matched a real product."}, status_code=400)
+
+    total = subtotal - discount_total
+    if total < 0:
+        total = Decimal("0")
+    vat_amount = _vat_of(total) if vat_applied else Decimal("0")
+    net = _money(total) - vat_amount
+
+    sale.subtotal = _money(subtotal)
+    sale.discount_total = _money(discount_total)
+    sale.vat_amount = vat_amount
+    sale.net_amount = _money(net)
+    sale.total = _money(total)
+
+    # Exactly one non-credit payment is guaranteed by _can_edit_sale_items —
+    # auto-adjust it to settle the corrected total exactly (per shop's own
+    # choice: this is a same-day cash-drawer correction, not a new sale).
+    payment = sale.payments[0]
+    payment.amount = _money(total)
+    sale.amount_tendered = _money(total)
+    sale.change_amount = Decimal("0")
+
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="sale",
+        entity_id=sale.id, entity_label=sale.invoice_no,
+        summary=f"Corrected items on sale {sale.invoice_no}: {old_line_count} line(s) → {len(sale.lines)}, total {old_total:g} → {sale.total:g}",
+        changes={"total": [str(old_total), str(sale.total)]},
+    )
+    db.commit()
+    return {"ok": True, "sale_id": sale.id}
 
 
 @router.get("/pos/receipt/{sale_id:int}/pdf")

@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Import count sheet · {{ count.ref_no }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Import count sheet — {{ count.ref_no }}</h1>
+  <a class="btn-link" href="/stock-count/{{ count.id }}">← Back to count</a>
+</div>
+
+{% if result and result.error %}
+  <div class="alert">{{ result.error }}</div>
+{% elif result %}
+  <div class="card result-card">
+    <h2 class="result-title">Import finished</h2>
+    <p class="muted">{{ result.filename }} — {{ result.total }} data row{{ '' if result.total == 1 else 's' }} read.</p>
+    <div class="result-stats">
+      <div class="stat ok"><span class="num">{{ result.applied }}</span><span>Counts applied</span></div>
+      <div class="stat muted-stat"><span class="num">{{ result.skipped }}</span><span>Skipped (blank)</span></div>
+      <div class="stat {{ 'err' if result.errors else 'muted-stat' }}"><span class="num">{{ result.errors|length }}</span><span>Errors</span></div>
+    </div>
+    {% if result.errors %}
+    <table class="grid" style="margin-top:16px;">
+      <thead><tr><th>Row</th><th>Product</th><th>Problem</th></tr></thead>
+      <tbody>
+        {% for e in result.errors %}
+        <tr><td>{{ e.row }}</td><td>{{ e.name }}</td><td>{{ e.message }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    <div class="form-actions" style="margin-top:18px;">
+      <a class="btn" href="/stock-count/{{ count.id }}">View count</a>
+      <a class="btn-secondary" href="/stock-count/{{ count.id }}/import">Import another file</a>
+    </div>
+  </div>
+{% else %}
+  <div class="import-steps">
+    <div class="card step">
+      <div class="step-no">1</div>
+      <div>
+        <h2>Download the count sheet</h2>
+        <p class="muted">An Excel file listing every active product, with a blank Counted Qty column to fill in
+          (already-counted lines in this session come pre-filled, so re-downloading picks up where you left off).</p>
+        {% if shelves %}
+        <form method="get" action="/stock-count/{{ count.id }}/import/template" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+          <label style="margin:0;font-size:12.5px;color:var(--muted);">Filter by shelf (optional)
+            <select name="shelf_id" style="display:block;margin-top:4px;">
+              <option value="0">All shelves</option>
+              {% for s in shelves %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+            </select>
+          </label>
+          <button class="btn" type="submit">⬇ Download count sheet</button>
+        </form>
+        {% else %}
+        <a class="btn" href="/stock-count/{{ count.id }}/import/template">⬇ Download count sheet</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card step">
+      <div class="step-no">2</div>
+      <div>
+        <h2>Upload your filled-in sheet</h2>
+        <p class="muted">Accepts <strong>.xlsx</strong> or <strong>.csv</strong>. Only rows with a Counted Qty filled in are applied —
+          leave a row blank to skip it. Uploading again for a product already in this count overwrites its counted quantity.</p>
+        <form method="post" action="/stock-count/{{ count.id }}/import" enctype="multipart/form-data" class="upload-form">
+          <input type="file" name="file" accept=".xlsx,.xlsm,.csv" required>
+          <button class="btn" type="submit">⬆ Import</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="hint-box">
+      <strong>Columns:</strong> Barcode, Product Name (required), Unit, System Qty, Counted Qty.
+      Each row is matched to a product by Barcode first, falling back to an exact Product Name match if the
+      barcode is blank. A row that matches nothing becomes an error instead of silently being skipped.
+      <br><br>
+      <strong>Counted Qty</strong> is in the product's base unit — the one shown in the <strong>Unit</strong> column.
+      It replaces whatever this session already has for that product, same as typing a new number into the
+      Counted field by hand. This doesn't touch stock until the count is completed.
+      <br><br>
+      <strong>Products sold in more than one unit</strong> get an extra column per unit (e.g. Sack, Elf Load),
+      shaded green. Count 2 sacks and 3 loose kilos by writing <strong>2</strong> under Sack and <strong>3</strong>
+      under Counted Qty — the import converts and adds them up for you (2 × 25 + 3 = 53 Kg), so nobody has to do
+      the multiplication by hand. A <strong>—</strong> means that unit doesn't apply to that product; leave it alone.
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

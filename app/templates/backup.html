@@ -5,11 +5,25 @@
   <div>
     <h1 class="page-title">Backup</h1>
     <p class="muted">Save a copy of everything — products, sales, purchases, customers and credits.</p>
+    <p class="muted" style="font-size:12.5px;margin-top:4px;">
+      <strong>Save backup now</strong> keeps a copy on this server, in the list below, for later.
+      <strong>Download backup now</strong> sends a copy straight to your browser's Downloads folder instead.
+    </p>
   </div>
-  <a class="btn" href="/backup/download">⬇ Download backup now</a>
+  <div class="head-actions">
+    <form method="post" action="/backup/snapshot">
+      <button class="btn-secondary" type="submit">📸 Save backup now</button>
+    </form>
+    <a class="btn" href="/backup/download">⬇ Download backup now</a>
+  </div>
 </div>
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+{% if saved %}
+<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;">
+  Backup saved — it's now in the list below, kept on this server independently of your browser.
+</div>
+{% endif %}
 
 <div class="card" style="padding:18px 20px; margin-bottom:16px;">
   {% if latest %}
@@ -45,20 +59,23 @@
   protects you from a dead PC, fire or theft.
 </div>
 
-<h3 class="ex-h">Automatic daily backups</h3>
+<h3 class="ex-h">Backups</h3>
 <div class="table-wrap">
   <table class="grid">
     <thead><tr><th>File</th><th>Created</th><th class="num">Size</th><th></th></tr></thead>
     <tbody>
       {% for f in files %}
       <tr>
-        <td class="strong">{{ f.name }}</td>
+        <td class="strong">{{ f.name }}
+          {% if f.manual %}<span class="txn" style="background:#eff6ff;color:#1d4ed8;">manual</span>
+          {% else %}<span class="txn" style="background:#f1f5f9;color:#64748b;">automatic</span>{% endif %}
+        </td>
         <td>{{ f.when.strftime('%b %d, %Y %I:%M %p') }}</td>
         <td class="num">{{ '%.1f'|format(f.size / 1024) }} KB</td>
         <td class="row-actions"><a class="btn-link" href="/backup/file/{{ f.name }}">Download</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="4" class="empty">No automatic backups yet. Use <strong>Download backup now</strong> above to make one immediately.</td></tr>
+      <tr><td colspan="4" class="empty">No backups yet. Use <strong>Save backup now</strong> above to make one immediately.</td></tr>
       {% endfor %}
     </tbody>
   </table>

@@ -28,6 +28,18 @@
 {% if bulk_msg %}
 <div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;">{{ bulk_msg }}</div>
 {% endif %}
+{% if deleted %}
+<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;">Product deleted.</div>
+{% endif %}
+{% if delete_blocked %}
+<div class="alert" style="background:#fffbeb;border-color:#fde68a;color:#92400e;">
+  <strong>“{{ delete_blocked_name }}” can't be deleted</strong> — it already has sales, purchases, or stock
+  activity recorded against it, and deleting it would break that history. Use
+  <form method="post" action="/products/{{ delete_blocked }}/archive" style="display:inline;" onsubmit="return confirm('Archive {{ delete_blocked_name|e }}?');">
+    <button type="submit" class="btn-link" style="font-weight:700;">Archive</button>
+  </form> instead — it hides the product the same way, and can be restored anytime from <a href="/products/archived">Archived</a>.
+</div>
+{% endif %}
 
 {% if alert %}
 <div class="alert" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">
@@ -46,38 +58,64 @@
 </div>
 
 {% set qs_base = ('q=' ~ q ~ '&' if q) ~ ('alert=1&' if alert) %}
-{% if categories %}
-<div class="cat-pills">
-  <a class="cat-pill {{ 'active' if not category_id }}" href="/products?{{ qs_base }}category_id=0">All categories</a>
-  {% for c in categories %}
-  <a class="cat-pill {{ 'active' if category_id == c.id }}" href="/products?{{ qs_base }}category_id={{ c.id }}">
-    {{ c.name }} <span class="cat-pill-count">{{ cat_counts.get(c.id, 0) }}</span>
-  </a>
-  {% endfor %}
-</div>
-{% endif %}
+<div class="pill-filter-bar">
+  {% if categories %}
+  {% set current_cat = categories|selectattr('id', 'equalto', category_id)|map(attribute='name')|first if category_id else None %}
+  <details class="filter-drop">
+    <summary>{{ current_cat or 'All categories' }}
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 9l6 6 6-6"/></svg>
+    </summary>
+    <div class="filter-panel pills-panel">
+      <div class="cat-pills">
+        <a class="cat-pill {{ 'active' if not category_id }}" href="/products?{{ qs_base }}category_id=0">All categories</a>
+        {% for c in categories %}
+        <a class="cat-pill {{ 'active' if category_id == c.id }}" href="/products?{{ qs_base }}category_id={{ c.id }}">
+          {{ c.name }} <span class="cat-pill-count">{{ cat_counts.get(c.id, 0) }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+  </details>
+  {% endif %}
 
-{% if subcategories %}
-<div class="cat-pills">
-  <a class="cat-pill {{ 'active' if not subcategory_id }}" href="/products?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}subcategory_id=0">All sub categories</a>
-  {% for sc in subcategories %}
-  <a class="cat-pill {{ 'active' if subcategory_id == sc.id }}" href="/products?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}subcategory_id={{ sc.id }}">
-    {{ sc.name }} <span class="cat-pill-count">{{ subcat_counts.get(sc.id, 0) }}</span>
-  </a>
-  {% endfor %}
-</div>
-{% endif %}
+  {% if subcategories %}
+  {% set current_subcat = subcategories|selectattr('id', 'equalto', subcategory_id)|map(attribute='name')|first if subcategory_id else None %}
+  <details class="filter-drop">
+    <summary>{{ current_subcat or 'All sub categories' }}
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 9l6 6 6-6"/></svg>
+    </summary>
+    <div class="filter-panel pills-panel">
+      <div class="cat-pills">
+        <a class="cat-pill {{ 'active' if not subcategory_id }}" href="/products?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}subcategory_id=0">All sub categories</a>
+        {% for sc in subcategories %}
+        <a class="cat-pill {{ 'active' if subcategory_id == sc.id }}" href="/products?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}subcategory_id={{ sc.id }}">
+          {{ sc.name }} <span class="cat-pill-count">{{ subcat_counts.get(sc.id, 0) }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+  </details>
+  {% endif %}
 
-{% if shelves %}
-<div class="cat-pills">
-  <a class="cat-pill {{ 'active' if not shelf_id }}" href="/products?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}{{ 'subcategory_id=' ~ subcategory_id ~ '&' if subcategory_id }}shelf_id=0">All shelves</a>
-  {% for s in shelves %}
-  <a class="cat-pill {{ 'active' if shelf_id == s.id }}" href="/products?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}{{ 'subcategory_id=' ~ subcategory_id ~ '&' if subcategory_id }}shelf_id={{ s.id }}">
-    {{ s.name }} <span class="cat-pill-count">{{ shelf_counts.get(s.id, 0) }}</span>
-  </a>
-  {% endfor %}
+  {% if shelves %}
+  {% set current_shelf = shelves|selectattr('id', 'equalto', shelf_id)|map(attribute='name')|first if shelf_id else None %}
+  <details class="filter-drop">
+    <summary>{{ current_shelf or 'All shelves' }}
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 9l6 6 6-6"/></svg>
+    </summary>
+    <div class="filter-panel pills-panel">
+      <div class="cat-pills">
+        <a class="cat-pill {{ 'active' if not shelf_id }}" href="/products?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}{{ 'subcategory_id=' ~ subcategory_id ~ '&' if subcategory_id }}shelf_id=0">All shelves</a>
+        {% for s in shelves %}
+        <a class="cat-pill {{ 'active' if shelf_id == s.id }}" href="/products?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}{{ 'subcategory_id=' ~ subcategory_id ~ '&' if subcategory_id }}shelf_id={{ s.id }}">
+          {{ s.name }} <span class="cat-pill-count">{{ shelf_counts.get(s.id, 0) }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+  </details>
+  {% endif %}
 </div>
-{% endif %}
 
 <form class="toolbar" method="get" action="/products">
   {% if alert %}<input type="hidden" name="alert" value="1">{% endif %}
@@ -151,9 +189,8 @@
           {% if (user.role or '')|lower == 'admin' %}
           <a class="btn-link" href="/products/{{ p.id }}/stock-card">Stock card</a>
           {% endif %}
-          <form method="post" action="/products/{{ p.id }}/archive" onsubmit="return confirm('Archive {{ p.name|e }}?');">
-            <button class="btn-link danger" type="submit">Archive</button>
-          </form>
+          <button type="button" class="btn-link danger"
+                  onclick="submitRowAction('/products/{{ p.id }}/delete', 'Delete {{ p.name|e }}? This cannot be undone.\n\nIf this product already has sales, purchases, or stock activity, deleting it will be blocked — use Archive for those instead.')">Delete</button>
         </td>
       </tr>
       {% if p.unit_breakdown %}
@@ -214,6 +251,23 @@
   <button type="button" class="btn-link" onclick="clearAllChk()">Clear selection</button>
 </div>
 {% endif %}
+
+{# Deliberately outside #bulkForm (the table above lives inside that form for
+   checkbox selection): a <form> nested inside another <form> is invalid HTML
+   and browsers silently drop the inner one, so a per-row Delete/Archive
+   button would actually submit the OUTER form instead — with none of its
+   fields, which used to hit POST /products (Add Product) and looked like
+   pressing Delete "added a product". Every row's action button posts through
+   this single form via JS instead, well outside the table's own form. #}
+<form id="rowActionForm" method="post" style="display:none;"></form>
+<script>
+function submitRowAction(action, confirmText) {
+  if (!confirm(confirmText)) return;
+  const f = document.getElementById('rowActionForm');
+  f.action = action;
+  f.submit();
+}
+</script>
 
 {% if pages > 1 %}
 <div class="pager">
