@@ -140,6 +140,7 @@ TEMPLATE_HEADERS = [
     "Category",
     "Sub Category",
     "Unit Type",
+    "Shelf",
     "Cost of Sales",
     "Selling Price",
     "Actual Beginning Stocks",
@@ -154,6 +155,7 @@ HEADER_MAP = {
     "category": "category",
     "sub category": "subcategory", "subcategory": "subcategory", "sub-category": "subcategory",
     "unit type": "unit_type", "unit": "unit_type", "unit of measure": "unit_type", "uom": "unit_type",
+    "shelf": "shelf", "shelf location": "shelf", "shelf #": "shelf", "shelf no": "shelf",
     "cost of sales": "cost", "cost": "cost", "cost price": "cost",
     "selling price": "selling", "price": "selling", "srp": "selling",
     "actual beginning stocks": "beginning", "beginning stock": "beginning",
@@ -161,7 +163,7 @@ HEADER_MAP = {
     "stocks qty": "stocks", "stock qty": "stocks", "stocks": "stocks", "stock": "stocks",
     "vat": "vat", "vat-able": "vat", "vatable": "vat",
 }
-FIELDS = ["name", "barcode", "category", "subcategory", "unit_type", "cost", "selling", "beginning", "stocks", "vat"]
+FIELDS = ["name", "barcode", "category", "subcategory", "unit_type", "shelf", "cost", "selling", "beginning", "stocks", "vat"]
 
 # --- Units & Conversions import (separate flow for products that sell in
 # more than one unit, e.g. Sack/Elf Load/Kg) — see routes near the bottom of
@@ -437,6 +439,7 @@ def export_products_excel(
     alert: int = 0,
     category_id: int = 0,
     subcategory_id: int = 0,
+    shelf_id: int = 0,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -455,10 +458,12 @@ def export_products_excel(
         query = query.filter(models.Product.category_id == category_id)
     if subcategory_id:
         query = query.filter(models.Product.subcategory_id == subcategory_id)
+    if shelf_id:
+        query = query.filter(models.Product.shelf_id == shelf_id)
     products = query.order_by(models.Product.name).all()
 
     is_admin_user = is_staff(user)
-    headers = ["Product Name", "Barcode", "Category", "Sub Category", "Unit Type", "Cost of Sales"]
+    headers = ["Product Name", "Barcode", "Category", "Sub Category", "Unit Type", "Shelf", "Cost of Sales"]
     if is_admin_user:
         headers.append("Selling Price")
     headers += ["Actual Beginning", "Stocks Qty", "Total Qty"]
@@ -476,6 +481,7 @@ def export_products_excel(
         row = [
             p.name, p.barcode or "", p.category.name if p.category else "",
             p.subcategory.name if p.subcategory else "", p.unit_type.name if p.unit_type else "",
+            p.shelf.name if p.shelf else "",
             float(p.cost_price or 0),
         ]
         if is_admin_user:
@@ -483,7 +489,7 @@ def export_products_excel(
         row += [float(p.beginning_stock or 0), float(p.stock_qty or 0), float(p.total_qty or 0)]
         ws.append(row)
 
-    widths = [28, 16, 16, 16, 14, 14, 14, 14, 14, 14]
+    widths = [28, 16, 16, 16, 14, 14, 14, 14, 14, 14, 14]
     for i, w in enumerate(widths[: len(headers)], start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.freeze_panes = "A2"
@@ -1304,6 +1310,14 @@ def _parse_upload(filename: str, contents: bytes, header_map=None, fields=None,
         record = {f: cell(raw, f) for f in fields}
         if not any(record[f] for f in fields):  # skip blank rows
             continue
+        # Shelf is the one column where "not in the file at all" has to stay
+        # distinguishable from "in the file but blank": a re-import of an
+        # updated price/stock list has no reason to mention shelves, and must
+        # not silently wipe every shelf assignment the shop already made.
+        # None = column absent (leave the product's shelf alone);
+        # ""   = column present but blank for this row (clear it, on purpose).
+        if "shelf" in fields and "shelf" not in idx:
+            record["shelf"] = None
         rows.append(record)
     return rows, None
 
@@ -1368,6 +1382,10 @@ def _apply_import_row(db: Session, file_label: str, record: dict, existing):
     product.category = _get_or_create_category(db, record["category"])
     product.subcategory = _get_or_create_subcategory(db, record["subcategory"], product.category)
     product.unit_type = _get_or_create_unit_type(db, record["unit_type"])
+    # None means the uploaded file had no Shelf column at all, so it isn't
+    # saying anything about shelves — keep whatever this product already has.
+    if record.get("shelf") is not None:
+        product.shelf = _get_or_create_shelf(db, record["shelf"])
     product.cost_price = _to_decimal(record["cost"])
     product.selling_price = _to_decimal(record["selling"])
     product.beginning_stock = _to_decimal(record["beginning"])
@@ -1544,10 +1562,10 @@ def download_template(user=Depends(get_current_user)):
     # cost is optional and gets filled in automatically when you receive stock
     # in Purchasing, and barcode is optional too — scan it in with a barcode
     # scanner (it types like a keyboard) or leave it blank if the item has none.
-    ws.append(["4800000000017", "Portland Cement 40kg", "Cement", "Bag Cement", "Bag", 220, 260, 10, 5])
-    ws.append([None, "Common Wire Nail #4", "Fasteners", "Nails", "Kg", None, 95, 25.5, 0])
+    ws.append(["4800000000017", "Portland Cement 40kg", "Cement", "Bag Cement", "Bag", "Shelf 1", 220, 260, 10, 5])
+    ws.append([None, "Common Wire Nail #4", "Fasteners", "Nails", "Kg", "Shelf 2", None, 95, 25.5, 0])
 
-    widths = [18, 26, 16, 16, 12, 14, 14, 24, 12]
+    widths = [18, 26, 16, 16, 12, 14, 14, 14, 24, 12]
     for i, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = width
     ws.freeze_panes = "A2"

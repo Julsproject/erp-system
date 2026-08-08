@@ -62,13 +62,17 @@
     </div>
 
     <div class="hint-box">
-      <strong>Columns:</strong> Barcode, Product Name (required), Category, Sub Category, Unit Type, Cost of Sales, Selling Price,
+      <strong>Columns:</strong> Barcode, Product Name (required), Category, Sub Category, Unit Type, Shelf, Cost of Sales, Selling Price,
       Actual Beginning Stocks, Stocks Qty, VAT (yes/no). Total Qty is calculated automatically.
       Column order doesn't actually matter to the import — this is just what the downloaded template looks like.
       <br><br>
       <strong>Barcode column:</strong> optional — click into the cell and scan with a barcode scanner
       (it types like a keyboard), or leave it blank for items with none. A barcode already used by another
       product will be skipped with an error instead of overwriting it.
+      <br><br>
+      <strong>Shelf column:</strong> optional — where the item is physically kept (e.g. "Shelf 1"). Type a new
+      shelf name and it's created automatically, same as Category. Re-importing an existing product with this
+      column blank will clear its shelf, so leave it filled in on every row if you're re-uploading the whole list.
       <br><br>
       <strong>Don't know the cost yet?</strong> Leave <em>Cost of Sales</em> blank — the import still goes through.
       The cost is filled in automatically the first time you receive that item in

@@ -10,7 +10,7 @@
     </p>
   </div>
   <div class="head-actions">
-    <a class="btn-secondary" href="/products/export.xlsx?q={{ q }}&category_id={{ category_id }}&subcategory_id={{ subcategory_id }}&alert={{ 1 if alert else 0 }}">⬇ Export Excel</a>
+    <a class="btn-secondary" href="/products/export.xlsx?q={{ q }}&category_id={{ category_id }}&subcategory_id={{ subcategory_id }}&shelf_id={{ shelf_id }}&alert={{ 1 if alert else 0 }}">⬇ Export Excel</a>
     <a class="btn-secondary" href="/products/archived">🗄 Archived</a>
     <a class="btn-secondary" href="/shelves">🗂 Shelves</a>
     <a class="btn-secondary" href="/products/import">⬆ Import Excel</a>
@@ -19,7 +19,7 @@
 </div>
 
 <div class="stat-row">
-  <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>SKU{{ '' if total == 1 else 's' }}{{ ' matching filter' if q or category_id or subcategory_id or alert }}</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>SKU{{ '' if total == 1 else 's' }}{{ ' matching filter' if q or category_id or subcategory_id or shelf_id or alert }}</span></div>
   <div class="mini-stat"><span class="mini-num">{{ total_cost_value|peso }}</span><span>Stock Value (at cost)</span></div>
   <div class="mini-stat"><span class="mini-num">{{ total_retail_value|peso }}</span><span>Stock Value (at retail)</span></div>
   <div class="mini-stat"><span class="mini-num">{{ (total_retail_value - total_cost_value)|peso }}</span><span>Potential Gross Profit</span></div>
@@ -199,7 +199,7 @@
       </tr>
       {% endfor %}
       {% else %}
-      <tr><td colspan="{{ 12 if is_admin_user else 11 }}" class="empty">No products yet. Click <strong>Add product</strong> to start encoding inventory.</td></tr>
+      <tr><td colspan="{{ 13 if is_admin_user else 12 }}" class="empty">No products yet. Click <strong>Add product</strong> to start encoding inventory.</td></tr>
       {% endfor %}
     </tbody>
   </table>

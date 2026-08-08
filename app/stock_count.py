@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from . import audit, models
 from .database import get_db
 from .deps import get_current_user, is_staff
-from .products import ADJUSTMENT_REASON_LABELS, ADJUSTMENT_REASONS, _get_or_create_shelf
+from .products import ADJUSTMENT_REASON_LABELS, ADJUSTMENT_REASONS
 from .templating import templates
 
 router = APIRouter()
@@ -194,7 +194,8 @@ async def stock_count_scan(count_id: int, request: Request, db: Session = Depend
 async def stock_count_add_shelf(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Bulk-add every product on one shelf as a line (counted_qty starts at
     0, same as a freshly-scanned line) — lets a count be worked shelf by
-    shelf instead of hunting the alphabetical product list."""
+    shelf instead of hunting the alphabetical product list. Shelves are
+    assigned ahead of time (product form or bulk import), not from here."""
     if not user or not is_staff(user):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     count = db.get(models.StockCount, count_id)
@@ -202,12 +203,15 @@ async def stock_count_add_shelf(count_id: int, request: Request, db: Session = D
         return JSONResponse({"ok": False, "error": "This count isn't open anymore."}, status_code=400)
 
     data = await request.json()
-    shelf_id = data.get("shelf_id")
+    try:
+        shelf_id = int(data.get("shelf_id") or 0)
+    except (TypeError, ValueError):
+        shelf_id = 0
     if not shelf_id:
         return JSONResponse({"ok": False, "error": "Pick a shelf."}, status_code=400)
     products = (
         db.query(models.Product)
-        .filter(models.Product.shelf_id == int(shelf_id), models.Product.is_active.is_(True))
+        .filter(models.Product.shelf_id == shelf_id, models.Product.is_active.is_(True))
         .all()
     )
     if not products:
@@ -316,52 +320,6 @@ async def stock_count_set_line_units(count_id: int, line_id: int, request: Reque
     line.unit_breakdown = json.dumps(breakdown) if breakdown else None
     db.commit()
     return {"ok": True, "line": _line_dict(line)}
-
-
-@router.post("/stock-count/{count_id:int}/bulk-set-shelf")
-async def stock_count_bulk_set_shelf(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    """Assign many already-counted lines to one shelf in a single save —
-    the client's actual workflow is importing products with no shelf yet,
-    then walking the store shelf by shelf during Stock Count: scan/add
-    everything physically on that shelf, tick them, pick the shelf name
-    once, save. Typing a new shelf name creates it on the fly."""
-    if not user or not is_staff(user):
-        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-    count = db.get(models.StockCount, count_id)
-    if not count or count.status != "open":
-        return JSONResponse({"ok": False, "error": "This count isn't open anymore."}, status_code=400)
-
-    data = await request.json()
-    raw_ids = data.get("line_ids") or []
-    shelf_name = (data.get("shelf") or "").strip()
-    if not raw_ids:
-        return JSONResponse({"ok": False, "error": "Select at least one product first."}, status_code=400)
-    if not shelf_name:
-        return JSONResponse({"ok": False, "error": "Type or pick a shelf name."}, status_code=400)
-    try:
-        line_ids = [int(i) for i in raw_ids]
-    except (TypeError, ValueError):
-        return JSONResponse({"ok": False, "error": "Invalid selection."}, status_code=400)
-
-    shelf = _get_or_create_shelf(db, shelf_name)
-    lines = (
-        db.query(models.StockCountLine)
-        .filter(models.StockCountLine.stock_count_id == count.id, models.StockCountLine.id.in_(line_ids))
-        .all()
-    )
-    updated = []
-    for line in lines:
-        if line.product:
-            line.product.shelf = shelf
-            updated.append(line)
-    db.commit()
-    # Return every shelf (not just this one) so the page can refresh its
-    # "add a whole shelf"/filter dropdowns in case this just created a new one.
-    shelves = [{"id": s.id, "name": s.name} for s in db.query(models.Shelf).order_by(models.Shelf.name).all()]
-    return {
-        "ok": True, "shelf": shelf.name, "updated": len(updated),
-        "lines": [_line_dict(l) for l in updated], "shelves": shelves,
-    }
 
 
 @router.post("/stock-count/{count_id:int}/complete")
