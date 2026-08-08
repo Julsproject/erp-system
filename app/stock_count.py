@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from . import audit, models
 from .database import get_db
 from .deps import get_current_user, is_staff
-from .products import ADJUSTMENT_REASON_LABELS, ADJUSTMENT_REASONS
+from .products import ADJUSTMENT_REASON_LABELS, ADJUSTMENT_REASONS, _get_or_create_shelf
 from .templating import templates
 
 router = APIRouter()
@@ -316,6 +316,34 @@ async def stock_count_set_line_units(count_id: int, line_id: int, request: Reque
     line.unit_breakdown = json.dumps(breakdown) if breakdown else None
     db.commit()
     return {"ok": True, "line": _line_dict(line)}
+
+
+@router.post("/stock-count/{count_id:int}/line/{line_id:int}/set-shelf")
+async def stock_count_set_line_shelf(count_id: int, line_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Assign (or clear) the product's shelf right from the count — staff are
+    already standing at the shelf while counting, so this is the natural
+    place to record it for anything that doesn't have one yet, instead of
+    making a separate trip to the product's own edit form."""
+    if not user or not is_staff(user):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    count = db.get(models.StockCount, count_id)
+    if not count or count.status != "open":
+        return JSONResponse({"ok": False, "error": "This count isn't open anymore."}, status_code=400)
+    line = db.get(models.StockCountLine, line_id)
+    if not line or line.stock_count_id != count.id:
+        return JSONResponse({"ok": False, "error": "Line not found."}, status_code=404)
+    product = line.product
+    if not product:
+        return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
+
+    data = await request.json()
+    shelf_name = (data.get("shelf") or "").strip()
+    product.shelf = _get_or_create_shelf(db, shelf_name) if shelf_name else None
+    db.commit()
+    # Return every shelf (not just this one) so the page can refresh its
+    # "add a whole shelf"/filter dropdowns in case this just created a new one.
+    shelves = [{"id": s.id, "name": s.name} for s in db.query(models.Shelf).order_by(models.Shelf.name).all()]
+    return {"ok": True, "line": _line_dict(line), "shelves": shelves}
 
 
 @router.post("/stock-count/{count_id:int}/complete")
