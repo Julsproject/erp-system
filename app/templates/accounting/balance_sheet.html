@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Balance Sheet · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Balance Sheet</h1>
+    <p class="muted">As of {{ period_end.strftime('%b %d, %Y') }} · cumulative since the ledger began</p>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;">
+    <div class="seg">
+      <a class="seg-btn {{ 'active' if days == 7 and not custom }}" href="/accounting/balance-sheet?days=7">7 days</a>
+      <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="/accounting/balance-sheet?days=30">30 days</a>
+      <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="/accounting/balance-sheet?days=90">90 days</a>
+    </div>
+    <a class="btn-link" href="/accounting/coa">← Chart of Accounts</a>
+  </div>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ total_assets|peso }}</span><span>Total Assets</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total_liab_and_equity|peso }}</span><span>Liabilities + Equity</span></div>
+  <div class="mini-stat"><span class="mini-num" style="color:{{ '#15803d' if balanced else '#b91c1c' }};">{{ 'Balanced ✓' if balanced else 'OUT OF BALANCE' }}</span><span>Status</span></div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
+  <div class="table-wrap">
+    <table class="grid">
+      <thead><tr><th colspan="2">Assets</th></tr></thead>
+      <tbody>
+        {% for r in asset_rows %}
+        <tr><td>{{ r.account.code }} · {{ r.account.name }}</td><td class="num">{{ r.balance|peso }}</td></tr>
+        {% else %}
+        <tr><td colspan="2" class="empty">No asset activity yet.</td></tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr><td class="strong">Total Assets</td><td class="num strong">{{ total_assets|peso }}</td></tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <div>
+    <div class="table-wrap" style="margin-bottom:18px;">
+      <table class="grid">
+        <thead><tr><th colspan="2">Liabilities</th></tr></thead>
+        <tbody>
+          {% for r in liability_rows %}
+          <tr><td>{{ r.account.code }} · {{ r.account.name }}</td><td class="num">{{ r.balance|peso }}</td></tr>
+          {% else %}
+          <tr><td colspan="2" class="empty">No liability activity yet.</td></tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr><td class="strong">Total Liabilities</td><td class="num strong">{{ total_liabilities|peso }}</td></tr>
+        </tfoot>
+      </table>
+    </div>
+
+    <div class="table-wrap">
+      <table class="grid">
+        <thead><tr><th colspan="2">Equity</th></tr></thead>
+        <tbody>
+          {% for r in equity_rows %}
+          <tr><td>{{ r.account.code }} · {{ r.account.name }}</td><td class="num">{{ r.balance|peso }}</td></tr>
+          {% endfor %}
+          <tr><td>Net income to date <span class="muted">(not yet closed to Retained Earnings)</span></td><td class="num">{{ net_income|peso }}</td></tr>
+        </tbody>
+        <tfoot>
+          <tr><td class="strong">Total Equity</td><td class="num strong">{{ total_equity|peso }}</td></tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

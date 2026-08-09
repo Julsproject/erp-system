@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Ledger P&amp;L · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Profit &amp; Loss (from the ledger)</h1>
+    <p class="muted">{{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }}</p>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;">
+    <div class="seg">
+      <a class="seg-btn {{ 'active' if days == 7 and not custom }}" href="/accounting/profit-loss?days=7">7 days</a>
+      <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="/accounting/profit-loss?days=30">30 days</a>
+      <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="/accounting/profit-loss?days=90">90 days</a>
+    </div>
+    <a class="btn-link" href="/accounting/coa">← Chart of Accounts</a>
+  </div>
+</div>
+
+<div class="table-wrap" style="margin-bottom:18px;">
+  <table class="grid">
+    <tbody>
+      <tr><td>Revenue</td><td class="num">{{ data.revenue|peso }}</td></tr>
+      <tr><td>Cost of Sales</td><td class="num">({{ data.cost_of_sales|peso }})</td></tr>
+      <tr><td class="strong">Gross Profit</td><td class="num strong">{{ data.gross_profit|peso }}</td></tr>
+      <tr><td>Operating Expenses</td><td class="num">({{ data.expenses|peso }})</td></tr>
+      <tr><td class="strong">Net Profit</td><td class="num strong">{{ data.net_profit|peso }}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Reconciliation vs. the operational P&amp;L report</h3>
+  <p class="muted">Compares this ledger-based figure against <a href="/reports/profit-loss">Reports → Profit &amp; Loss</a> for the
+    same period, which is computed straight from Sales/Expenses records rather than journal postings. They won't
+    always match exactly — the ledger P&amp;L has no Inventory Adjustment leg yet — but a large or growing gap is
+    worth investigating.</p>
+  <div class="stat-row">
+    <div class="mini-stat"><span class="mini-num">{{ data.net_profit|peso }}</span><span>Ledger Net Profit</span></div>
+    <div class="mini-stat"><span class="mini-num">{{ operational.net_profit|peso }}</span><span>Operational Net Profit</span></div>
+    <div class="mini-stat"><span class="mini-num" style="color:{{ '#15803d' if net_diff == 0 else '#b91c1c' }};">{{ net_diff|peso }}</span><span>Difference</span></div>
+  </div>
+</div>
+{% endblock %}

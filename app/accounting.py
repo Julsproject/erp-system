@@ -697,6 +697,131 @@ def export_trial_balance(days: int = 30, date_from: str = "", date_to: str = "",
 
 
 # --------------------------------------------------------------------------- #
+# Balance Sheet + ledger-based P&L
+# --------------------------------------------------------------------------- #
+def _type_balance(db: Session, account_type: str, as_of: date) -> Decimal:
+    """Cumulative balance of every active account of one account_type, signed
+    by each account's own normal_balance, summed since inception through
+    as_of. Cumulative (not period-only) because there's no formal
+    period-close workflow — see plan Phase 2+ item 5."""
+    accounts = db.query(models.Account).filter(
+        models.Account.is_active.is_(True), models.Account.account_type == account_type,
+    ).all()
+    total = ZERO
+    for account in accounts:
+        total += _account_balance_before(db, account, as_of + timedelta(days=1))
+    return total
+
+
+def _pl_ledger_data(db: Session, period_start: date, period_end: date):
+    """Ledger-based P&L: unlike Balance Sheet's cumulative-since-inception
+    balances, this is scoped to the period — sum of JournalLine movement
+    (not opening balance) for revenue/cost_of_sales/expense accounts."""
+    def _period_total(account_type: str) -> Decimal:
+        accounts = db.query(models.Account).filter(
+            models.Account.is_active.is_(True), models.Account.account_type == account_type,
+        ).all()
+        total = ZERO
+        for account in accounts:
+            row = (
+                db.query(func.coalesce(func.sum(models.JournalLine.debit), 0), func.coalesce(func.sum(models.JournalLine.credit), 0))
+                .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
+                .filter(models.JournalLine.account_id == account.id,
+                        models.JournalEntry.txn_date.between(period_start, period_end),
+                        models.JournalEntry.status == "posted")
+                .one()
+            )
+            debit, credit = Decimal(str(row[0] or 0)), Decimal(str(row[1] or 0))
+            total += (debit - credit) if account.normal_balance == "debit" else (credit - debit)
+        return total
+
+    revenue = _period_total("revenue")
+    cost_of_sales = _period_total("cost_of_sales")
+    expenses = _period_total("expense")
+    return {
+        "revenue": revenue, "cost_of_sales": cost_of_sales, "expenses": expenses,
+        "gross_profit": revenue - cost_of_sales,
+        "net_profit": revenue - cost_of_sales - expenses,
+    }
+
+
+@router.get("/accounting/balance-sheet", response_class=HTMLResponse)
+def balance_sheet(
+    request: Request, days: int = 30, date_from: str = "", date_to: str = "",
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    _, period_end, custom = _resolve_period(days, date_from, date_to)
+
+    def _accounts_of(account_type: str):
+        accounts = db.query(models.Account).filter(
+            models.Account.is_active.is_(True), models.Account.account_type == account_type,
+        ).order_by(models.Account.code).all()
+        rows = []
+        total = ZERO
+        for a in accounts:
+            bal = _account_balance_before(db, a, period_end + timedelta(days=1))
+            if bal == 0:
+                continue
+            rows.append({"account": a, "balance": bal})
+            total += bal
+        return rows, total
+
+    asset_rows, total_assets = _accounts_of("asset")
+    liability_rows, total_liabilities = _accounts_of("liability")
+    equity_rows, equity_account_total = _accounts_of("equity")
+
+    revenue = _type_balance(db, "revenue", period_end)
+    cost_of_sales = _type_balance(db, "cost_of_sales", period_end)
+    expenses = _type_balance(db, "expense", period_end)
+    net_income = revenue - cost_of_sales - expenses
+    total_equity = equity_account_total + net_income
+
+    return templates.TemplateResponse(
+        "accounting/balance_sheet.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "asset_rows": asset_rows, "liability_rows": liability_rows, "equity_rows": equity_rows,
+         "total_assets": total_assets, "total_liabilities": total_liabilities,
+         "equity_account_total": equity_account_total, "net_income": net_income, "total_equity": total_equity,
+         "total_liab_and_equity": total_liabilities + total_equity,
+         "balanced": total_assets == (total_liabilities + total_equity),
+         "days": days, "date_from": date_from, "date_to": date_to,
+         "period_end": period_end, "custom": custom},
+    )
+
+
+@router.get("/accounting/profit-loss", response_class=HTMLResponse)
+def ledger_profit_loss(
+    request: Request, days: int = 30, date_from: str = "", date_to: str = "",
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    period_start, period_end, custom = _resolve_period(days, date_from, date_to)
+    data = _pl_ledger_data(db, period_start, period_end)
+
+    # Reconcile against the existing operational P&L (app/reports.py) for
+    # the same period, same idea as reconcile-sales — surface a mismatch
+    # rather than silently trusting a second, independently-computed number.
+    from . import reports as reports_module
+    operational = reports_module._pl_data(db, period_start, period_end)
+
+    return templates.TemplateResponse(
+        "accounting/profit_loss.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "data": data, "operational": operational,
+         "net_diff": data["net_profit"] - operational["net_profit"],
+         "days": days, "date_from": date_from, "date_to": date_to,
+         "period_start": period_start, "period_end": period_end, "custom": custom},
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Reconciliation: ledger Sales total vs the existing operational Sales report
 # --------------------------------------------------------------------------- #
 @router.get("/accounting/reconcile-sales", response_class=HTMLResponse)
