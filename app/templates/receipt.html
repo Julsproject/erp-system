@@ -96,6 +96,7 @@
       <div class="r-meta-line">Invoice: <b>{{ sale.invoice_no }}</b></div>
       <div class="r-meta-line">{{ sale.created_at.strftime('%b %d, %Y %I:%M %p') if sale.created_at else '' }}</div>
       <div class="r-meta-line">Cashier: <b>{{ sale.cashier.full_name or sale.cashier.username if sale.cashier else '—' }}</b></div>
+      {% if sale.encoded_by %}<div class="r-meta-line">Encoded by: <b>{{ sale.encoded_by.name }}</b></div>{% endif %}
     </div>
     {% else %}
     <div class="r-head-2col">
@@ -104,6 +105,7 @@
         <div class="r-meta-line">Invoice #: <b>{{ sale.invoice_no }}</b></div>
         <div class="r-meta-line">Date: <b>{{ sale.created_at.strftime('%b %d, %Y %I:%M %p') if sale.created_at else '' }}</b>{% if can_edit_date and not sale.is_voided %} <a href="#" onclick="showEditDate(event)" style="font-size:11px;">✎ edit</a>{% endif %}</div>
         <div class="r-meta-line">Cashier: <b>{{ sale.cashier.full_name or sale.cashier.username if sale.cashier else '—' }}</b></div>
+        {% if sale.encoded_by %}<div class="r-meta-line">Encoded by: <b>{{ sale.encoded_by.name }}</b></div>{% endif %}
       </div>
       <div class="r-head-right">
         <div class="r-biz-row">

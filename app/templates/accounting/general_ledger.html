@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}General Ledger · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">General Ledger</h1>
+    <p class="muted">{{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }}{% if account %} · {{ account.code }} {{ account.name }}{% endif %}</p>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;">
+    <div class="seg">
+      <a class="seg-btn {{ 'active' if days == 7 and not custom }}" href="/accounting/general-ledger?days=7&account_id={{ account.id if account }}">7 days</a>
+      <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="/accounting/general-ledger?days=30&account_id={{ account.id if account }}">30 days</a>
+      <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="/accounting/general-ledger?days=90&account_id={{ account.id if account }}">90 days</a>
+    </div>
+    <a class="btn-link" href="/accounting/coa">← Chart of Accounts</a>
+  </div>
+</div>
+
+<form method="get" action="/accounting/general-ledger" class="toolbar" style="margin-bottom:18px;">
+  <input type="hidden" name="days" value="{{ days }}">
+  <label style="margin:0;">Account
+    <select name="account_id" onchange="this.form.submit()">
+      {% for a in accounts %}<option value="{{ a.id }}" {{ 'selected' if account and a.id == account.id }}>{{ a.code }} · {{ a.name }}</option>{% endfor %}
+    </select>
+  </label>
+</form>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ opening|peso }}</span><span>Opening balance</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ closing|peso }}</span><span>Closing balance</span></div>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Date</th><th>Journal #</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr>
+    </thead>
+    <tbody>
+      <tr><td colspan="5" class="muted">Opening balance</td><td class="num strong">{{ opening|peso }}</td></tr>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.entry.txn_date.strftime('%b %d, %Y') }}</td>
+        <td class="strong">{{ r.entry.journal_no }}</td>
+        <td>{{ r.entry.description }}{% if r.line.memo %} <span class="muted">({{ r.line.memo }})</span>{% endif %}</td>
+        <td class="num">{{ r.line.debit|peso if r.line.debit else '—' }}</td>
+        <td class="num">{{ r.line.credit|peso if r.line.credit else '—' }}</td>
+        <td class="num strong">{{ r.balance|peso }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No activity in this period.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

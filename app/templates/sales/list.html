@@ -87,7 +87,7 @@
         <td class="strong">{{ s.invoice_no }}{% if s.receipt_type %} <span class="muted" style="font-size:11px;font-weight:600;">({{ s.receipt_type }})</span>{% endif %}</td>
         <td><span class="txn txn-{{ s.txn_type }}">{{ types.get(s.txn_type, s.txn_type|capitalize) }}</span></td>
         <td>{{ s.created_at.strftime('%b %d, %Y %I:%M %p') if s.created_at else '' }}</td>
-        <td>{{ s.customer_name or 'Walk-in' }}</td>
+        <td>{{ s.customer_name or 'Walk-in' }}{% if s.encoded_by %}<br><span class="muted" style="font-size:11px;">encoded by {{ s.encoded_by.name }}</span>{% endif %}</td>
         <td>{{ s.payment_method or '—' }}</td>
         {% set disp_total = row_totals.get(s.id, s.total) %}
         <td class="num strong {{ 'neg' if disp_total and disp_total < 0 }}">{{ disp_total|peso }}</td>

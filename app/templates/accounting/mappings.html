@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Accounting Setup · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Accounting Setup</h1>
+    <p class="muted">Which account each ERP function posts to. Change these anytime — nothing here needs a code change.</p>
+  </div>
+  <a class="btn-link" href="/accounting/coa">← Back to Chart of Accounts</a>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Function</th><th>Posts to</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for m in mappings %}
+      <tr>
+        <td class="strong">{{ m.label }}<div class="muted" style="font-size:11px;">{{ m.function_key }}</div></td>
+        <td colspan="2">
+          <form method="post" action="/accounting/mappings/{{ m.id }}" style="display:inline-flex;gap:8px;align-items:center;">
+            <select name="account_id" style="min-width:260px;">
+              {% for a in accounts %}
+              <option value="{{ a.id }}" {{ 'selected' if a.id == m.account_id }}>{{ a.code }} · {{ a.name }}</option>
+              {% endfor %}
+            </select>
+            <button class="btn-link" type="submit">Save</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="empty">No mappings yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<p class="muted" style="margin-top:14px;font-size:12.5px;">
+  Only active accounts show up here. If the account you want isn't listed, activate it first from the
+  <a href="/accounting/coa">Chart of Accounts</a>.
+</p>
+{% endblock %}

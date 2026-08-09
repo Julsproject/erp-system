@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Encoders · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Encoders</h1>
+    <p class="muted">Who actually writes up a sale — separate from login accounts, for a shared POS login. Picked from a dropdown on the Sale form so it stays consistent.</p>
+  </div>
+  <a class="btn-link" href="/pos">← Back to POS</a>
+</div>
+
+<div class="card" style="max-width:420px; margin-bottom:18px;">
+  <h2 style="margin:0 0 12px; font-size:16px;">Add an encoder</h2>
+  <form class="form" method="post" action="/encoders" style="grid-template-columns:1fr;">
+    <label>Name
+      <input type="text" name="name" placeholder="e.g. Daniel" maxlength="80" required>
+    </label>
+    <div class="form-actions">
+      <button class="btn" type="submit">+ Add encoder</button>
+    </div>
+  </form>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Name</th><th class="num">Sales encoded</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for e in encoders %}
+      <tr>
+        <td class="strong">
+          <form method="post" action="/encoders/{{ e.id }}/rename" style="display:inline-flex;gap:6px;align-items:center;">
+            <input type="text" name="name" value="{{ e.name }}" maxlength="80" style="width:160px;" {{ '' if e.is_active else 'disabled' }}>
+            {% if e.is_active %}<button class="btn-link" type="submit" style="font-size:12px;">Save</button>{% endif %}
+          </form>
+        </td>
+        <td class="num">{{ counts.get(e.id, 0) }}</td>
+        <td>
+          {% if e.is_active %}<span class="txn" style="background:#f0fdf4;color:#15803d;">active</span>
+          {% else %}<span class="txn" style="background:#f1f5f9;color:#64748b;">inactive</span>{% endif %}
+        </td>
+        <td class="row-actions">
+          <form method="post" action="/encoders/{{ e.id }}/toggle" onsubmit="return confirm('{{ 'Deactivate' if e.is_active else 'Reactivate' }} {{ e.name|e }}?{{ ' It will drop off the Sale form dropdown, but every past sale keeps this name.' if e.is_active }}');">
+            <button class="btn-link {{ 'danger' if e.is_active }}" type="submit">{{ 'Deactivate' if e.is_active else 'Reactivate' }}</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">No encoders yet — add one above.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<p class="muted" style="margin-top:14px;font-size:12.5px;">
+  Deactivating doesn't delete anything — it only removes the name from the Sale form's dropdown for new sales.
+  Every past sale keeps pointing at whoever it was originally recorded against.
+</p>
+{% endblock %}

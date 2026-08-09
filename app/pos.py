@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from . import audit, models, settings_store
+from . import accounting, audit, models, settings_store
 from .customers import get_or_create_customer
 from .database import get_db
 from .deps import get_current_user, is_staff
@@ -141,10 +141,12 @@ def pos_page(request: Request, db: Session = Depends(get_db), user=Depends(get_c
     categories = db.query(models.Category).order_by(models.Category.name).all()
     subcategories = db.query(models.SubCategory).order_by(models.SubCategory.name).all()
     unit_types = db.query(models.UnitType).order_by(models.UnitType.name).all()
+    encoders = db.query(models.Encoder).filter(models.Encoder.is_active.is_(True)).order_by(models.Encoder.name).all()
     return templates.TemplateResponse(
         "pos.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "categories": categories, "subcategories": subcategories, "unit_types": unit_types},
+         "categories": categories, "subcategories": subcategories, "unit_types": unit_types,
+         "encoders": encoders},
     )
 
 
@@ -275,7 +277,7 @@ async def pos_quick_product(request: Request, db: Session = Depends(get_db), use
     return {"ok": True, "existed": False, "product": _product_payload_for_pos(product)}
 
 
-def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied, discount_total, lines, payments, txn_date=None, receipt_type=None):
+def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied, discount_total, lines, payments, txn_date=None, receipt_type=None, encoded_by_id=None):
     """Create and commit a real Sale from line items + payments.
 
     Shared by POS checkout and by quotations converting to a paid sale, so the
@@ -313,9 +315,11 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
 
     customer_name = (customer_name or "").strip()
     vat_applied = bool(vat_applied)
+    encoded_by_id = int(encoded_by_id) if encoded_by_id else None
     sale = models.Sale(
         invoice_no=invoice_no, receipt_type=(receipt_type or "").strip() or None,
         customer_name=customer_name or None, cashier_id=user.id,
+        encoded_by_id=encoded_by_id,
     )
     if backdated:
         sale.created_at = backdated
@@ -468,6 +472,16 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
             created_by=user.id,
         ))
 
+    # Auto-post to the accounting ledger (Phase 1: Sales only — see
+    # app/accounting.py). Never blocks the sale itself: a missing/misconfigured
+    # account mapping is a bookkeeping gap to fix in Accounting Setup, not a
+    # reason to stop a cashier mid-checkout. /accounting/reconcile-sales is
+    # exactly the tool for catching a gap like that after the fact.
+    try:
+        accounting.post_sale(db, sale, method_rows=method_rows, receivable_amount=receivable_amount, entered_by_id=user.id)
+    except accounting.PostingError:
+        pass
+
     db.commit()
     return True, sale
 
@@ -492,6 +506,7 @@ async def pos_checkout(request: Request, db: Session = Depends(get_db), user=Dep
         payments=data.get("payments") or [],
         txn_date=data.get("txn_date"),
         receipt_type=data.get("receipt_type"),
+        encoded_by_id=data.get("encoded_by_id"),
     )
     if not ok:
         return JSONResponse({"ok": False, "error": result}, status_code=400)
@@ -1066,6 +1081,10 @@ def void_sale(
     sale.voided_at = datetime.now(MANILA)
     sale.voided_by_id = user.id
 
+    # Reverse whatever was posted to the ledger for this sale. A no-op if
+    # this sale predates the accounting module (never had a journal entry).
+    accounting.reverse_sale_posting(db, sale, reason=f"Voided: {reason}", entered_by_id=user.id)
+
     audit.record(
         db, user=user, request=request, action="void", entity_type="sale",
         entity_id=sale.id, entity_label=sale.invoice_no,
@@ -1167,6 +1186,11 @@ def edit_sale_items_form(sale_id: int, request: Request, db: Session = Depends(g
 
 
 @router.post("/pos/receipt/{sale_id:int}/edit")
+# TODO(accounting): this recomputes sale.total/net_amount/vat_amount after the
+# original sale already posted a journal entry (see accounting.post_sale) —
+# the ledger currently does NOT get a correcting entry when items are edited,
+# so a sale corrected here will disagree with its own journal entry until this
+# is extended to post a delta (or edits are blocked once a sale has posted).
 async def edit_sale_items(sale_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)

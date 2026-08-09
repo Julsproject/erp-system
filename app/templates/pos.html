@@ -93,6 +93,13 @@
                title="Set the real date this sale happened when encoding a past transaction. Type just month/day — the year fills in automatically (this year, or last year if that day hasn't happened yet this year). Leave blank for a live sale today.">
         <span id="txnDatePreview" class="muted" style="font-size:12px;min-height:15px;display:block;"></span>
       </label>
+      <label class="pos-customer">Encoded by <span class="muted">(optional)</span>
+        <select id="encodedBy" title="Optional — who actually wrote up this sale, in case several people share this login. Leave blank if not tracking that.">
+          <option value="">— not tracked —</option>
+          {% for e in encoders %}<option value="{{ e.id }}">{{ e.name }}</option>{% endfor %}
+        </select>
+        {% if not encoders %}<a class="btn-link" style="font-size:11.5px;" href="/encoders">+ Add encoders to track this</a>{% endif %}
+      </label>
     </div>
 
     <div id="cartAndTotals">
@@ -469,6 +476,7 @@ function addFoundProduct(p) {
 }
 invoiceBox.addEventListener('input', computeTotals);
 txnDateBox.addEventListener('input', computeTotals);
+document.getElementById('encodedBy').addEventListener('change', saveDraft);
 
 /* ---- customer lookup ---- */
 const custResults = document.getElementById('custResults');
@@ -664,6 +672,7 @@ function clearCart() {
   document.getElementById('draftBanner').style.display = 'none';
   cart = []; payments = [{ method: 'cash', amount: '' }];
   document.getElementById('overallDiscount').value = 0; customerBox.value = ''; invoiceBox.value = '';
+  document.getElementById('encodedBy').value = '';
   // Transaction date is deliberately NOT reset here — when encoding a batch
   // of backlogged sales for the same day, retyping "8/2" before every single
   // one gets old fast. It stays put until the cashier types a different
@@ -770,6 +779,7 @@ function saveDraft() {
       receiptType: receiptTypeBox.value,
       customer: customerBox.value,
       txnDate: txnDateBox.value,
+      encodedById: document.getElementById('encodedBy').value,
       vat: document.getElementById('vatOn').checked,
       discount: document.getElementById('overallDiscount').value,
       discType: overallDiscType,
@@ -802,6 +812,7 @@ function restoreDraft() {
   if (d.receiptType) receiptTypeBox.value = d.receiptType;
   customerBox.value = d.customer || '';
   txnDateBox.value = d.txnDate || '';
+  document.getElementById('encodedBy').value = d.encodedById || '';
   updateTxnDatePreview();
   document.getElementById('vatOn').checked = !!d.vat;
   document.getElementById('overallDiscount').value = d.discount || 0;
@@ -1029,6 +1040,7 @@ async function checkout() {
       receipt_type: receiptTypeBox.value,
       customer_name: customerBox.value,
       txn_date: quickDateToISO(txnDateBox.value).iso,
+      encoded_by_id: document.getElementById('encodedBy').value,
       vat_applied: document.getElementById('vatOn').checked,
       discount_total: overallDiscAmt(subtotal),
       payments: payList,

@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Chart of Accounts · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Chart of Accounts</h1>
+    <p class="muted">The accounts the automatic posting engine (and, later, manual entries) can post to.</p>
+  </div>
+  <div class="head-actions">
+    <a class="btn-secondary" href="/accounting/mappings">⚙ Accounting Setup</a>
+    <a class="btn-secondary" href="/accounting/trial-balance">Trial Balance</a>
+    <a class="btn-secondary" href="/accounting/general-ledger">General Ledger</a>
+  </div>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<div class="card" style="max-width:560px; margin-bottom:18px;">
+  <h2 style="margin:0 0 12px; font-size:16px;">Add a sub-account</h2>
+  <form class="form" method="post" action="/accounting/coa">
+    <label>Code
+      <input type="text" name="code" placeholder="e.g. 6011" maxlength="20" required>
+    </label>
+    <label>Name
+      <input type="text" name="name" placeholder="e.g. Generator Fuel" maxlength="150" required>
+    </label>
+    <label>Type
+      <select name="account_type">
+        {% for value, label in account_types %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Normal balance
+      <select name="normal_balance">
+        <option value="debit">Debit</option>
+        <option value="credit">Credit</option>
+      </select>
+    </label>
+    <label>Parent account <span class="muted">— optional</span>
+      <select name="parent_id">
+        <option value="">— none —</option>
+        {% for a in accounts %}<option value="{{ a.id }}">{{ a.code }} · {{ a.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <div class="form-actions">
+      <button class="btn" type="submit">+ Add account</button>
+    </div>
+  </form>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Code</th><th>Name</th><th>Type</th><th>Normal</th><th>Parent</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for a in accounts %}
+      <tr>
+        <td class="strong">{{ a.code }}</td>
+        <td>
+          <form method="post" action="/accounting/coa/{{ a.id }}/rename" style="display:inline-flex;gap:6px;align-items:center;">
+            <input type="text" name="name" value="{{ a.name }}" maxlength="150" style="width:200px;">
+            <button class="btn-link" type="submit" style="font-size:12px;">Save</button>
+          </form>
+        </td>
+        <td class="muted">{{ a.account_type|capitalize }}</td>
+        <td class="muted">{{ a.normal_balance|capitalize }}</td>
+        <td class="muted">{{ a.parent.name if a.parent else '—' }}</td>
+        <td>
+          {% if a.is_active %}<span class="txn" style="background:#f0fdf4;color:#15803d;">active</span>
+          {% else %}<span class="txn" style="background:#f1f5f9;color:#64748b;">inactive</span>{% endif %}
+          {% if a.is_system %}<span class="txn" style="background:#eff6ff;color:#1d4ed8;">system</span>{% endif %}
+        </td>
+        <td class="row-actions">
+          <a class="btn-link" href="/accounting/general-ledger?account_id={{ a.id }}">Ledger</a>
+          <form method="post" action="/accounting/coa/{{ a.id }}/toggle" style="display:inline;"
+                onsubmit="return confirm('{{ 'Deactivate' if a.is_active else 'Reactivate' }} {{ a.name|e }}?');">
+            <button class="btn-link {{ 'danger' if a.is_active }}" type="submit">{{ 'Deactivate' if a.is_active else 'Reactivate' }}</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No accounts yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<p class="muted" style="margin-top:14px;font-size:12.5px;">
+  <strong>System</strong> accounts are what the posting engine writes to by a fixed internal key — they can't be
+  deleted or deactivated, but you can rename them freely. An account still referenced in
+  <a href="/accounting/mappings">Accounting Setup</a> can't be deactivated until it's remapped.
+</p>
+{% endblock %}

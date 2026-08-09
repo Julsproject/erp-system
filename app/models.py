@@ -81,6 +81,92 @@ class Shelf(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class Encoder(Base):
+    """Who actually wrote up a sale — a managed name list kept deliberately
+    separate from Users/logins, for a shop where several people share one
+    POS login and want a permanent, consistent (no-typos) record of who
+    handled which transaction. Picked from a dropdown on the Sale form,
+    never typed freehand, so the list only ever grows on purpose."""
+    __tablename__ = "encoders"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(80), nullable=False, unique=True)
+    is_active = Column(Boolean, nullable=False, server_default="true")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class Account(Base):
+    """One row of the Chart of Accounts. `system_key` (not `id`, not `name`)
+    is what code refers to — the owner can rename an account or add their
+    own sub-accounts freely, but the handful of accounts the posting engine
+    actually writes to are pinned by this stable key and can't be deleted."""
+    __tablename__ = "accounts"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(20), nullable=False, unique=True, index=True)
+    name = Column(String(150), nullable=False)
+    account_type = Column(String(20), nullable=False)  # asset|liability|equity|revenue|cost_of_sales|expense
+    normal_balance = Column(String(6), nullable=False)  # debit|credit
+    parent_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)
+    is_system = Column(Boolean, nullable=False, server_default="false")
+    system_key = Column(String(40), nullable=True, unique=True)
+    is_active = Column(Boolean, nullable=False, server_default="true")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    parent = relationship("Account", remote_side=[id])
+
+
+class JournalEntry(Base):
+    """One balanced (debit total == credit total) accounting transaction,
+    auto-posted by the ERP or (later) entered by hand. Never edited or
+    deleted once posted — a mistake gets a reversing entry instead, so a
+    Trial Balance run for a past date always still adds up."""
+    __tablename__ = "journal_entries"
+
+    id = Column(Integer, primary_key=True)
+    journal_no = Column(String(20), unique=True, index=True)  # JE-000001
+    txn_date = Column(Date, nullable=False)
+    reference_no = Column(String(60), nullable=True)
+    source_type = Column(String(20), nullable=False)  # sale | reversal | manual (more per phase)
+    source_id = Column(Integer, nullable=True, index=True)  # polymorphic (e.g. sales.id) — no FK on purpose
+    description = Column(String(255))
+    status = Column(String(12), nullable=False, server_default="posted")  # posted | reversed
+    is_reversal_of_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=True)
+    entered_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    posted_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    lines = relationship("JournalLine", back_populates="entry", cascade="all, delete-orphan")
+
+
+class JournalLine(Base):
+    __tablename__ = "journal_lines"
+
+    id = Column(Integer, primary_key=True)
+    entry_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=False)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    debit = Column(Numeric(12, 2), nullable=False, server_default="0")
+    credit = Column(Numeric(12, 2), nullable=False, server_default="0")
+    memo = Column(String(255), nullable=True)
+
+    entry = relationship("JournalEntry", back_populates="lines")
+    account = relationship("Account")
+
+
+class AccountMapping(Base):
+    """Which account an ERP function posts to — e.g. "SALE_CASH" -> Cash on
+    Hand. The whole point: change what account a Cash Sale debits from
+    Settings, not from code."""
+    __tablename__ = "account_mappings"
+
+    id = Column(Integer, primary_key=True)
+    function_key = Column(String(40), nullable=False, unique=True)
+    label = Column(String(150), nullable=False)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    account = relationship("Account")
+
+
 class Product(Base):
     __tablename__ = "products"
 
@@ -298,6 +384,11 @@ class Sale(Base):
     customer_name = Column(String(150))
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True)
     cashier_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    # Who actually wrote up this sale, picked from the managed Encoders list
+    # — distinct from cashier_id (the logged-in account), since one shared
+    # login is often used by several people. Optional; blank/NULL means it
+    # wasn't noted.
+    encoded_by_id = Column(Integer, ForeignKey("encoders.id"), nullable=True)
 
     subtotal = Column(Numeric(12, 2), nullable=False, server_default="0")
     discount_total = Column(Numeric(12, 2), nullable=False, server_default="0")
@@ -339,6 +430,7 @@ class Sale(Base):
     cashier = relationship("User", foreign_keys=[cashier_id])
     customer = relationship("Customer")
     voided_by = relationship("User", foreign_keys=[voided_by_id])
+    encoded_by = relationship("Encoder")
 
 
 class SaleLine(Base):
