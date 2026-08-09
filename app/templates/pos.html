@@ -19,7 +19,46 @@
       <p class="pos-hint">Type a product name to begin.</p>
     </div>
     <button type="button" class="btn-secondary np-open" id="npOpenBtn" onclick="showNewProduct()">＋ Not in inventory? Create product</button>
+    <button type="button" class="btn-secondary np-open" id="calcOpenBtn" onclick="showCalculator()">🖩 Calculator</button>
   </section>
+
+  <!-- POPUP: plain calculator, for quick mental-math checks at the counter
+       (change due, splitting a discount, etc.) — purely a scratch pad, it
+       never touches the cart or any sale field. -->
+  <div id="calcOverlay" class="modal-overlay" style="display:none;" onclick="if (event.target === this) hideCalculator();">
+    <div class="modal-box np-panel calc-panel">
+      <h3 class="np-title">Calculator</h3>
+      <input id="calcDisplay" class="calc-display" type="text" value="0" readonly>
+      <div class="calc-grid">
+        <button type="button" class="calc-btn calc-op" onclick="calcClear()">C</button>
+        <button type="button" class="calc-btn calc-op" onclick="calcBackspace()">⌫</button>
+        <button type="button" class="calc-btn calc-op" onclick="calcInput('%')">%</button>
+        <button type="button" class="calc-btn calc-op" onclick="calcInput('/')">÷</button>
+
+        <button type="button" class="calc-btn" onclick="calcInput('7')">7</button>
+        <button type="button" class="calc-btn" onclick="calcInput('8')">8</button>
+        <button type="button" class="calc-btn" onclick="calcInput('9')">9</button>
+        <button type="button" class="calc-btn calc-op" onclick="calcInput('*')">×</button>
+
+        <button type="button" class="calc-btn" onclick="calcInput('4')">4</button>
+        <button type="button" class="calc-btn" onclick="calcInput('5')">5</button>
+        <button type="button" class="calc-btn" onclick="calcInput('6')">6</button>
+        <button type="button" class="calc-btn calc-op" onclick="calcInput('-')">−</button>
+
+        <button type="button" class="calc-btn" onclick="calcInput('1')">1</button>
+        <button type="button" class="calc-btn" onclick="calcInput('2')">2</button>
+        <button type="button" class="calc-btn" onclick="calcInput('3')">3</button>
+        <button type="button" class="calc-btn calc-op" onclick="calcInput('+')">+</button>
+
+        <button type="button" class="calc-btn calc-zero" onclick="calcInput('0')">0</button>
+        <button type="button" class="calc-btn" onclick="calcInput('.')">.</button>
+        <button type="button" class="calc-btn calc-eq" onclick="calcEquals()">=</button>
+      </div>
+      <div class="np-actions">
+        <button type="button" class="btn-secondary" onclick="hideCalculator()">Close</button>
+      </div>
+    </div>
+  </div>
 
   <!-- POPUP: create a product not yet in inventory. No selling-price fields —
        that's the owner's call, not a cashier's; this sale's price is typed
@@ -641,6 +680,49 @@ function showNewProduct() {
 function hideNewProduct() {
   document.getElementById('npOverlay').style.display = 'none';
   document.getElementById('npError').style.display = 'none';
+}
+
+/* ---- plain calculator popup — a scratch pad only, never touches the
+   cart or any sale field ---- */
+let calcExpr = '';
+function showCalculator() {
+  calcExpr = '';
+  document.getElementById('calcDisplay').value = '0';
+  document.getElementById('calcOverlay').style.display = 'flex';
+}
+function hideCalculator() {
+  document.getElementById('calcOverlay').style.display = 'none';
+}
+function calcInput(ch) {
+  const isOp = '+-*/'.includes(ch);
+  const lastCh = calcExpr.slice(-1);
+  if (isOp && (calcExpr === '' && ch !== '-')) return;
+  if (isOp && '+-*/'.includes(lastCh)) { calcExpr = calcExpr.slice(0, -1) + ch; }
+  else { calcExpr += ch; }
+  document.getElementById('calcDisplay').value = calcExpr || '0';
+}
+function calcClear() {
+  calcExpr = '';
+  document.getElementById('calcDisplay').value = '0';
+}
+function calcBackspace() {
+  calcExpr = calcExpr.slice(0, -1);
+  document.getElementById('calcDisplay').value = calcExpr || '0';
+}
+function calcEquals() {
+  if (!calcExpr) return;
+  try {
+    // Only digits, ./, spaces and + - * % survive here — nothing else
+    // reaches eval, since calcInput() is the only way calcExpr is built.
+    if (!/^[0-9+\-*/.%\s]+$/.test(calcExpr)) throw new Error('bad expression');
+    const result = Function('"use strict"; return (' + calcExpr.replace(/%/g, '/100') + ')')();
+    if (!isFinite(result)) throw new Error('not finite');
+    calcExpr = String(Math.round(result * 1e8) / 1e8);
+    document.getElementById('calcDisplay').value = calcExpr;
+  } catch (e) {
+    document.getElementById('calcDisplay').value = 'Error';
+    calcExpr = '';
+  }
 }
 async function createProduct() {
   const name = document.getElementById('npName').value.trim();

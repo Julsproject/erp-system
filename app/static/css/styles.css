@@ -970,6 +970,26 @@ kbd {
 .np-actions { display: flex; gap: 10px; margin-top: 4px; }
 .np-hint { margin: 10px 0 0; }
 
+/* ---- Popup modal (POS calculator) ---- */
+.calc-panel { max-width: 300px; }
+.calc-display {
+  width: 100%; box-sizing: border-box; padding: 14px 12px; margin-bottom: 12px;
+  font-size: 24px; font-weight: 600; text-align: right; letter-spacing: .01em;
+  border: 1px solid var(--line-2); border-radius: 8px; background: var(--surface-2); color: var(--ink);
+}
+.calc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.calc-btn {
+  padding: 14px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+  color: var(--ink); font-size: 16px; font-weight: 600; cursor: pointer; transition: background .12s, transform .08s;
+}
+.calc-btn:hover { background: var(--surface-2); }
+.calc-btn:active { transform: scale(.96); }
+.calc-btn.calc-op { background: var(--surface-2); color: var(--brand-600); }
+.calc-btn.calc-op:hover { background: var(--line); }
+.calc-btn.calc-eq { background: var(--brand); color: #fff; }
+.calc-btn.calc-eq:hover { filter: brightness(1.06); }
+.calc-btn.calc-zero { grid-column: span 2; }
+
 /* Theme toggle button (sidebar) */
 .theme-toggle {
   display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%;
