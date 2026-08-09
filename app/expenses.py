@@ -2,11 +2,13 @@
 salaries, and so on. Unlike Purchases, an expense has no pending/confirmed
 staging: recording one here means the money is already out the door.
 """
-from datetime import date
+import re
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
@@ -18,15 +20,21 @@ from .templating import templates
 router = APIRouter()
 
 PAGE_SIZE = 15
+# Same idea as backup.py's BACKUP_DIR — a host-backed volume so uploaded
+# receipts survive a container rebuild, not local disk inside the container.
+UPLOADS_DIR = Path("/uploads/expenses")
 PAYMENT_METHODS = [
     ("cash", "Cash"), ("gcash", "GCash"), ("maya", "Maya"), ("other_ewallet", "Other E-Wallet"),
     ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque"), ("petty_cash", "Petty Cash"),
+    ("credit_card", "Credit Card"),
 ]
-# payment_method values a paid_from_account can meaningfully attach to —
-# petty cash boxes and e-wallets are usually one of several (multiple
-# petty-cash funds, multiple GCash numbers); cash/bank_transfer/cheque stay
-# on the generic AccountMapping since there's rarely more than one of those.
-PAID_FROM_METHODS = ("petty_cash", "gcash", "maya", "other_ewallet")
+# payment_method values a paid_from_account can meaningfully attach to — any
+# method where there's realistically more than one account it could be
+# (several petty-cash funds, several bank accounts, several GCash numbers).
+# Cheque and Credit Card stay on the generic AccountMapping — a cheque is
+# already tracked per-instance via PDC, and Credit Card posts to one shared
+# clearing account regardless of which physical card was used.
+PAID_FROM_METHODS = ("petty_cash", "gcash", "maya", "other_ewallet", "cash", "bank_transfer")
 
 
 def _dec(value, default="0") -> Decimal:
@@ -120,7 +128,7 @@ def _render_form(request, db, user, expense=None, error=None):
     categories = db.query(models.ExpenseCategory).order_by(models.ExpenseCategory.name).all()
     paid_from_accounts = (
         db.query(models.BankAccount)
-        .filter(models.BankAccount.is_active.is_(True), models.BankAccount.account_kind.in_(("petty_cash", "ewallet")))
+        .filter(models.BankAccount.is_active.is_(True))
         .order_by(models.BankAccount.name)
         .all()
     )
@@ -156,6 +164,35 @@ def edit_expense(expense_id: int, request: Request, db: Session = Depends(get_db
     return _render_form(request, db, user, expense=expense)
 
 
+@router.get("/expenses/{expense_id:int}/attachment")
+def download_attachment(expense_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    expense = db.get(models.Expense, expense_id)
+    if not expense or not expense.attachment_path:
+        return RedirectResponse("/expenses", status_code=302)
+    path = UPLOADS_DIR / expense.attachment_path
+    if not path.is_file():
+        return RedirectResponse("/expenses", status_code=302)
+    return FileResponse(path, filename=expense.attachment_path.split("_", 1)[-1])
+
+
+async def _save_attachment(form):
+    """Saves an uploaded receipt/invoice file to UPLOADS_DIR and returns the
+    path to store (relative to UPLOADS_DIR), or None if no file was chosen —
+    an edit form re-submitting without picking a new file shouldn't clear
+    the existing attachment."""
+    file = form.get("attachment")
+    if not file or not getattr(file, "filename", ""):
+        return None
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", file.filename)[:100]
+    dest_name = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_name}"
+    content = await file.read()
+    (UPLOADS_DIR / dest_name).write_bytes(content)
+    return dest_name
+
+
 def _apply_form(expense: models.Expense, db: Session, form):
     expense.category = _get_or_create_category(db, form.get("category"))
     expense.payee = (form.get("payee") or "").strip() or None
@@ -169,6 +206,7 @@ def _apply_form(expense: models.Expense, db: Session, form):
     paid_from_account_id = (form.get("paid_from_account_id") or "").strip()
     expense.paid_from_account_id = int(paid_from_account_id) if (paid_from_account_id and expense.payment_method in PAID_FROM_METHODS) else None
     expense.reference_no = (form.get("reference_no") or "").strip() or None
+    expense.receipt_no = (form.get("receipt_no") or "").strip() or None
     expense.notes = (form.get("notes") or "").strip() or None
 
 
@@ -183,6 +221,9 @@ async def create_expense(request: Request, db: Session = Depends(get_db), user=D
         return _render_form(request, db, user, error="Enter an amount greater than zero.")
     expense = models.Expense(created_by=user.id)
     _apply_form(expense, db, form)
+    attachment = await _save_attachment(form)
+    if attachment:
+        expense.attachment_path = attachment
     db.add(expense)
     db.flush()
     expense.ref_no = f"EXP-{expense.id:06d}"
@@ -215,6 +256,9 @@ async def update_expense(expense_id: int, request: Request, db: Session = Depend
         return _render_form(request, db, user, expense=expense, error="Enter an amount greater than zero.")
     before = audit.snapshot(expense, ["amount", "payee", "description", "expense_date", "payment_method", "reference_no"])
     _apply_form(expense, db, form)
+    attachment = await _save_attachment(form)
+    if attachment:
+        expense.attachment_path = attachment
     db.flush()
     after = audit.snapshot(expense, ["amount", "payee", "description", "expense_date", "payment_method", "reference_no"])
     changes = audit.diff(before, after)

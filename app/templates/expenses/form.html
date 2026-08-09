@@ -8,7 +8,7 @@
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
 
-<form class="card form" method="post" novalidate
+<form class="card form" method="post" novalidate enctype="multipart/form-data"
       action="{{ '/expenses/' ~ expense.id if expense else '/expenses' }}">
 
   <label>Category
@@ -55,8 +55,19 @@
     <input name="payee" value="{{ expense.payee or '' if expense else '' }}" placeholder="e.g. Meralco, Landlord, Juan Dela Cruz">
   </label>
 
-  <label>Reference # <span class="muted">(OR#, cheque #, transfer ref)</span>
+  <label>Reference # <span class="muted">(cheque #, transfer ref)</span>
     <input name="reference_no" value="{{ expense.reference_no or '' if expense else '' }}">
+  </label>
+
+  <label>Receipt # <span class="muted">(OR#)</span>
+    <input name="receipt_no" value="{{ expense.receipt_no or '' if expense else '' }}">
+  </label>
+
+  <label class="full">Attachment <span class="muted">(receipt/invoice photo or PDF, optional)</span>
+    <input name="attachment" type="file" accept="image/*,.pdf">
+    {% if expense and expense.attachment_path %}
+    <small class="hint">Current: <a href="/expenses/{{ expense.id }}/attachment" target="_blank">{{ expense.attachment_path.split('_', 1)[-1] }}</a> — choosing a new file replaces it.</small>
+    {% endif %}
   </label>
 
   <label class="full">Description

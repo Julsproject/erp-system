@@ -10,3 +10,6 @@ venv/
 
 # Local database backups
 backups/
+
+# Uploaded expense receipts/invoices
+uploads/

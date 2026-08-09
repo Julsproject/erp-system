@@ -38,6 +38,9 @@ services:
       # Same folder the backup service writes to, so the Backup page can list
       # and re-download the automatic daily backups.
       - ${BACKUP_DIR:-./backups}:/backups
+      # Uploaded expense receipts/invoices, host-backed so they survive a
+      # container rebuild — same idea as BACKUP_DIR above.
+      - ${UPLOADS_DIR:-./uploads}:/uploads
     depends_on:
       db:
         condition: service_healthy

@@ -858,15 +858,19 @@ class Expense(Base):
     # unless the payee's receipt actually shows VAT.
     vat_amount = Column(Numeric(12, 2), nullable=False, server_default="0")
     expense_date = Column(Date, nullable=False)
-    payment_method = Column(String(20), nullable=False, server_default="cash")  # cash|gcash|maya|other_ewallet|bank_transfer|cheque|petty_cash
-    reference_no = Column(String(60))           # OR#, cheque #, transfer ref — freeform
+    payment_method = Column(String(20), nullable=False, server_default="cash")  # cash|gcash|maya|other_ewallet|bank_transfer|cheque|petty_cash|credit_card
+    reference_no = Column(String(60))           # cheque #, transfer ref — freeform
+    receipt_no = Column(String(60))             # OR#/receipt # — kept separate from reference_no
     notes = Column(String(255))
     is_voided = Column(Boolean, nullable=False, server_default="false")
 
-    # Which specific box/wallet paid this — e.g. which Petty Cash fund. Only
-    # meaningful when payment_method is petty_cash/gcash/maya/other_ewallet;
-    # nullable because most expenses just use the generic mapped account.
+    # Which specific box/wallet paid this — e.g. which Petty Cash fund or
+    # which of several bank accounts. Nullable because most expenses just
+    # use the generic per-method mapped account.
     paid_from_account_id = Column(Integer, ForeignKey("bank_accounts.id"), nullable=True)
+    # Path to a saved copy of the receipt/invoice image or PDF, relative to
+    # UPLOADS_DIR. Nullable — optional.
+    attachment_path = Column(String(255), nullable=True)
 
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

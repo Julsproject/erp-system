@@ -364,6 +364,7 @@ EXPENSE_PAY_FUNCTION_KEYS = {
     "cash": "EXPENSE_PAY_CASH", "gcash": "EXPENSE_PAY_GCASH",
     "maya": "EXPENSE_PAY_MAYA", "other_ewallet": "EXPENSE_PAY_OTHER_EWALLET",
     "bank_transfer": "EXPENSE_PAY_BANK_TRANSFER", "cheque": "EXPENSE_PAY_CHEQUE",
+    "petty_cash": "EXPENSE_PAY_CASH", "credit_card": "EXPENSE_PAY_CREDIT_CARD",
 }
 
 
