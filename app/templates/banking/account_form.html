@@ -15,6 +15,15 @@
     <input name="name" value="{{ account.name if account else '' }}" placeholder="e.g. BDO Checking - 1234" required autofocus>
   </label>
 
+  <label>Kind
+    <select name="account_kind">
+      {% for value, label in account_kinds %}
+      <option value="{{ value }}" {{ 'selected' if (account.account_kind if account else 'bank') == value }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <small class="hint">Petty Cash / E-Wallet still use the same Deposit/Withdrawal screens below — this only changes labeling and which Expense payments can point at it.</small>
+  </label>
+
   <label>Bank
     <input name="bank_name" value="{{ account.bank_name or '' if account else '' }}" placeholder="e.g. BDO, BPI, Metrobank">
   </label>

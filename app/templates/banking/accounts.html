@@ -17,12 +17,13 @@
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Account</th><th>Bank</th><th>Account #</th><th class="num">Balance</th><th></th></tr>
+      <tr><th>Account</th><th>Kind</th><th>Bank</th><th>Account #</th><th class="num">Balance</th><th></th></tr>
     </thead>
     <tbody>
       {% for r in rows %}
       <tr>
         <td class="strong">{{ r.account.name }}</td>
+        <td>{{ {'bank': 'Bank Account', 'ewallet': 'E-Wallet', 'petty_cash': 'Petty Cash'}.get(r.account.account_kind, 'Bank Account') }}</td>
         <td>{{ r.account.bank_name or '—' }}</td>
         <td>{{ r.account.account_no or '—' }}</td>
         <td class="num strong {{ 'neg' if r.balance < 0 }}">{{ r.balance|peso }}</td>
@@ -32,7 +33,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="5" class="empty">No accounts yet. Click <strong>Add account</strong> to create one.</td></tr>
+      <tr><td colspan="6" class="empty">No accounts yet. Click <strong>Add account</strong> to create one.</td></tr>
       {% endfor %}
     </tbody>
   </table>

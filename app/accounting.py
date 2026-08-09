@@ -371,7 +371,9 @@ def post_expense(db: Session, expense: models.Expense, *, entered_by_id: int = N
     """Called from expenses.py's create_expense. Dr the expense category's
     own mapped account (falls back to EXPENSE_DEFAULT if the category has
     none set) plus an Input VAT line if vat_amount > 0; Cr whichever money
-    account the payment method maps to."""
+    account the payment method maps to — or, if the expense points at a
+    specific paid_from_account (e.g. which Petty Cash box), credit that
+    account's own gl_account_id directly instead of the generic mapping."""
     amount = Decimal(str(expense.amount or 0))
     if amount <= 0:
         return None
@@ -385,8 +387,13 @@ def post_expense(db: Session, expense: models.Expense, *, entered_by_id: int = N
         lines.append({"function_key": "EXPENSE_DEFAULT", "amount": net, "side": "debit"})
     if vat > 0:
         lines.append({"function_key": "INPUT_VAT", "amount": vat, "side": "debit"})
-    pay_key = EXPENSE_PAY_FUNCTION_KEYS.get(expense.payment_method, "EXPENSE_PAY_CASH")
-    lines.append({"function_key": pay_key, "amount": amount, "side": "credit", "memo": expense.payment_method})
+    paid_from = expense.paid_from_account
+    if paid_from and paid_from.gl_account_id:
+        lines.append({"function_key": None, "amount": amount, "side": "credit",
+                       "_account_id": paid_from.gl_account_id, "memo": paid_from.name})
+    else:
+        pay_key = EXPENSE_PAY_FUNCTION_KEYS.get(expense.payment_method, "EXPENSE_PAY_CASH")
+        lines.append({"function_key": pay_key, "amount": amount, "side": "credit", "memo": expense.payment_method})
 
     return post_journal(
         db, txn_date=expense.expense_date or _today(), source_type="expense", source_id=expense.id,

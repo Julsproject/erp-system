@@ -35,9 +35,18 @@
   </label>
 
   <label>Payment Method
-    <select name="payment_method">
+    <select name="payment_method" id="paymentMethod" onchange="togglePaidFrom()">
       {% for value, label in methods %}
       <option value="{{ value }}" {{ 'selected' if expense and expense.payment_method == value }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label id="paidFromWrap" style="display:none;">Paid from <span class="muted">— which box/wallet</span>
+    <select name="paid_from_account_id">
+      <option value="">— generic —</option>
+      {% for a in paid_from_accounts %}
+      <option value="{{ a.id }}" {{ 'selected' if expense and expense.paid_from_account_id == a.id }}>{{ a.name }}</option>
       {% endfor %}
     </select>
   </label>
@@ -70,4 +79,13 @@
   <button class="btn-link danger" type="submit">Void this expense</button>
 </form>
 {% endif %}
+
+<script>
+const PAID_FROM_METHODS = {{ paid_from_methods|tojson }};
+function togglePaidFrom() {
+  const method = document.getElementById('paymentMethod').value;
+  document.getElementById('paidFromWrap').style.display = PAID_FROM_METHODS.includes(method) ? '' : 'none';
+}
+togglePaidFrom();
+</script>
 {% endblock %}

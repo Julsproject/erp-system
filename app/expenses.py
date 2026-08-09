@@ -20,8 +20,13 @@ router = APIRouter()
 PAGE_SIZE = 15
 PAYMENT_METHODS = [
     ("cash", "Cash"), ("gcash", "GCash"), ("maya", "Maya"), ("other_ewallet", "Other E-Wallet"),
-    ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque"),
+    ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque"), ("petty_cash", "Petty Cash"),
 ]
+# payment_method values a paid_from_account can meaningfully attach to —
+# petty cash boxes and e-wallets are usually one of several (multiple
+# petty-cash funds, multiple GCash numbers); cash/bank_transfer/cheque stay
+# on the generic AccountMapping since there's rarely more than one of those.
+PAID_FROM_METHODS = ("petty_cash", "gcash", "maya", "other_ewallet")
 
 
 def _dec(value, default="0") -> Decimal:
@@ -113,11 +118,18 @@ def list_expenses(
 
 def _render_form(request, db, user, expense=None, error=None):
     categories = db.query(models.ExpenseCategory).order_by(models.ExpenseCategory.name).all()
+    paid_from_accounts = (
+        db.query(models.BankAccount)
+        .filter(models.BankAccount.is_active.is_(True), models.BankAccount.account_kind.in_(("petty_cash", "ewallet")))
+        .order_by(models.BankAccount.name)
+        .all()
+    )
     return templates.TemplateResponse(
         "expenses/form.html",
         {
             "request": request, "app_name": request.app.title, "user": user,
             "expense": expense, "categories": categories, "methods": PAYMENT_METHODS,
+            "paid_from_accounts": paid_from_accounts, "paid_from_methods": PAID_FROM_METHODS,
             "today": date.today().isoformat(), "error": error,
         },
     )
@@ -154,6 +166,8 @@ def _apply_form(expense: models.Expense, db: Session, form):
     expense.expense_date = _parse_date(raw_date) or date.today()
     method = (form.get("payment_method") or "cash").strip().lower()
     expense.payment_method = method if method in dict(PAYMENT_METHODS) else "cash"
+    paid_from_account_id = (form.get("paid_from_account_id") or "").strip()
+    expense.paid_from_account_id = int(paid_from_account_id) if (paid_from_account_id and expense.payment_method in PAID_FROM_METHODS) else None
     expense.reference_no = (form.get("reference_no") or "").strip() or None
     expense.notes = (form.get("notes") or "").strip() or None
 

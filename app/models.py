@@ -835,16 +835,22 @@ class Expense(Base):
     # unless the payee's receipt actually shows VAT.
     vat_amount = Column(Numeric(12, 2), nullable=False, server_default="0")
     expense_date = Column(Date, nullable=False)
-    payment_method = Column(String(20), nullable=False, server_default="cash")  # cash|gcash|maya|other_ewallet|bank_transfer|cheque
+    payment_method = Column(String(20), nullable=False, server_default="cash")  # cash|gcash|maya|other_ewallet|bank_transfer|cheque|petty_cash
     reference_no = Column(String(60))           # OR#, cheque #, transfer ref — freeform
     notes = Column(String(255))
     is_voided = Column(Boolean, nullable=False, server_default="false")
+
+    # Which specific box/wallet paid this — e.g. which Petty Cash fund. Only
+    # meaningful when payment_method is petty_cash/gcash/maya/other_ewallet;
+    # nullable because most expenses just use the generic mapped account.
+    paid_from_account_id = Column(Integer, ForeignKey("bank_accounts.id"), nullable=True)
 
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     category = relationship("ExpenseCategory")
     creator = relationship("User")
+    paid_from_account = relationship("BankAccount")
 
 
 class Delivery(Base):
@@ -907,6 +913,11 @@ class BankAccount(Base):
     opening_balance = Column(Numeric(12, 2), nullable=False, server_default="0")
     is_active = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # What kind of box/account this is — same deposit/withdrawal machinery
+    # (banking.py, accounting.post_bank_transaction) works for all three;
+    # this only changes labeling, form fields shown, and which Expense
+    # payment methods it's offered against (paid_from_account_id).
+    account_kind = Column(String(20), nullable=False, server_default="bank")  # bank | ewallet | petty_cash
     # Which Chart of Accounts asset account this bank/cash box IS, in the
     # ledger (Accounting Phase 5). Nullable — an account with none set just
     # doesn't post to the GL yet.

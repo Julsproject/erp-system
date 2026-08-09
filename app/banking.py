@@ -23,6 +23,7 @@ router = APIRouter()
 
 PAGE_SIZE = 15
 TXN_LABELS = {"deposit": "Deposit", "withdrawal": "Withdrawal"}
+ACCOUNT_KINDS = [("bank", "Bank Account"), ("ewallet", "E-Wallet"), ("petty_cash", "Petty Cash")]
 ZERO = Decimal("0")
 
 
@@ -86,7 +87,7 @@ def _render_account_form(request, db, user, account=None, error=None):
     return templates.TemplateResponse(
         "banking/account_form.html",
         {"request": request, "app_name": request.app.title, "user": user, "account": account, "error": error,
-         "ledger_accounts": ledger_accounts},
+         "ledger_accounts": ledger_accounts, "account_kinds": ACCOUNT_KINDS},
     )
 
 
@@ -112,12 +113,16 @@ async def create_account(request: Request, db: Session = Depends(get_db), user=D
     if db.query(models.BankAccount).filter(func.lower(models.BankAccount.name) == name.lower()).first():
         return _render_account_form(request, db, user, error=f"An account named '{name}' already exists.")
     gl_account_id = (form.get("gl_account_id") or "").strip()
+    account_kind = (form.get("account_kind") or "bank").strip()
+    if account_kind not in dict(ACCOUNT_KINDS):
+        account_kind = "bank"
     account = models.BankAccount(
         name=name,
         bank_name=(form.get("bank_name") or "").strip() or None,
         account_no=(form.get("account_no") or "").strip() or None,
         opening_balance=_dec(form.get("opening_balance")),
         gl_account_id=int(gl_account_id) if gl_account_id else None,
+        account_kind=account_kind,
     )
     db.add(account)
     db.flush()
@@ -158,7 +163,7 @@ async def update_account(account_id: int, request: Request, db: Session = Depend
     clash = db.query(models.BankAccount).filter(func.lower(models.BankAccount.name) == name.lower(), models.BankAccount.id != account.id).first()
     if clash:
         return _render_account_form(request, db, user, account=account, error=f"An account named '{name}' already exists.")
-    before = audit.snapshot(account, ["name", "bank_name", "account_no", "opening_balance", "is_active"])
+    before = audit.snapshot(account, ["name", "bank_name", "account_no", "opening_balance", "is_active", "account_kind"])
     account.name = name
     account.bank_name = (form.get("bank_name") or "").strip() or None
     account.account_no = (form.get("account_no") or "").strip() or None
@@ -166,8 +171,10 @@ async def update_account(account_id: int, request: Request, db: Session = Depend
     account.is_active = (form.get("status") or "active") == "active"
     gl_account_id = (form.get("gl_account_id") or "").strip()
     account.gl_account_id = int(gl_account_id) if gl_account_id else None
+    account_kind = (form.get("account_kind") or "bank").strip()
+    account.account_kind = account_kind if account_kind in dict(ACCOUNT_KINDS) else "bank"
     db.flush()
-    after = audit.snapshot(account, ["name", "bank_name", "account_no", "opening_balance", "is_active"])
+    after = audit.snapshot(account, ["name", "bank_name", "account_no", "opening_balance", "is_active", "account_kind"])
     changes = audit.diff(before, after)
     if changes:
         audit.record(
