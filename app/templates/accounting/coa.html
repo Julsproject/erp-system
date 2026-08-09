@@ -6,20 +6,8 @@
     <h1 class="page-title">Chart of Accounts</h1>
     <p class="muted">The accounts the automatic posting engine (and, later, manual entries) can post to.</p>
   </div>
-  <div class="head-actions">
-    <a class="btn-secondary" href="/accounting/dashboard">📊 Dashboard</a>
-    <a class="btn-secondary" href="/accounting/mappings">⚙ Accounting Setup</a>
-    <a class="btn-secondary" href="/accounting/trial-balance">Trial Balance</a>
-    <a class="btn-secondary" href="/accounting/general-ledger">General Ledger</a>
-    <a class="btn-secondary" href="/accounting/cash-book">Cash Book</a>
-    <a class="btn-secondary" href="/accounting/balance-sheet">Balance Sheet</a>
-    <a class="btn-secondary" href="/accounting/profit-loss">Profit &amp; Loss</a>
-    <a class="btn-secondary" href="/accounting/vat-report">VAT Report</a>
-    <a class="btn-secondary" href="/accounting/ar-subledger">AR Subledger</a>
-    <a class="btn-secondary" href="/accounting/ap-subledger">AP Subledger</a>
-    <a class="btn-secondary" href="/accounting/journal-entries">Journal Entries</a>
-  </div>
 </div>
+{% include "accounting/_subnav.html" %}
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
 

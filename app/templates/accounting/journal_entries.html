@@ -7,10 +7,10 @@
     <p class="muted">For anything the automatic posting engine doesn't cover — capital injections, corrections, closing entries.</p>
   </div>
   <div class="head-actions">
-    <a class="btn-secondary" href="/accounting/coa">← Chart of Accounts</a>
     <a class="btn" href="/accounting/journal-entries/new">+ New Entry</a>
   </div>
 </div>
+{% include "accounting/_subnav.html" %}
 
 {% if request.query_params.get('created') %}
 <div class="alert" style="background:#dcfce7;color:#15803d;">Saved as draft: {{ request.query_params.get('created') }}. It won't affect any report until you Post it below.</div>

@@ -12,9 +12,9 @@
       <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="{{ route }}?days=30&party_id={{ party_id }}">30 days</a>
       <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="{{ route }}?days=90&party_id={{ party_id }}">90 days</a>
     </div>
-    <a class="btn-link" href="/accounting/coa">← Chart of Accounts</a>
   </div>
 </div>
+{% include "accounting/_subnav.html" %}
 
 <div class="stat-row">
   <div class="mini-stat"><span class="mini-num">{{ total_outstanding|peso }}</span><span>Total Outstanding</span></div>

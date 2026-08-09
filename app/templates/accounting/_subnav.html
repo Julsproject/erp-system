@@ -1,0 +1,16 @@
+{% set _p = request.url.path %}
+<nav class="subnav">
+  <a class="subnav-item {{ 'active' if _p == '/accounting/dashboard' }}" href="/accounting/dashboard">Dashboard</a>
+  <a class="subnav-item {{ 'active' if _p == '/accounting/coa' }}" href="/accounting/coa">Chart of Accounts</a>
+  <a class="subnav-item {{ 'active' if _p == '/accounting/mappings' }}" href="/accounting/mappings">Accounting Setup</a>
+  <a class="subnav-item {{ 'active' if _p == '/accounting/trial-balance' }}" href="/accounting/trial-balance">Trial Balance</a>
+  <a class="subnav-item {{ 'active' if _p == '/accounting/general-ledger' }}" href="/accounting/general-ledger">General Ledger</a>
+  <a class="subnav-item {{ 'active' if _p == '/accounting/cash-book' }}" href="/accounting/cash-book">Cash Book</a>
+  <a class="subnav-item {{ 'active' if _p == '/accounting/balance-sheet' }}" href="/accounting/balance-sheet">Balance Sheet</a>
+  <a class="subnav-item {{ 'active' if _p == '/accounting/profit-loss' }}" href="/accounting/profit-loss">Profit &amp; Loss</a>
+  <a class="subnav-item {{ 'active' if _p == '/accounting/vat-report' }}" href="/accounting/vat-report">VAT Report</a>
+  <a class="subnav-item {{ 'active' if _p == '/accounting/ar-subledger' }}" href="/accounting/ar-subledger">AR Subledger</a>
+  <a class="subnav-item {{ 'active' if _p == '/accounting/ap-subledger' }}" href="/accounting/ap-subledger">AP Subledger</a>
+  <a class="subnav-item {{ 'active' if _p == '/accounting/reconcile-sales' }}" href="/accounting/reconcile-sales">Reconcile Sales</a>
+  <a class="subnav-item {{ 'active' if _p.startswith('/accounting/journal-entries') }}" href="/accounting/journal-entries">Journal Entries</a>
+</nav>

@@ -178,6 +178,20 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 .muted { color: var(--muted); }
 .head-actions { display: flex; gap: 10px; align-items: center; }
 
+/* ---------- Section sub-nav (e.g. Accounting's many report pages) ---------- */
+.subnav {
+  display: flex; gap: 4px; align-items: center; overflow-x: auto;
+  margin-bottom: 20px; padding-bottom: 2px; border-bottom: 1px solid var(--line);
+  -webkit-overflow-scrolling: touch; scrollbar-width: thin;
+}
+.subnav-item {
+  flex: 0 0 auto; padding: 9px 14px; border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  font-size: 13.5px; font-weight: 600; color: var(--muted); text-decoration: none;
+  white-space: nowrap; border-bottom: 2px solid transparent; transition: background .15s, color .15s;
+}
+.subnav-item:hover { background: var(--surface-2); color: var(--text); }
+.subnav-item.active { color: var(--brand-600); border-bottom-color: var(--brand); }
+
 /* ---------- Buttons ---------- */
 .btn, .btn-secondary {
   display: inline-flex; align-items: center; gap: 8px;

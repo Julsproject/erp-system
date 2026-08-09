@@ -12,9 +12,9 @@
       <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="/accounting/cash-book?days=30&account_id={{ account.id if account }}">30 days</a>
       <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="/accounting/cash-book?days=90&account_id={{ account.id if account }}">90 days</a>
     </div>
-    <a class="btn-link" href="/accounting/coa">← Chart of Accounts</a>
   </div>
 </div>
+{% include "accounting/_subnav.html" %}
 
 <form method="get" action="/accounting/cash-book" class="toolbar" style="margin-bottom:18px;">
   <input type="hidden" name="days" value="{{ days }}">

@@ -12,6 +12,7 @@
     <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="/accounting/reconcile-sales?days=90">90 days</a>
   </div>
 </div>
+{% include "accounting/_subnav.html" %}
 
 <div class="stat-row">
   <div class="mini-stat"><span class="mini-num">{{ ledger_total|peso }}</span><span>Ledger total (Sales + Output VAT)</span></div>
