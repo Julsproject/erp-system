@@ -218,6 +218,89 @@ def reverse_sale_posting(db: Session, sale: models.Sale, *, reason: str, entered
     return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id)
 
 
+PURCHASE_PAY_FUNCTION_KEYS = {
+    "cash": "PURCHASE_PAY_CASH", "gcash": "PURCHASE_PAY_GCASH",
+    "bank_transfer": "PURCHASE_PAY_BANK_TRANSFER", "cheque": "PURCHASE_PAY_CHEQUE", "other": "PURCHASE_PAY_OTHER",
+}
+
+
+def post_purchase_receive(db: Session, purchase: models.Purchase, *, is_payable: bool, payment_method: str = None, entered_by_id: int = None):
+    """Called from purchases.py's create_purchase for a receive. Dr Inventory
+    always; Cr Accounts Payable if left unpaid, otherwise Cr whichever money
+    account the payment method maps to (a cheque here is treated the same
+    way the operational Purchase record already treats it — settled at
+    receive time, not deferred like a Sales cheque is via receivable)."""
+    total = Decimal(str(purchase.total or 0))
+    if total <= 0:
+        return None
+    credit_key = "AP" if is_payable else PURCHASE_PAY_FUNCTION_KEYS.get(payment_method, "PURCHASE_PAY_OTHER")
+    lines = [
+        {"function_key": "INVENTORY_MERCHANDISE", "amount": total, "side": "debit"},
+        {"function_key": credit_key, "amount": total, "side": "credit", "memo": payment_method or "payable"},
+    ]
+    txn_date = purchase.created_at.date() if purchase.created_at else _today()
+    return post_journal(
+        db, txn_date=txn_date, source_type="purchase", source_id=purchase.id,
+        description=f"Receive {purchase.ref_no}", reference_no=purchase.ref_no,
+        lines=lines, entered_by_id=entered_by_id,
+    )
+
+
+def post_purchase_return(db: Session, purchase: models.Purchase, *, entered_by_id: int = None):
+    """A return is posted as a straight vendor credit (reduces what's owed)
+    regardless of how the original delivery was paid — the common
+    small-business treatment. If the supplier actually refunds cash instead
+    of issuing a credit, that needs a manual adjustment (Phase 2+'s manual
+    Journal Entry UI, not yet built)."""
+    total = Decimal(str(purchase.total or 0))
+    if total <= 0:
+        return None
+    lines = [
+        {"function_key": "AP", "amount": total, "side": "debit"},
+        {"function_key": "INVENTORY_MERCHANDISE", "amount": total, "side": "credit"},
+    ]
+    txn_date = purchase.created_at.date() if purchase.created_at else _today()
+    return post_journal(
+        db, txn_date=txn_date, source_type="purchase", source_id=purchase.id,
+        description=f"Return {purchase.ref_no}", reference_no=purchase.ref_no,
+        lines=lines, entered_by_id=entered_by_id,
+    )
+
+
+def post_purchase_settlement(db: Session, purchase: models.Purchase, *, amount: Decimal, method: str, entered_by_id: int = None):
+    """Called from purchases.py's settle_purchase_pay, only on the branch
+    that actually records a PurchaseSettlement (the cheque branch defers to
+    a PDC instead and posts nothing yet, same idea as Sales)."""
+    credit_key = PURCHASE_PAY_FUNCTION_KEYS.get(method, "PURCHASE_PAY_OTHER")
+    lines = [
+        {"function_key": "AP", "amount": amount, "side": "debit"},
+        {"function_key": credit_key, "amount": amount, "side": "credit", "memo": method},
+    ]
+    return post_journal(
+        db, txn_date=_today(), source_type="purchase_settlement", source_id=purchase.id,
+        description=f"Payment on {purchase.ref_no}", reference_no=purchase.ref_no,
+        lines=lines, entered_by_id=entered_by_id,
+    )
+
+
+def reverse_purchase_posting(db: Session, purchase: models.Purchase, *, reason: str, entered_by_id: int = None):
+    """Called from purchases.py's cancel_purchase. Reverses only the
+    original receive/return entry (source_type="purchase") — NOT any
+    PurchaseSettlement postings already made against it. Cancelling a
+    purchase that's already been partially paid down is a pre-existing gap
+    in the operational code too (cancel_purchase doesn't block on it), so
+    this mirrors that rather than silently fixing scope beyond Phase 2."""
+    entry = (
+        db.query(models.JournalEntry)
+        .filter(models.JournalEntry.source_type == "purchase", models.JournalEntry.source_id == purchase.id,
+                models.JournalEntry.status == "posted")
+        .first()
+    )
+    if not entry:
+        return None
+    return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id)
+
+
 # --------------------------------------------------------------------------- #
 # Chart of Accounts
 # --------------------------------------------------------------------------- #

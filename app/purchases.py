@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import audit, models, pricing, settings_store
+from . import accounting, audit, models, pricing, settings_store
 from .database import get_db
 from .deps import get_current_user, is_staff
 from .pos import _resolve_txn_datetime
@@ -691,6 +691,16 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
         )
         db.add(pdc)
 
+    # Auto-post to the accounting ledger (Phase 2 — see app/accounting.py).
+    # Never blocks the purchase itself, same reasoning as the Sales side.
+    try:
+        if txn_type == "return":
+            accounting.post_purchase_return(db, purchase, entered_by_id=user.id)
+        else:
+            accounting.post_purchase_receive(db, purchase, is_payable=is_payable, payment_method=payment_method, entered_by_id=user.id)
+    except accounting.PostingError:
+        pass
+
     db.commit()
     return {"ok": True, "purchase_id": purchase.id, "ref_no": purchase.ref_no}
 
@@ -750,6 +760,10 @@ async def settle_purchase_pay(purchase_id: int, request: Request, db: Session = 
     db.add(models.PurchaseSettlement(
         purchase_id=purchase.id, method=method, amount=_money(amount), created_by=user.id,
     ))
+    try:
+        accounting.post_purchase_settlement(db, purchase, amount=_money(amount), method=method, entered_by_id=user.id)
+    except accounting.PostingError:
+        pass
     new_outstanding = outstanding - amount
     summary = f"Recorded a {dict(PAYMENT_METHODS)[method]} payment of {amount:.2f} on {purchase.ref_no}"
     if new_outstanding <= 0:
@@ -797,6 +811,9 @@ def cancel_purchase(purchase_id: int, request: Request, db: Session = Depends(ge
 
     purchase.status = "cancelled"
     purchase.cancelled_at = func.now()
+
+    accounting.reverse_purchase_posting(db, purchase, reason=f"Cancelled {purchase.ref_no}", entered_by_id=user.id)
+
     audit.record(
         db, user=user, request=request, action="cancel", entity_type="purchase",
         entity_id=purchase.id, entity_label=purchase.ref_no,
