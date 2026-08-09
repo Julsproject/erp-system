@@ -6,11 +6,16 @@ outstanding credit is derived, not cached). Moving money between two
 accounts is just a withdrawal on one and a deposit on the other; there's
 no separate "transfer" record type.
 """
+import csv
+import io
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 
-from fastapi import APIRouter, Depends, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+import openpyxl
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
+from fastapi import APIRouter, Depends, Request, UploadFile, status
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
@@ -362,6 +367,10 @@ def reconcile_account(
         .order_by(models.BankTransaction.txn_date, models.BankTransaction.id)
         .all()
     )
+    # Split for display — "outstanding checks" (withdrawals) vs "outstanding
+    # deposits", the two categories a real bank reconciliation names them by.
+    outstanding_checks = [t for t in unreconciled if t.txn_type == "withdrawal"]
+    outstanding_deposits = [t for t in unreconciled if t.txn_type == "deposit"]
     reconciled = (
         db.query(models.BankTransaction)
         .filter(models.BankTransaction.account_id == account_id, models.BankTransaction.is_voided.is_(False),
@@ -378,7 +387,8 @@ def reconcile_account(
         "banking/reconcile.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "account": account, "book_balance": book_balance,
-         "unreconciled": unreconciled, "reconciled": reconciled,
+         "unreconciled": unreconciled, "outstanding_checks": outstanding_checks,
+         "outstanding_deposits": outstanding_deposits, "reconciled": reconciled,
          "statement_balance": statement_balance, "stmt_balance": stmt_balance, "diff": diff,
          "labels": TXN_LABELS},
     )
@@ -412,6 +422,183 @@ async def reconcile_submit(account_id: int, request: Request, db: Session = Depe
         db.commit()
     return RedirectResponse(
         f"/banking/accounts/{account_id}/reconcile?statement_balance={statement_balance}", status_code=status.HTTP_302_FOUND
+    )
+
+
+@router.get("/banking/accounts/{account_id:int}/reconcile/export")
+def export_reconciliation(account_id: int, statement_balance: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    account = db.get(models.BankAccount, account_id)
+    if not account:
+        return RedirectResponse("/banking", status_code=302)
+
+    balances = _balances_for(db, [account_id])
+    book_balance = _account_balance(account, balances)
+    stmt_balance = _dec(statement_balance) if statement_balance else None
+    unreconciled = (
+        db.query(models.BankTransaction)
+        .filter(models.BankTransaction.account_id == account_id, models.BankTransaction.is_voided.is_(False),
+                models.BankTransaction.reconciled_at.is_(None))
+        .order_by(models.BankTransaction.txn_date, models.BankTransaction.id)
+        .all()
+    )
+    outstanding_checks = [t for t in unreconciled if t.txn_type == "withdrawal"]
+    outstanding_deposits = [t for t in unreconciled if t.txn_type == "deposit"]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Reconciliation"
+    header_fill = PatternFill("solid", fgColor="1F6FEB")
+
+    ws.append(["Bank Reconciliation", account.name])
+    ws.append(["Book Balance", float(book_balance)])
+    if stmt_balance is not None:
+        ws.append(["Statement Balance", float(stmt_balance)])
+        ws.append(["Difference", float(book_balance - stmt_balance)])
+    ws.append([])
+    ws.append(["Outstanding Checks (withdrawals)"])
+    ws.append(["Date", "Description", "Reference", "Amount"])
+    for cell in ws[ws.max_row]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+    for t in outstanding_checks:
+        ws.append([t.txn_date.isoformat(), t.description or "", t.reference_no or "", float(t.amount)])
+    ws.append([])
+    ws.append(["Outstanding Deposits"])
+    ws.append(["Date", "Description", "Reference", "Amount"])
+    for cell in ws[ws.max_row]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+    for t in outstanding_deposits:
+        ws.append([t.txn_date.isoformat(), t.description or "", t.reference_no or "", float(t.amount)])
+
+    ws.column_dimensions["A"].width = 22
+    ws.column_dimensions["B"].width = 32
+    ws.column_dimensions["C"].width = 18
+    ws.column_dimensions["D"].width = 16
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"reconciliation_{account.name.replace(' ', '_')}_{date.today().isoformat()}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# Header synonyms tried in order, case-insensitive, so a CSV export from any
+# bank's portal has a decent chance of auto-detecting correctly without
+# forcing the user through a manual column-mapping step every time.
+_DATE_HEADERS = ("date", "transaction date", "posting date", "value date")
+_DESC_HEADERS = ("description", "particulars", "details", "narration")
+_DEBIT_HEADERS = ("debit", "withdrawal", "dr")
+_CREDIT_HEADERS = ("credit", "deposit", "cr")
+_AMOUNT_HEADERS = ("amount",)
+_REF_HEADERS = ("reference", "reference no", "reference no.", "ref", "ref no", "check no", "cheque no")
+
+
+def _find_col(fieldnames, candidates):
+    lowered = {f.strip().lower(): f for f in fieldnames}
+    for c in candidates:
+        if c in lowered:
+            return lowered[c]
+    return None
+
+
+@router.post("/banking/accounts/{account_id:int}/reconcile/import", response_class=HTMLResponse)
+async def import_statement(
+    account_id: int, request: Request, statement_file: UploadFile,
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    account = db.get(models.BankAccount, account_id)
+    if not account:
+        return RedirectResponse("/banking", status_code=302)
+
+    raw = (await statement_file.read()).decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(raw))
+    fieldnames = reader.fieldnames or []
+    date_col = _find_col(fieldnames, _DATE_HEADERS)
+    desc_col = _find_col(fieldnames, _DESC_HEADERS)
+    debit_col = _find_col(fieldnames, _DEBIT_HEADERS)
+    credit_col = _find_col(fieldnames, _CREDIT_HEADERS)
+    amount_col = _find_col(fieldnames, _AMOUNT_HEADERS)
+    ref_col = _find_col(fieldnames, _REF_HEADERS)
+
+    if not date_col or not (amount_col or debit_col or credit_col):
+        return templates.TemplateResponse(
+            "banking/reconcile_import_review.html",
+            {"request": request, "app_name": request.app.title, "user": user, "account": account,
+             "error": f"Couldn't find a Date column and an Amount/Debit/Credit column in this file. "
+                      f"Columns found: {', '.join(fieldnames) or '(none — is this a CSV?)'}",
+             "matched": [], "unmatched_rows": [], "detected": {}},
+        )
+
+    statement_rows = []
+    for row in reader:
+        raw_date = (row.get(date_col) or "").strip()
+        txn_date = None
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%d/%m/%Y"):
+            try:
+                txn_date = datetime.strptime(raw_date, fmt).date()
+                break
+            except ValueError:
+                continue
+        if not txn_date:
+            continue
+        if amount_col:
+            amount = _dec((row.get(amount_col) or "0").replace(",", ""))
+        else:
+            debit = _dec((row.get(debit_col) or "0").replace(",", "")) if debit_col else Decimal("0")
+            credit = _dec((row.get(credit_col) or "0").replace(",", "")) if credit_col else Decimal("0")
+            amount = credit - debit  # positive = deposit, negative = withdrawal
+        if amount == 0:
+            continue
+        statement_rows.append({
+            "date": txn_date, "amount": abs(amount),
+            "txn_type": "deposit" if amount > 0 else "withdrawal",
+            "description": (row.get(desc_col) or "").strip() if desc_col else "",
+            "reference": (row.get(ref_col) or "").strip() if ref_col else "",
+        })
+
+    unreconciled = (
+        db.query(models.BankTransaction)
+        .filter(models.BankTransaction.account_id == account_id, models.BankTransaction.is_voided.is_(False),
+                models.BankTransaction.reconciled_at.is_(None))
+        .all()
+    )
+    # Match by exact amount + txn_type, date within 3 days (banks often post
+    # a day or two off from when the transaction was recorded here).
+    used_ids = set()
+    matched = []
+    unmatched_rows = []
+    for srow in statement_rows:
+        candidate = next(
+            (t for t in unreconciled
+             if t.id not in used_ids and t.txn_type == srow["txn_type"] and t.amount == srow["amount"]
+             and abs((t.txn_date - srow["date"]).days) <= 3),
+            None,
+        )
+        if candidate:
+            used_ids.add(candidate.id)
+            matched.append({"statement": srow, "txn": candidate})
+        else:
+            unmatched_rows.append(srow)
+
+    return templates.TemplateResponse(
+        "banking/reconcile_import_review.html",
+        {"request": request, "app_name": request.app.title, "user": user, "account": account,
+         "error": None, "matched": matched, "unmatched_rows": unmatched_rows,
+         "detected": {"date": date_col, "description": desc_col, "debit": debit_col,
+                      "credit": credit_col, "amount": amount_col, "reference": ref_col}},
     )
 
 

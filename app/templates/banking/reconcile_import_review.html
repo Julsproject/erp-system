@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Review Import · {{ account.name }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Review Statement Import — {{ account.name }}</h1>
+  </div>
+  <a class="btn-secondary" href="/banking/accounts/{{ account.id }}/reconcile">← Back to Reconcile</a>
+</div>
+
+{% if error %}
+<div class="alert">{{ error }}</div>
+{% else %}
+<p class="muted">Detected columns — Date: <strong>{{ detected.date or '—' }}</strong>,
+  Description: <strong>{{ detected.description or '—' }}</strong>,
+  Amount: <strong>{{ detected.amount or (detected.debit ~ ' / ' ~ detected.credit) }}</strong>,
+  Reference: <strong>{{ detected.reference or '—' }}</strong>.
+  If these look wrong, re-check your CSV's header row and re-upload.</p>
+
+<form method="post" action="/banking/accounts/{{ account.id }}/reconcile">
+  <h3>Matched <span class="muted">({{ matched|length }} statement row(s) matched to an existing transaction — unchecking one leaves it unreconciled)</span></h3>
+  <div class="table-wrap" style="margin-bottom:18px;">
+    <table class="grid">
+      <thead>
+        <tr><th></th><th>Statement date</th><th>Statement description</th><th class="num">Amount</th><th>Matched to</th></tr>
+      </thead>
+      <tbody>
+        {% for m in matched %}
+        <tr>
+          <td><input type="checkbox" name="txn_id" value="{{ m.txn.id }}" checked></td>
+          <td>{{ m.statement.date.strftime('%b %d, %Y') }}</td>
+          <td>{{ m.statement.description or '—' }}</td>
+          <td class="num">{{ m.statement.amount|peso }}</td>
+          <td>{{ m.txn.txn_date.strftime('%b %d, %Y') }} — {{ m.txn.description or '(no description)' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No matches found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if matched %}
+  <div class="form-actions">
+    <button class="btn" type="submit">Mark matched as reconciled</button>
+  </div>
+  {% endif %}
+</form>
+
+{% if unmatched_rows %}
+<h3 style="margin-top:24px;">Unmatched statement rows <span class="muted">({{ unmatched_rows|length }} — no corresponding transaction found within 3 days at that amount; may need to be recorded manually)</span></h3>
+<div class="table-wrap">
+  <table class="grid">
+    <thead><tr><th>Date</th><th>Description</th><th>Reference</th><th class="num">Amount</th><th>Type</th></tr></thead>
+    <tbody>
+      {% for r in unmatched_rows %}
+      <tr>
+        <td>{{ r.date.strftime('%b %d, %Y') }}</td>
+        <td>{{ r.description or '—' }}</td>
+        <td>{{ r.reference or '—' }}</td>
+        <td class="num">{{ r.amount|peso }}</td>
+        <td>{{ 'Deposit' if r.txn_type == 'deposit' else 'Withdrawal' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

@@ -6,7 +6,10 @@
     <h1 class="page-title">Reconcile — {{ account.name }}</h1>
     <p class="muted">Check off every deposit/withdrawal that shows on the actual bank/GCash statement, then save.</p>
   </div>
-  <a class="btn-secondary" href="/banking/accounts/{{ account.id }}">← Back to {{ account.name }}</a>
+  <div class="head-actions">
+    <a class="btn-secondary" href="/banking/accounts/{{ account.id }}/reconcile/export?statement_balance={{ statement_balance }}">⬇ Download Excel</a>
+    <a class="btn-secondary" href="/banking/accounts/{{ account.id }}">← Back to {{ account.name }}</a>
+  </div>
 </div>
 
 <form method="get" action="/banking/accounts/{{ account.id }}/reconcile" class="toolbar" style="margin-bottom:18px;">
@@ -23,29 +26,68 @@
   {% endif %}
 </div>
 
+<details class="card" style="margin-bottom:18px;">
+  <summary style="cursor:pointer;font-weight:600;">📄 Import bank statement (CSV)</summary>
+  <div style="margin-top:12px;">
+    <p class="muted">Upload a CSV export from your bank's online portal — you'll pick which column is which next, so
+      it doesn't matter if the headers don't match exactly. Rows get matched by date + amount against what's below
+      and you confirm each match before anything is marked reconciled.</p>
+    <form method="post" action="/banking/accounts/{{ account.id }}/reconcile/import" enctype="multipart/form-data" class="form">
+      <label class="full">CSV file
+        <input type="file" name="statement_file" accept=".csv" required>
+      </label>
+      <div class="form-actions full"><button class="btn-secondary" type="submit">Upload &amp; Match</button></div>
+    </form>
+  </div>
+</details>
+
 <form method="post" action="/banking/accounts/{{ account.id }}/reconcile">
   <input type="hidden" name="statement_balance" value="{{ statement_balance }}">
+
+  <h3>Outstanding Checks <span class="muted">(withdrawals not yet on the statement)</span></h3>
   <div class="table-wrap" style="margin-bottom:18px;">
     <table class="grid">
       <thead>
-        <tr><th></th><th>Date</th><th>Type</th><th>Description</th><th>Reference</th><th class="num">Amount</th></tr>
+        <tr><th></th><th>Date</th><th>Description</th><th>Reference</th><th class="num">Amount</th></tr>
       </thead>
       <tbody>
-        {% for t in unreconciled %}
+        {% for t in outstanding_checks %}
         <tr>
           <td><input type="checkbox" name="txn_id" value="{{ t.id }}"></td>
           <td>{{ t.txn_date.strftime('%b %d, %Y') }}</td>
-          <td>{{ labels.get(t.txn_type, t.txn_type) }}</td>
           <td>{{ t.description or '—' }}</td>
           <td>{{ t.reference_no or '—' }}</td>
           <td class="num">{{ t.amount|peso }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="6" class="empty">Nothing left to reconcile — everything's checked off.</td></tr>
+        <tr><td colspan="5" class="empty">No outstanding checks.</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+
+  <h3>Outstanding Deposits <span class="muted">(deposits not yet on the statement)</span></h3>
+  <div class="table-wrap" style="margin-bottom:18px;">
+    <table class="grid">
+      <thead>
+        <tr><th></th><th>Date</th><th>Description</th><th>Reference</th><th class="num">Amount</th></tr>
+      </thead>
+      <tbody>
+        {% for t in outstanding_deposits %}
+        <tr>
+          <td><input type="checkbox" name="txn_id" value="{{ t.id }}"></td>
+          <td>{{ t.txn_date.strftime('%b %d, %Y') }}</td>
+          <td>{{ t.description or '—' }}</td>
+          <td>{{ t.reference_no or '—' }}</td>
+          <td class="num">{{ t.amount|peso }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No outstanding deposits.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
   {% if unreconciled %}
   <div class="form-actions">
     <button class="btn" type="submit">Mark checked as reconciled</button>
