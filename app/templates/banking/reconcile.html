@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Reconcile {{ account.name }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Reconcile — {{ account.name }}</h1>
+    <p class="muted">Check off every deposit/withdrawal that shows on the actual bank/GCash statement, then save.</p>
+  </div>
+  <a class="btn-secondary" href="/banking/accounts/{{ account.id }}">← Back to {{ account.name }}</a>
+</div>
+
+<form method="get" action="/banking/accounts/{{ account.id }}/reconcile" class="toolbar" style="margin-bottom:18px;">
+  <label style="margin:0;">Statement balance (per the bank/GCash statement)
+    <input name="statement_balance" type="number" step="0.01" value="{{ statement_balance }}" placeholder="0.00" onchange="this.form.submit()">
+  </label>
+</form>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ book_balance|peso }}</span><span>Book Balance</span></div>
+  {% if stmt_balance is not none %}
+  <div class="mini-stat"><span class="mini-num">{{ stmt_balance|peso }}</span><span>Statement Balance</span></div>
+  <div class="mini-stat"><span class="mini-num" style="color:{{ '#15803d' if diff == 0 else '#b91c1c' }};">{{ diff|peso }}</span><span>Difference</span></div>
+  {% endif %}
+</div>
+
+<form method="post" action="/banking/accounts/{{ account.id }}/reconcile">
+  <input type="hidden" name="statement_balance" value="{{ statement_balance }}">
+  <div class="table-wrap" style="margin-bottom:18px;">
+    <table class="grid">
+      <thead>
+        <tr><th></th><th>Date</th><th>Type</th><th>Description</th><th>Reference</th><th class="num">Amount</th></tr>
+      </thead>
+      <tbody>
+        {% for t in unreconciled %}
+        <tr>
+          <td><input type="checkbox" name="txn_id" value="{{ t.id }}"></td>
+          <td>{{ t.txn_date.strftime('%b %d, %Y') }}</td>
+          <td>{{ labels.get(t.txn_type, t.txn_type) }}</td>
+          <td>{{ t.description or '—' }}</td>
+          <td>{{ t.reference_no or '—' }}</td>
+          <td class="num">{{ t.amount|peso }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">Nothing left to reconcile — everything's checked off.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if unreconciled %}
+  <div class="form-actions">
+    <button class="btn" type="submit">Mark checked as reconciled</button>
+  </div>
+  {% endif %}
+</form>
+
+{% if reconciled %}
+<h3>Recently reconciled</h3>
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Date</th><th>Type</th><th>Description</th><th class="num">Amount</th><th>Reconciled</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for t in reconciled %}
+      <tr>
+        <td>{{ t.txn_date.strftime('%b %d, %Y') }}</td>
+        <td>{{ labels.get(t.txn_type, t.txn_type) }}</td>
+        <td>{{ t.description or '—' }}</td>
+        <td class="num">{{ t.amount|peso }}</td>
+        <td class="muted">{{ t.reconciled_at.strftime('%b %d, %Y') }}{% if t.reconciled_by %} by {{ t.reconciled_by.username }}{% endif %}</td>
+        <td>
+          <form method="post" action="/banking/transactions/{{ t.id }}/unreconcile">
+            <button class="btn-link" type="submit">Undo</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

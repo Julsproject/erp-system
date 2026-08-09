@@ -937,8 +937,14 @@ class BankTransaction(Base):
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    # Bank Reconciliation (Phase 2+ roadmap item 10) — set once the owner
+    # has matched this transaction against the actual bank/GCash statement.
+    reconciled_at = Column(DateTime(timezone=True), nullable=True)
+    reconciled_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
     account = relationship("BankAccount", back_populates="transactions")
-    creator = relationship("User")
+    creator = relationship("User", foreign_keys=[created_by])
+    reconciled_by = relationship("User", foreign_keys=[reconciled_by_id])
     contra_account = relationship("Account")
 
 

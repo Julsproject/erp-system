@@ -6,7 +6,7 @@ outstanding credit is derived, not cached). Moving money between two
 accounts is just a withdrawal on one and a deposit on the other; there's
 no separate "transfer" record type.
 """
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, Request, status
@@ -330,3 +330,95 @@ def void_transaction(txn_id: int, request: Request, db: Session = Depends(get_db
     )
     db.commit()
     return RedirectResponse(f"/banking/accounts/{account_id}", status_code=status.HTTP_302_FOUND)
+
+
+@router.get("/banking/accounts/{account_id:int}/reconcile", response_class=HTMLResponse)
+def reconcile_account(
+    account_id: int, request: Request, statement_balance: str = "",
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    account = db.get(models.BankAccount, account_id)
+    if not account:
+        return RedirectResponse("/banking", status_code=302)
+
+    balances = _balances_for(db, [account_id])
+    book_balance = _account_balance(account, balances)
+
+    unreconciled = (
+        db.query(models.BankTransaction)
+        .filter(models.BankTransaction.account_id == account_id, models.BankTransaction.is_voided.is_(False),
+                models.BankTransaction.reconciled_at.is_(None))
+        .order_by(models.BankTransaction.txn_date, models.BankTransaction.id)
+        .all()
+    )
+    reconciled = (
+        db.query(models.BankTransaction)
+        .filter(models.BankTransaction.account_id == account_id, models.BankTransaction.is_voided.is_(False),
+                models.BankTransaction.reconciled_at.isnot(None))
+        .order_by(models.BankTransaction.txn_date.desc(), models.BankTransaction.id.desc())
+        .limit(20)
+        .all()
+    )
+
+    stmt_balance = _dec(statement_balance) if statement_balance else None
+    diff = (book_balance - stmt_balance) if stmt_balance is not None else None
+
+    return templates.TemplateResponse(
+        "banking/reconcile.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "account": account, "book_balance": book_balance,
+         "unreconciled": unreconciled, "reconciled": reconciled,
+         "statement_balance": statement_balance, "stmt_balance": stmt_balance, "diff": diff,
+         "labels": TXN_LABELS},
+    )
+
+
+@router.post("/banking/accounts/{account_id:int}/reconcile")
+async def reconcile_submit(account_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    account = db.get(models.BankAccount, account_id)
+    if not account:
+        return RedirectResponse("/banking", status_code=302)
+
+    form = await request.form()
+    txn_ids = [int(v) for v in form.getlist("txn_id")]
+    statement_balance = form.get("statement_balance", "")
+    if txn_ids:
+        now = datetime.now(timezone.utc)
+        (
+            db.query(models.BankTransaction)
+            .filter(models.BankTransaction.account_id == account_id, models.BankTransaction.id.in_(txn_ids))
+            .update({"reconciled_at": now, "reconciled_by_id": user.id}, synchronize_session=False)
+        )
+        audit.record(
+            db, user=user, request=request, action="reconcile", entity_type="bank_account",
+            entity_id=account.id, entity_label=account.name,
+            summary=f"Reconciled {len(txn_ids)} transaction(s) on “{account.name}”",
+        )
+        db.commit()
+    return RedirectResponse(
+        f"/banking/accounts/{account_id}/reconcile?statement_balance={statement_balance}", status_code=status.HTTP_302_FOUND
+    )
+
+
+@router.post("/banking/transactions/{txn_id:int}/unreconcile")
+def unreconcile_transaction(txn_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    txn = db.get(models.BankTransaction, txn_id)
+    if not txn:
+        return RedirectResponse("/banking", status_code=302)
+    account_id = txn.account_id
+    txn.reconciled_at = None
+    txn.reconciled_by_id = None
+    db.commit()
+    return RedirectResponse(f"/banking/accounts/{account_id}/reconcile", status_code=status.HTTP_302_FOUND)
