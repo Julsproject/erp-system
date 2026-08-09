@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{{ title }} Subledger</h1>
+    <p class="muted">{{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }}{% if selected_party %} · {{ selected_party.name }}{% endif %}</p>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;">
+    <div class="seg">
+      <a class="seg-btn {{ 'active' if days == 7 and not custom }}" href="{{ route }}?days=7&party_id={{ party_id }}">7 days</a>
+      <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="{{ route }}?days=30&party_id={{ party_id }}">30 days</a>
+      <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="{{ route }}?days=90&party_id={{ party_id }}">90 days</a>
+    </div>
+    <a class="btn-link" href="/accounting/coa">← Chart of Accounts</a>
+  </div>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ total_outstanding|peso }}</span><span>Total Outstanding</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ summary_rows|length }}</span><span>{{ party_label }}s with a balance</span></div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1.4fr;gap:18px;">
+  <div class="table-wrap">
+    <table class="grid">
+      <thead><tr><th>{{ party_label }}</th><th class="num">Balance</th></tr></thead>
+      <tbody>
+        {% for r in summary_rows %}
+        <tr class="{{ 'active' if r.id == (selected_party.id if selected_party else -1) }}">
+          <td><a href="{{ route }}?party_id={{ r.id or 0 }}&days={{ days }}">{{ r.name }}</a></td>
+          <td class="num">{{ r.balance|peso }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="2" class="empty">Nothing outstanding.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="table-wrap">
+    {% if not party_id %}
+    <div style="padding:24px;" class="muted">Pick a {{ party_label|lower }} on the left to see their statement for this period.</div>
+    {% else %}
+    <table class="grid">
+      <thead><tr><th>Date</th><th>Journal #</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead>
+      <tbody>
+        <tr><td colspan="5" class="muted">Opening balance</td><td class="num strong">{{ opening|peso }}</td></tr>
+        {% for r in detail_rows %}
+        <tr>
+          <td>{{ r.entry.txn_date.strftime('%b %d, %Y') }}</td>
+          <td class="strong">{{ r.entry.journal_no }}</td>
+          <td>{{ r.entry.description }}</td>
+          <td class="num">{{ r.line.debit|peso if r.line.debit else '—' }}</td>
+          <td class="num">{{ r.line.credit|peso if r.line.credit else '—' }}</td>
+          <td class="num strong">{{ r.balance|peso }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">No activity in this period.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

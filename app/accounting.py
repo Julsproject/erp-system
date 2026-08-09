@@ -948,6 +948,108 @@ def vat_report(
 
 
 # --------------------------------------------------------------------------- #
+# AR / AP subledgers — per-customer / per-supplier drill-down of the AR/AP
+# account's GL, joined via JournalEntry.source_id + source_type
+# --------------------------------------------------------------------------- #
+def _resolve_party(db: Session, entry: models.JournalEntry, kind: str):
+    """Walks a reversal entry back to what it reversed so a voided sale's
+    settlement still attributes to the right customer. Returns (id, name)."""
+    source_type, source_id = entry.source_type, entry.source_id
+    if source_type == "reversal" and entry.is_reversal_of_id:
+        original = db.get(models.JournalEntry, entry.is_reversal_of_id)
+        if original:
+            source_type, source_id = original.source_type, original.source_id
+    if kind == "ar" and source_type in ("sale", "sale_settlement") and source_id:
+        sale = db.get(models.Sale, source_id)
+        if sale and sale.customer:
+            return sale.customer.id, sale.customer.name
+    if kind == "ap" and source_type in ("purchase", "purchase_settlement") and source_id:
+        purchase = db.get(models.Purchase, source_id)
+        if purchase and purchase.supplier:
+            return purchase.supplier.id, purchase.supplier.name
+    return None, "Walk-in / Unspecified"
+
+
+def _subledger(request: Request, db: Session, user, *, kind: str, system_key: str, party_id: int, days: int, date_from: str, date_to: str):
+    period_start, period_end, custom = _resolve_period(days, date_from, date_to)
+    account = db.query(models.Account).filter(models.Account.system_key == system_key).first()
+
+    summary = {}
+    detail_rows = []
+    opening = closing = ZERO
+    if account:
+        all_rows = (
+            db.query(models.JournalLine, models.JournalEntry)
+            .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
+            .filter(models.JournalLine.account_id == account.id, models.JournalEntry.txn_date <= period_end)
+            .order_by(models.JournalEntry.txn_date, models.JournalEntry.id)
+            .all()
+        )
+        sign = 1 if account.normal_balance == "debit" else -1
+        for line, entry in all_rows:
+            pid, pname = _resolve_party(db, entry, kind)
+            delta = sign * (line.debit - line.credit)
+            key = pid or 0
+            if key not in summary:
+                summary[key] = {"id": pid, "name": pname, "balance": ZERO}
+            summary[key]["balance"] += delta
+
+            if entry.txn_date < period_start and (pid or 0) == party_id:
+                opening += delta
+            if party_id and (pid or 0) == party_id and period_start <= entry.txn_date <= period_end:
+                detail_rows.append({"entry": entry, "line": line, "delta": delta})
+
+        running = opening
+        for r in detail_rows:
+            running += r["delta"]
+            r["balance"] = running
+        closing = running
+
+    summary_rows = sorted(
+        [v for v in summary.values() if v["balance"] != 0],
+        key=lambda r: r["balance"], reverse=True,
+    )
+    selected_party = next((v for v in summary.values() if (v["id"] or 0) == party_id), None) if party_id else None
+
+    return templates.TemplateResponse(
+        "accounting/ar_ap_subledger.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "kind": kind, "title": "Accounts Receivable" if kind == "ar" else "Accounts Payable",
+         "party_label": "Customer" if kind == "ar" else "Supplier",
+         "route": "/accounting/ar-subledger" if kind == "ar" else "/accounting/ap-subledger",
+         "summary_rows": summary_rows, "party_id": party_id, "selected_party": selected_party,
+         "detail_rows": detail_rows, "opening": opening, "closing": closing,
+         "total_outstanding": sum((r["balance"] for r in summary_rows), ZERO),
+         "days": days, "date_from": date_from, "date_to": date_to,
+         "period_start": period_start, "period_end": period_end, "custom": custom},
+    )
+
+
+@router.get("/accounting/ar-subledger", response_class=HTMLResponse)
+def ar_subledger(
+    request: Request, party_id: int = 0, days: int = 30, date_from: str = "", date_to: str = "",
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    return _subledger(request, db, user, kind="ar", system_key="AR", party_id=party_id, days=days, date_from=date_from, date_to=date_to)
+
+
+@router.get("/accounting/ap-subledger", response_class=HTMLResponse)
+def ap_subledger(
+    request: Request, party_id: int = 0, days: int = 30, date_from: str = "", date_to: str = "",
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    return _subledger(request, db, user, kind="ap", system_key="AP", party_id=party_id, days=days, date_from=date_from, date_to=date_to)
+
+
+# --------------------------------------------------------------------------- #
 # Reconciliation: ledger Sales total vs the existing operational Sales report
 # --------------------------------------------------------------------------- #
 @router.get("/accounting/reconcile-sales", response_class=HTMLResponse)
