@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: erp
-      POSTGRES_PASSWORD: erp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-erp}
       POSTGRES_DB: hardware_erp
       TZ: Asia/Manila
       PGTZ: Asia/Manila
@@ -27,7 +27,7 @@ services:
     restart: unless-stopped
     environment:
       TZ: Asia/Manila
-      DATABASE_URL: postgresql+psycopg2://erp:erp@db:5432/hardware_erp
+      DATABASE_URL: postgresql+psycopg2://erp:${POSTGRES_PASSWORD:-erp}@db:5432/hardware_erp
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       APP_NAME: ${APP_NAME:-Hardware ERP}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
@@ -51,7 +51,7 @@ services:
     restart: unless-stopped
     environment:
       TZ: Asia/Manila
-      PGPASSWORD: erp
+      PGPASSWORD: ${POSTGRES_PASSWORD:-erp}
       KEEP_DAYS: ${BACKUP_KEEP_DAYS:-31}
     volumes:
       - ${BACKUP_DIR:-./backups}:/backups

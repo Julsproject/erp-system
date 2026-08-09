@@ -16,6 +16,9 @@
       <div class="stat ok"><span class="num">{{ result.applied }}</span><span>Counts applied</span></div>
       <div class="stat muted-stat"><span class="num">{{ result.skipped }}</span><span>Skipped (blank)</span></div>
       <div class="stat {{ 'err' if result.errors else 'muted-stat' }}"><span class="num">{{ result.errors|length }}</span><span>Errors</span></div>
+      {% if result.assign_shelf_name %}
+      <div class="stat ok"><span class="num">{{ result.shelved }}</span><span>Newly assigned to “{{ result.assign_shelf_name }}”</span></div>
+      {% endif %}
     </div>
     {% if result.errors %}
     <table class="grid" style="margin-top:16px;">
@@ -62,10 +65,23 @@
         <h2>Upload your filled-in sheet</h2>
         <p class="muted">Accepts <strong>.xlsx</strong> or <strong>.csv</strong>. Only rows with a Counted Qty filled in are applied —
           leave a row blank to skip it. Uploading again for a product already in this count overwrites its counted quantity.</p>
-        <form method="post" action="/stock-count/{{ count.id }}/import" enctype="multipart/form-data" class="upload-form">
+        <form method="post" action="/stock-count/{{ count.id }}/import" enctype="multipart/form-data" class="upload-form" style="flex-wrap:wrap;">
           <input type="file" name="file" accept=".xlsx,.xlsm,.csv" required>
+          {% if shelves %}
+          <label style="margin:0;font-size:12.5px;color:var(--muted);">Assign counted items with no shelf yet to
+            <select name="assign_shelf_id" style="display:block;margin-top:4px;">
+              <option value="0">Don't assign</option>
+              {% for s in shelves %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+            </select>
+          </label>
+          {% endif %}
           <button class="btn" type="submit">⬆ Import</button>
         </form>
+        <p class="muted" style="font-size:12.5px;margin:6px 0 0;">
+          Never overwrites a shelf a product already has — only fills in the ones that don't have one yet.
+          Handy for the exact case where you're counting one physical area (Back Store, a warehouse rack…) and
+          finding items that were never assigned there in the system.
+        </p>
       </div>
     </div>
 

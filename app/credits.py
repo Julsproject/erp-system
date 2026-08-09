@@ -241,6 +241,8 @@ def credit_statement_pdf(customer_id: int, db: Session = Depends(get_db), user=D
         headers={"Content-Disposition": f'attachment; filename="{safe_name}_statement.pdf"'},
     )
 
+
+def _outstanding_sales(db: Session, customer_id: int):
     """This customer's still-owed invoices, oldest first — settling the
     whole balance pays these off in the order they were incurred."""
     sales = (

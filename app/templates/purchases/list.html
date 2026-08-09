@@ -23,7 +23,7 @@
 </div>
 
 <div class="tabs" style="margin-bottom:18px;">
-  <a class="tab {{ 'active' if not status_filter }}" href="/purchases">All <span class="muted">({{ counts.values()|sum }})</span></a>
+  <a class="tab {{ 'active' if not status_filter }}" href="/purchases">All <span class="muted">({{ all_count }})</span></a>
   {% for s, label in labels.items() %}
   <a class="tab {{ 'active' if status_filter == s }}" href="/purchases?status_filter={{ s }}">{{ label }} <span class="muted">({{ counts.get(s, 0) }})</span></a>
   {% endfor %}

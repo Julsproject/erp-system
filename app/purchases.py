@@ -185,12 +185,19 @@ def list_purchases(
     returned = sum((p.total or Decimal("0")) for p in all_purchases if p.txn_type == "return")
     counts = {s: sum(1 for p in all_purchases if p.txn_type == "receive" and p.status == s) for s in STATUS_LABELS}
     counts["return"] = sum(1 for p in all_purchases if p.txn_type == "return")
+    # STATUS_LABELS only has tabs for "paid"/"cancelled" (Payable/"confirmed"
+    # receipts are surfaced on their own dedicated Payables page instead), so
+    # counts.values() alone would silently undercount the "All" tab the
+    # moment a Payable purchase exists. all_purchases is already the true
+    # unconditional total — use its length directly instead.
+    all_count = len(all_purchases)
 
     return templates.TemplateResponse(
         "purchases/list.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "purchases": purchases, "received": received, "returned": returned,
          "status_filter": status_filter, "counts": counts, "labels": STATUS_LABELS,
+         "all_count": all_count,
          "q": q, "date_from": date_from, "date_to": date_to,
          "page": page, "pages": pages, "total": total},
     )

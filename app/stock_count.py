@@ -202,11 +202,17 @@ def _classify_count_import_rows(db: Session, count: models.StockCount, numbered_
     return classified
 
 
-def _run_count_import(db: Session, count: models.StockCount, classified):
+def _run_count_import(db: Session, count: models.StockCount, classified, assign_shelf=None):
     """Apply each matched row's Counted Qty as a line's new count — same
     effect as typing it into the Counted field by hand. A later row for the
-    same product in the same file simply overwrites an earlier one."""
-    applied = skipped = 0
+    same product in the same file simply overwrites an earlier one.
+
+    assign_shelf, if given, is set on any counted product that doesn't
+    already have a shelf — never overwrites an existing assignment. Meant
+    for exactly this workflow: download the count sheet for one shelf,
+    walk it, count everything including items that were never assigned a
+    shelf before, and have counting them also be what puts them on the map."""
+    applied = skipped = shelved = 0
     errors = []
     lines_by_product = {}
     for item in classified:
@@ -228,10 +234,14 @@ def _run_count_import(db: Session, count: models.StockCount, classified):
         line.counted_qty = item["counted"]
         line.unit_breakdown = json.dumps(item["breakdown"]) if item.get("breakdown") else None
         lines_by_product[product.id] = line
+        if assign_shelf and product.shelf_id is None:
+            product.shelf = assign_shelf
+            shelved += 1
         applied += 1
     db.commit()
     return {
-        "applied": applied, "skipped": skipped, "errors": errors,
+        "applied": applied, "skipped": skipped, "errors": errors, "shelved": shelved,
+        "assign_shelf_name": assign_shelf.name if assign_shelf else None,
         "total": len(classified),
     }
 
@@ -461,7 +471,7 @@ def stock_count_import_form(count_id: int, request: Request, db: Session = Depen
 
 @router.post("/stock-count/{count_id:int}/import", response_class=HTMLResponse)
 async def stock_count_import_upload(
-    count_id: int, request: Request, file: UploadFile = File(...),
+    count_id: int, request: Request, file: UploadFile = File(...), assign_shelf_id: int = Form(0),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -486,14 +496,17 @@ async def stock_count_import_upload(
              "result": {"error": error}},
         )
 
+    assign_shelf = db.get(models.Shelf, assign_shelf_id) if assign_shelf_id else None
     classified = _classify_count_import_rows(db, count, list(enumerate(rows, start=2)))
-    result = _run_count_import(db, count, classified)
+    result = _run_count_import(db, count, classified, assign_shelf=assign_shelf)
     result["filename"] = file.filename
     if result["applied"]:
+        summary = f"Stock count {count.ref_no}: bulk import from “{file.filename}” set {result['applied']} line(s)"
+        if result["shelved"]:
+            summary += f", assigned {result['shelved']} product(s) to shelf “{result['assign_shelf_name']}”"
         audit.record(
             db, user=user, request=request, action="stock_count", entity_type="stock_count",
-            entity_id=count.id, entity_label=count.ref_no,
-            summary=f"Stock count {count.ref_no}: bulk import from “{file.filename}” set {result['applied']} line(s)",
+            entity_id=count.id, entity_label=count.ref_no, summary=summary,
         )
         db.commit()
     return templates.TemplateResponse(
