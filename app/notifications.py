@@ -226,23 +226,29 @@ def _current_alerts(db: Session) -> dict:
                 "link": "/purchases/payables",
             }
 
-    # ---- cheques due / overdue ------------------------------------------
+    # ---- cheques due today / upcoming / overdue --------------------------
     cheques = (
         db.query(models.PostDatedCheque)
         .filter(
-            models.PostDatedCheque.status == "pending",
+            models.PostDatedCheque.status.in_(("pending", "deposited")),
             models.PostDatedCheque.cheque_date <= today + timedelta(days=CHEQUE_SOON_DAYS),
         )
         .all()
     )
     for c in cheques:
-        overdue = c.cheque_date < today
         direction = "Received" if c.direction == "received" else "Issued"
+        if c.cheque_date < today:
+            severity, bucket = "danger", "overdue"
+        elif c.cheque_date == today:
+            severity, bucket = "warning", "due today"
+        else:
+            days_out = (c.cheque_date - today).days
+            severity, bucket = "warning", f"due in {days_out} day(s)"
         alerts[f"cheque_due:{c.id}"] = {
-            "category": "cheque", "severity": "danger" if overdue else "warning",
-            "title": f"Cheque {'overdue' if overdue else 'due soon'}: {direction.lower()} {_peso(c.amount)}",
+            "category": "cheque", "severity": severity,
+            "title": f"Cheque {bucket}: {direction.lower()} {_peso(c.amount)}",
             "body": f"{direction} cheque {c.cheque_no or ''} dated {c.cheque_date.strftime('%b %d, %Y')}"
-                    f"{' — past due, clear or update it.' if overdue else '.'}".strip(),
+                    f"{' — past due, clear or update it.' if bucket == 'overdue' else '.'}".strip(),
             "link": "/pdc",
         }
 

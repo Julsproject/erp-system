@@ -61,6 +61,8 @@
         <td>
           {% if p.status == 'pending' %}
           <span class="txn" style="background:#fef3c7;color:#b45309;">Pending</span>
+          {% elif p.status == 'deposited' %}
+          <span class="txn" style="background:#eff6ff;color:#1e40af;">Deposited</span>
           {% elif p.status == 'cleared' %}
           <span class="txn" style="background:#dcfce7;color:#15803d;">Cleared</span>
           {% elif p.status == 'bounced' %}

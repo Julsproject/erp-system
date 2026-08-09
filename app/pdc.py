@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from . import accounting, models
+from . import accounting, audit, models
 from .database import get_db
 from .deps import get_current_user, is_staff
 from .templating import templates
@@ -28,7 +28,7 @@ from .templating import templates
 router = APIRouter()
 
 MANILA = ZoneInfo("Asia/Manila")
-STATUS_LABELS = {"pending": "Pending", "cleared": "Cleared", "bounced": "Bounced", "cancelled": "Cancelled"}
+STATUS_LABELS = {"pending": "Pending", "deposited": "Deposited", "cleared": "Cleared", "bounced": "Bounced", "cancelled": "Cancelled"}
 DUE_SOON_DAYS = 3
 PAGE_SIZE = 15
 
@@ -104,15 +104,41 @@ def view_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user=
     )
 
 
-@router.post("/pdc/{pdc_id:int}/clear")
-def clear_pdc(pdc_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    """The bank honored it: apply the payment it represents, only now."""
+@router.post("/pdc/{pdc_id:int}/deposit")
+def deposit_pdc(pdc_id: int, request: Request, deposit_date: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Handed to the bank teller — a physical-custody marker only, no
+    financial posting yet (same limbo as pending). Optional step; clear/
+    bounce both still work directly from pending too."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     pdc = db.get(models.PostDatedCheque, pdc_id)
     if not pdc or pdc.status != "pending":
+        return RedirectResponse(f"/pdc/{pdc_id}", status_code=302)
+    try:
+        pdc.deposit_date = date.fromisoformat(deposit_date) if deposit_date else _today()
+    except ValueError:
+        pdc.deposit_date = _today()
+    pdc.status = "deposited"
+    audit.record(
+        db, user=user, request=request, action="deposit", entity_type="post_dated_cheque",
+        entity_id=pdc.id, entity_label=pdc.cheque_no or f"PDC-{pdc.id}",
+        summary=f"Marked cheque {pdc.cheque_no or pdc.id} as deposited ({pdc.bank or 'bank'}, {pdc.amount})",
+    )
+    db.commit()
+    return RedirectResponse(f"/pdc/{pdc_id}", status_code=status.HTTP_302_FOUND)
+
+
+@router.post("/pdc/{pdc_id:int}/clear")
+def clear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """The bank honored it: apply the payment it represents, only now."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    pdc = db.get(models.PostDatedCheque, pdc_id)
+    if not pdc or pdc.status not in ("pending", "deposited"):
         return RedirectResponse(f"/pdc/{pdc_id}", status_code=302)
 
     if pdc.direction == "received":
@@ -159,6 +185,11 @@ def clear_pdc(pdc_id: int, db: Session = Depends(get_db), user=Depends(get_curre
 
     pdc.status = "cleared"
     pdc.resolved_at = func.now()
+    audit.record(
+        db, user=user, request=request, action="clear", entity_type="post_dated_cheque",
+        entity_id=pdc.id, entity_label=pdc.cheque_no or f"PDC-{pdc.id}",
+        summary=f"Cleared cheque {pdc.cheque_no or pdc.id} — {pdc.amount}",
+    )
     db.commit()
     return RedirectResponse(f"/pdc/{pdc_id}", status_code=status.HTTP_302_FOUND)
 
@@ -171,7 +202,7 @@ async def bounce_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     pdc = db.get(models.PostDatedCheque, pdc_id)
-    if not pdc or pdc.status != "pending":
+    if not pdc or pdc.status not in ("pending", "deposited"):
         return RedirectResponse(f"/pdc/{pdc_id}", status_code=302)
 
     form = await request.form()
@@ -180,12 +211,17 @@ async def bounce_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db
         pdc.notes = note
     pdc.status = "bounced"
     pdc.resolved_at = func.now()
+    audit.record(
+        db, user=user, request=request, action="bounce", entity_type="post_dated_cheque",
+        entity_id=pdc.id, entity_label=pdc.cheque_no or f"PDC-{pdc.id}",
+        summary=f"Bounced cheque {pdc.cheque_no or pdc.id} — {pdc.amount}" + (f" ({note})" if note else ""),
+    )
     db.commit()
     return RedirectResponse(f"/pdc/{pdc_id}", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/pdc/{pdc_id:int}/cancel")
-def cancel_pdc(pdc_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def cancel_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """The cheque was returned/replaced before ever being deposited."""
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -195,5 +231,10 @@ def cancel_pdc(pdc_id: int, db: Session = Depends(get_db), user=Depends(get_curr
     if pdc and pdc.status == "pending":
         pdc.status = "cancelled"
         pdc.resolved_at = func.now()
+        audit.record(
+            db, user=user, request=request, action="cancel", entity_type="post_dated_cheque",
+            entity_id=pdc.id, entity_label=pdc.cheque_no or f"PDC-{pdc.id}",
+            summary=f"Cancelled cheque {pdc.cheque_no or pdc.id} — {pdc.amount}",
+        )
         db.commit()
     return RedirectResponse(f"/pdc/{pdc_id}", status_code=status.HTTP_302_FOUND)

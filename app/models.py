@@ -565,6 +565,9 @@ class PostDatedCheque(Base):
     """A post-dated cheque — received from a customer settling their credit,
     or issued to pay a supplier. The money it represents stays in limbo
     (status=pending) until the bank actually honors it on/after cheque_date:
+      deposited -> physical custody marker only ("handed to the teller") —
+                  no financial posting yet, same limbo as pending. Optional;
+                  clearing/bouncing works directly from pending too.
       cleared  -> received: creates the ReceivableSettlement now (credit
                   finally goes down); issued: the purchase is marked paid now.
       bounced  -> received: nothing to reverse, since it was never applied;
@@ -575,11 +578,12 @@ class PostDatedCheque(Base):
 
     id = Column(Integer, primary_key=True)
     direction = Column(String(10), nullable=False)              # received | issued
-    status = Column(String(12), nullable=False, server_default="pending")  # pending | cleared | bounced | cancelled
+    status = Column(String(12), nullable=False, server_default="pending")  # pending | deposited | cleared | bounced | cancelled
 
     bank = Column(String(60))
     cheque_no = Column(String(40))
     cheque_date = Column(Date, nullable=False)
+    deposit_date = Column(Date, nullable=True)  # set when marked "deposited" — when it was handed to the bank
     amount = Column(Numeric(12, 2), nullable=False, server_default="0")
     notes = Column(String(255))
 

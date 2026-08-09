@@ -89,7 +89,7 @@ def pdc_due_count() -> int:
         horizon = date.today() + timedelta(days=3)
         return (
             db.query(models.PostDatedCheque)
-            .filter(models.PostDatedCheque.status == "pending", models.PostDatedCheque.cheque_date <= horizon)
+            .filter(models.PostDatedCheque.status.in_(("pending", "deposited")), models.PostDatedCheque.cheque_date <= horizon)
             .count()
         )
     except Exception:  # never let a badge break a page render

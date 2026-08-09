@@ -23,6 +23,11 @@
     {% else %}the delivery it's paying for stays unpaid until this clears.{% endif %}
   </div>
   {% endif %}
+{% elif pdc.status == 'deposited' %}
+<div class="quo-status-banner pending" style="background:#eff6ff;border-color:#bfdbfe;color:#1e40af;">
+  <strong>Deposited.</strong> Handed to the bank on {{ pdc.deposit_date.strftime('%b %d, %Y') if pdc.deposit_date else '—' }} —
+  mark it Cleared once confirmed, or Bounced if it comes back.
+</div>
 {% elif pdc.status == 'cleared' %}
 <div class="quo-status-banner paid">
   <strong>Cleared.</strong> {{ 'Credit was settled' if pdc.direction == 'received' else 'Purchase was marked paid' }}
@@ -44,6 +49,7 @@
     <div class="totals-row"><span class="muted">Bank</span><strong>{{ pdc.bank or '—' }}</strong></div>
     <div class="totals-row"><span class="muted">Cheque #</span><strong>{{ pdc.cheque_no or '—' }}</strong></div>
     <div class="totals-row"><span class="muted">Cheque date</span><strong>{{ pdc.cheque_date.strftime('%b %d, %Y') if pdc.cheque_date else '—' }}</strong></div>
+    {% if pdc.deposit_date %}<div class="totals-row"><span class="muted">Deposit date</span><strong>{{ pdc.deposit_date.strftime('%b %d, %Y') }}</strong></div>{% endif %}
     <div class="totals-row"><span class="muted">Amount</span><strong>{{ pdc.amount|peso }}</strong></div>
     {% if pdc.direction == 'received' %}
     <div class="totals-row"><span class="muted">Customer</span><strong>{{ pdc.customer.name if pdc.customer else (pdc.sale.customer_name if pdc.sale else '—') }}</strong></div>
@@ -57,8 +63,14 @@
   </div>
 </div>
 
-{% if pdc.status == 'pending' %}
-<div class="pos-actions" style="justify-content:flex-start;margin-top:16px;">
+{% if pdc.status in ('pending', 'deposited') %}
+<div class="pos-actions" style="justify-content:flex-start;margin-top:16px;flex-wrap:wrap;gap:10px;">
+  {% if pdc.status == 'pending' %}
+  <form method="post" action="/pdc/{{ pdc.id }}/deposit" style="display:flex;gap:8px;align-items:center;">
+    <input type="date" name="deposit_date" value="{{ today.isoformat() }}" style="padding:8px;border:1px solid var(--line-2);border-radius:8px;">
+    <button class="btn-secondary" type="submit">🏦 Mark Deposited</button>
+  </form>
+  {% endif %}
   <form method="post" action="/pdc/{{ pdc.id }}/clear">
     <button class="btn" type="submit">✓ Mark Cleared</button>
   </form>
@@ -66,9 +78,11 @@
     <input type="hidden" name="notes" value="">
     <button class="btn-secondary" type="submit" style="color:#b91c1c;">✕ Mark Bounced</button>
   </form>
+  {% if pdc.status == 'pending' %}
   <form method="post" action="/pdc/{{ pdc.id }}/cancel" onsubmit="return confirm('Cancel this cheque record?');">
     <button class="btn-secondary" type="submit">Cancel</button>
   </form>
+  {% endif %}
 </div>
 {% endif %}
 {% endblock %}
