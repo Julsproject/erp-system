@@ -724,6 +724,22 @@ function calcEquals() {
     calcExpr = '';
   }
 }
+// Numpad/keyboard support — only acts while the calculator popup is open,
+// so it never steals digit keys from the product search box or cart inputs.
+document.addEventListener('keydown', function (e) {
+  if (document.getElementById('calcOverlay').style.display === 'none') return;
+  if (e.key >= '0' && e.key <= '9') { e.preventDefault(); calcInput(e.key); }
+  else if (e.key === '.') { e.preventDefault(); calcInput('.'); }
+  else if (e.key === '+') { e.preventDefault(); calcInput('+'); }
+  else if (e.key === '-') { e.preventDefault(); calcInput('-'); }
+  else if (e.key === '*') { e.preventDefault(); calcInput('*'); }
+  else if (e.key === '/') { e.preventDefault(); calcInput('/'); }
+  else if (e.key === '%') { e.preventDefault(); calcInput('%'); }
+  else if (e.key === 'Enter' || e.key === '=') { e.preventDefault(); calcEquals(); }
+  else if (e.key === 'Backspace') { e.preventDefault(); calcBackspace(); }
+  else if (e.key === 'Escape') { e.preventDefault(); hideCalculator(); }
+  else if (e.key.toLowerCase() === 'c') { e.preventDefault(); calcClear(); }
+});
 async function createProduct() {
   const name = document.getElementById('npName').value.trim();
   const err = document.getElementById('npError');
