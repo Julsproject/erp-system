@@ -764,13 +764,41 @@ def cash_book(
         return RedirectResponse("/pos", status_code=302)
     period_start, period_end, custom = _resolve_period(days, date_from, date_to)
     accounts = _cash_accounts(db)
-    account = db.get(models.Account, account_id) if account_id else (accounts[0] if accounts else None)
-    if account and account not in accounts:
-        account = accounts[0] if accounts else None
+
+    # account_id == -1 means "All accounts" — the unified Cash Ledger
+    # (Phase 5): every cash-type account's movement combined into one
+    # chronological, running-balance table instead of one at a time.
+    all_accounts = account_id == -1
+    account = None
+    if not all_accounts:
+        account = db.get(models.Account, account_id) if account_id else (accounts[0] if accounts else None)
+        if account and account not in accounts:
+            account = accounts[0] if accounts else None
 
     rows = []
     opening = closing = ZERO
-    if account:
+    if all_accounts and accounts:
+        account_ids = [a.id for a in accounts]
+        by_id = {a.id: a for a in accounts}
+        for a in accounts:
+            opening += _account_balance_before(db, a, period_start)
+        entries = (
+            db.query(models.JournalLine, models.JournalEntry)
+            .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
+            .filter(models.JournalLine.account_id.in_(account_ids),
+                    models.JournalEntry.txn_date.between(period_start, period_end),
+                    models.JournalEntry.status != "draft")
+            .order_by(models.JournalEntry.txn_date, models.JournalEntry.id)
+            .all()
+        )
+        running = opening
+        for line, entry in entries:
+            a = by_id[line.account_id]
+            delta = (line.debit - line.credit) if a.normal_balance == "debit" else (line.credit - line.debit)
+            running += delta
+            rows.append({"entry": entry, "line": line, "account": a, "balance": running})
+        closing = running
+    elif account:
         opening = _account_balance_before(db, account, period_start)
         entries = (
             db.query(models.JournalLine, models.JournalEntry)
@@ -785,15 +813,152 @@ def cash_book(
         for line, entry in entries:
             delta = (line.debit - line.credit) if account.normal_balance == "debit" else (line.credit - line.debit)
             running += delta
-            rows.append({"entry": entry, "line": line, "balance": running})
+            rows.append({"entry": entry, "line": line, "account": account, "balance": running})
         closing = running
 
     return templates.TemplateResponse(
         "accounting/cash_book.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "accounts": accounts, "account": account, "rows": rows, "opening": opening, "closing": closing,
+         "accounts": accounts, "account": account, "all_accounts": all_accounts,
+         "rows": rows, "opening": opening, "closing": closing,
          "days": days, "date_from": date_from, "date_to": date_to,
          "period_start": period_start, "period_end": period_end, "custom": custom},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Cash Flow Statement — cash-account movement grouped by what the OTHER
+# side of each entry was, into Inflows vs Outflows.
+# --------------------------------------------------------------------------- #
+def _classify_counter(account: models.Account) -> str:
+    """Labels the "why" of a cash movement from the account on the other
+    side of the entry. system_key first (more precise than account_type
+    for AR/AP, which are still technically 'asset'/'liability'), then
+    account_type as a catch-all."""
+    key = account.system_key or ""
+    if key == "AR":
+        return "Accounts Receivable Collections"
+    if key == "AP":
+        return "Supplier Payments"
+    if key in ("SALES_REVENUE",):
+        return "Sales"
+    if key in ("OWNERS_EQUITY", "RETAINED_EARNINGS"):
+        return "Owner's Equity"
+    if account.account_type == "revenue":
+        return "Other Income"
+    if account.account_type == "expense":
+        return "Operating Expenses"
+    if account.account_type == "cost_of_sales":
+        return "Cost of Sales"
+    if account.account_type == "liability":
+        return "Other Liabilities"
+    if account.account_type == "asset":
+        # Another cash-type account on the other side = an inter-account
+        # transfer, not really an "inflow/outflow" from outside the business.
+        return "Transfers Between Accounts" if account.system_key else "Other Assets"
+    return "Other"
+
+
+def _cash_flow_data(db: Session, period_start: date, period_end: date):
+    """One entry's cash movement can have several non-cash lines (e.g. an
+    expense split into net + Input VAT) — each is attributed a weighted
+    share of the cash movement, proportional to its own debit+credit, so a
+    ₱112 cash payment split Dr Expense 100 / Dr Input VAT 12 correctly
+    shows as ₱100 Operating Expenses + ₱12 (whatever Input VAT classifies
+    as) rather than all-or-nothing to one bucket."""
+    cash_ids = {a.id for a in _cash_accounts(db)}
+    entries = (
+        db.query(models.JournalEntry)
+        .join(models.JournalLine, models.JournalLine.entry_id == models.JournalEntry.id)
+        .filter(models.JournalLine.account_id.in_(cash_ids or [0]),
+                models.JournalEntry.txn_date.between(period_start, period_end),
+                models.JournalEntry.status != "draft")
+        .distinct()
+        .all()
+    )
+    inflows, outflows = {}, {}
+    for entry in entries:
+        cash_lines = [ln for ln in entry.lines if ln.account_id in cash_ids]
+        other_lines = [ln for ln in entry.lines if ln.account_id not in cash_ids]
+        cash_net = sum((ln.debit - ln.credit) for ln in cash_lines)
+        if cash_net == 0 or not other_lines:
+            continue
+        other_total = sum((ln.debit + ln.credit) for ln in other_lines) or Decimal("1")
+        bucket = inflows if cash_net > 0 else outflows
+        for ln in other_lines:
+            weight = (ln.debit + ln.credit) / other_total
+            label = _classify_counter(ln.account)
+            bucket[label] = bucket.get(label, ZERO) + abs(cash_net) * weight
+    return inflows, outflows
+
+
+@router.get("/accounting/cash-flow-statement", response_class=HTMLResponse)
+def cash_flow_statement(
+    request: Request, days: int = 30, date_from: str = "", date_to: str = "",
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    period_start, period_end, custom = _resolve_period(days, date_from, date_to)
+    inflows, outflows = _cash_flow_data(db, period_start, period_end)
+
+    inflow_rows = sorted(({"label": k, "amount": v} for k, v in inflows.items()), key=lambda r: -r["amount"])
+    outflow_rows = sorted(({"label": k, "amount": v} for k, v in outflows.items()), key=lambda r: -r["amount"])
+    total_in = sum((r["amount"] for r in inflow_rows), ZERO)
+    total_out = sum((r["amount"] for r in outflow_rows), ZERO)
+
+    return templates.TemplateResponse(
+        "accounting/cash_flow_statement.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "inflow_rows": inflow_rows, "outflow_rows": outflow_rows,
+         "total_in": total_in, "total_out": total_out, "net": total_in - total_out,
+         "days": days, "date_from": date_from, "date_to": date_to,
+         "period_start": period_start, "period_end": period_end, "custom": custom},
+    )
+
+
+@router.get("/accounting/cash-flow-statement/export")
+def export_cash_flow_statement(days: int = 30, date_from: str = "", date_to: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    period_start, period_end, _ = _resolve_period(days, date_from, date_to)
+    inflows, outflows = _cash_flow_data(db, period_start, period_end)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Cash Flow Statement"
+    ws.append(["Type", "Category", "Amount"])
+    header_fill = PatternFill("solid", fgColor="1F6FEB")
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+    for label, amount in sorted(inflows.items(), key=lambda kv: -kv[1]):
+        ws.append(["Inflow", label, float(amount)])
+    for label, amount in sorted(outflows.items(), key=lambda kv: -kv[1]):
+        ws.append(["Outflow", label, float(amount)])
+    total_in = sum(inflows.values(), ZERO)
+    total_out = sum(outflows.values(), ZERO)
+    ws.append(["", "Net Cash Flow", float(total_in - total_out)])
+    for cell in ws[ws.max_row]:
+        cell.font = Font(bold=True)
+    widths = [12, 34, 16]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = "A2"
+
+    import io
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"cash_flow_{period_end.isoformat()}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

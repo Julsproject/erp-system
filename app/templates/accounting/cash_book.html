@@ -4,13 +4,13 @@
 <div class="page-head">
   <div>
     <h1 class="page-title">Cash Book / Bank Ledger</h1>
-    <p class="muted">{{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }}{% if account %} · {{ account.code }} {{ account.name }}{% endif %}</p>
+    <p class="muted">{{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }}{% if all_accounts %} · All accounts{% elif account %} · {{ account.code }} {{ account.name }}{% endif %}</p>
   </div>
   <div style="display:flex;gap:10px;align-items:center;">
     <div class="seg">
-      <a class="seg-btn {{ 'active' if days == 7 and not custom }}" href="/accounting/cash-book?days=7&account_id={{ account.id if account }}">7 days</a>
-      <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="/accounting/cash-book?days=30&account_id={{ account.id if account }}">30 days</a>
-      <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="/accounting/cash-book?days=90&account_id={{ account.id if account }}">90 days</a>
+      <a class="seg-btn {{ 'active' if days == 7 and not custom }}" href="/accounting/cash-book?days=7&account_id={{ -1 if all_accounts else (account.id if account) }}">7 days</a>
+      <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="/accounting/cash-book?days=30&account_id={{ -1 if all_accounts else (account.id if account) }}">30 days</a>
+      <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="/accounting/cash-book?days=90&account_id={{ -1 if all_accounts else (account.id if account) }}">90 days</a>
     </div>
   </div>
 </div>
@@ -20,6 +20,7 @@
   <input type="hidden" name="days" value="{{ days }}">
   <label style="margin:0;">Cash / Bank account
     <select name="account_id" onchange="this.form.submit()">
+      <option value="-1" {{ 'selected' if all_accounts }}>— All accounts —</option>
       {% for a in accounts %}<option value="{{ a.id }}" {{ 'selected' if account and a.id == account.id }}>{{ a.code }} · {{ a.name }}</option>
       {% else %}<option>No cash/bank accounts yet</option>{% endfor %}
     </select>
@@ -27,7 +28,7 @@
 </form>
 
 {% if not accounts %}
-<div class="card"><p class="muted">No cash or bank ledger accounts found. Cash on Hand, GCash, and Bank Accounts are
+<div class="card"><p class="muted">No cash or bank ledger accounts found. Cash on Hand, GCash, Maya, and Bank Accounts are
   seeded automatically — if this list is empty, check <a href="/accounting/coa">Chart of Accounts</a> for whether
   they've been deactivated.</p></div>
 {% else %}
@@ -39,13 +40,14 @@
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Date</th><th>Journal #</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr>
+      <tr><th>Date</th>{% if all_accounts %}<th>Account</th>{% endif %}<th>Journal #</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr>
     </thead>
     <tbody>
-      <tr><td colspan="5" class="muted">Opening balance</td><td class="num strong">{{ opening|peso }}</td></tr>
+      <tr><td colspan="{{ 6 if all_accounts else 5 }}" class="muted">Opening balance</td><td class="num strong">{{ opening|peso }}</td></tr>
       {% for r in rows %}
       <tr>
         <td>{{ r.entry.txn_date.strftime('%b %d, %Y') }}</td>
+        {% if all_accounts %}<td>{{ r.account.code }} · {{ r.account.name }}</td>{% endif %}
         <td class="strong">{{ r.entry.journal_no }}</td>
         <td>{{ r.entry.description }}{% if r.line.memo %} <span class="muted">({{ r.line.memo }})</span>{% endif %}</td>
         <td class="num">{{ r.line.debit|peso if r.line.debit else '—' }}</td>
@@ -53,7 +55,7 @@
         <td class="num strong">{{ r.balance|peso }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="empty">No cash movement in this period.</td></tr>
+      <tr><td colspan="{{ 7 if all_accounts else 6 }}" class="empty">No cash movement in this period.</td></tr>
       {% endfor %}
     </tbody>
   </table>

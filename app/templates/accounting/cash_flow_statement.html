@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Cash Flow Statement · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Cash Flow Statement</h1>
+    <p class="muted">{{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }}</p>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;">
+    <div class="seg">
+      <a class="seg-btn {{ 'active' if days == 7 and not custom }}" href="/accounting/cash-flow-statement?days=7">7 days</a>
+      <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="/accounting/cash-flow-statement?days=30">30 days</a>
+      <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="/accounting/cash-flow-statement?days=90">90 days</a>
+    </div>
+    <a class="btn-secondary" href="/accounting/cash-flow-statement/export?{{ ('date_from=' ~ date_from ~ '&date_to=' ~ date_to) if custom else ('days=' ~ days) }}">⬇ Download Excel</a>
+  </div>
+</div>
+{% include "accounting/_subnav.html" %}
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ total_in|peso }}</span><span>Total Inflows</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total_out|peso }}</span><span>Total Outflows</span></div>
+  <div class="mini-stat"><span class="mini-num" style="color:{{ '#15803d' if net >= 0 else '#b91c1c' }};">{{ net|peso }}</span><span>Net Cash Flow</span></div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
+  <div class="table-wrap">
+    <table class="grid">
+      <thead><tr><th colspan="2">Inflows</th></tr></thead>
+      <tbody>
+        {% for r in inflow_rows %}
+        <tr><td>{{ r.label }}</td><td class="num">{{ r.amount|peso }}</td></tr>
+        {% else %}
+        <tr><td colspan="2" class="empty">No cash inflows this period.</td></tr>
+        {% endfor %}
+      </tbody>
+      <tfoot><tr><td class="strong">Total Inflows</td><td class="num strong">{{ total_in|peso }}</td></tr></tfoot>
+    </table>
+  </div>
+
+  <div class="table-wrap">
+    <table class="grid">
+      <thead><tr><th colspan="2">Outflows</th></tr></thead>
+      <tbody>
+        {% for r in outflow_rows %}
+        <tr><td>{{ r.label }}</td><td class="num">{{ r.amount|peso }}</td></tr>
+        {% else %}
+        <tr><td colspan="2" class="empty">No cash outflows this period.</td></tr>
+        {% endfor %}
+      </tbody>
+      <tfoot><tr><td class="strong">Total Outflows</td><td class="num strong">{{ total_out|peso }}</td></tr></tfoot>
+    </table>
+  </div>
+</div>
+{% endblock %}
