@@ -1050,6 +1050,61 @@ def ap_subledger(
 
 
 # --------------------------------------------------------------------------- #
+# Financial Dashboard — rollup of every other report. Built last on purpose:
+# a rollup built before the reports underneath it were trustworthy would
+# just have been showing confidently wrong numbers.
+# --------------------------------------------------------------------------- #
+@router.get("/accounting/dashboard", response_class=HTMLResponse)
+def dashboard(
+    request: Request, days: int = 30, date_from: str = "", date_to: str = "",
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    period_start, period_end, custom = _resolve_period(days, date_from, date_to)
+
+    _, total_debit, total_credit = _trial_balance_rows(db, period_end)
+    balanced = total_debit == total_credit
+
+    total_assets = _type_balance(db, "asset", period_end)
+    total_liabilities = _type_balance(db, "liability", period_end)
+    equity_accounts = _type_balance(db, "equity", period_end)
+    revenue_to_date = _type_balance(db, "revenue", period_end)
+    cost_of_sales_to_date = _type_balance(db, "cost_of_sales", period_end)
+    expenses_to_date = _type_balance(db, "expense", period_end)
+    net_income_to_date = revenue_to_date - cost_of_sales_to_date - expenses_to_date
+    total_equity = equity_accounts + net_income_to_date
+
+    pl_period = _pl_ledger_data(db, period_start, period_end)
+
+    cash_total = ZERO
+    for account in _cash_accounts(db):
+        cash_total += _account_balance_before(db, account, period_end + timedelta(days=1))
+
+    ar_account = db.query(models.Account).filter(models.Account.system_key == "AR").first()
+    ap_account = db.query(models.Account).filter(models.Account.system_key == "AP").first()
+    ar_total = _account_balance_before(db, ar_account, period_end + timedelta(days=1)) if ar_account else ZERO
+    ap_total = _account_balance_before(db, ap_account, period_end + timedelta(days=1)) if ap_account else ZERO
+
+    output_vat = _vat_period_total(db, "OUTPUT_VAT", period_start, period_end)
+    input_vat = _vat_period_total(db, "INPUT_VAT", period_start, period_end)
+    vat_payable = output_vat - input_vat
+
+    return templates.TemplateResponse(
+        "accounting/dashboard.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "balanced": balanced, "total_debit": total_debit, "total_credit": total_credit,
+         "total_assets": total_assets, "total_liabilities": total_liabilities, "total_equity": total_equity,
+         "net_income_to_date": net_income_to_date, "pl_period": pl_period,
+         "cash_total": cash_total, "ar_total": ar_total, "ap_total": ap_total, "vat_payable": vat_payable,
+         "days": days, "date_from": date_from, "date_to": date_to,
+         "period_start": period_start, "period_end": period_end, "custom": custom},
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Reconciliation: ledger Sales total vs the existing operational Sales report
 # --------------------------------------------------------------------------- #
 @router.get("/accounting/reconcile-sales", response_class=HTMLResponse)
