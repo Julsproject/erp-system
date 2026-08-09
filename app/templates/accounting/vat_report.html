@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}VAT Report · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">VAT Report</h1>
+    <p class="muted">{{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }}</p>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;">
+    <div class="seg">
+      <a class="seg-btn {{ 'active' if days == 7 and not custom }}" href="/accounting/vat-report?days=7">7 days</a>
+      <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="/accounting/vat-report?days=30">30 days</a>
+      <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="/accounting/vat-report?days=90">90 days</a>
+    </div>
+    <a class="btn-link" href="/accounting/coa">← Chart of Accounts</a>
+  </div>
+</div>
+
+<div class="table-wrap" style="margin-bottom:18px;">
+  <table class="grid">
+    <tbody>
+      <tr><td>Output VAT <span class="muted">(VAT collected on Sales)</span></td><td class="num">{{ output_vat|peso }}</td></tr>
+      <tr><td>Input VAT <span class="muted">(VAT paid on Expenses)</span></td><td class="num">({{ input_vat|peso }})</td></tr>
+      <tr><td class="strong">VAT Payable <span class="muted">(owed to BIR for this period)</span></td>
+          <td class="num strong" style="color:{{ '#b91c1c' if vat_payable > 0 else '#15803d' }};">{{ vat_payable|peso }}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Reconciliation vs. operational records</h3>
+  <p class="muted">Purchases don't post VAT yet — only Sales (Output VAT) and Expenses (Input VAT) do — so this
+    report understates Input VAT if the shop is paying VAT on inventory purchases from VAT-registered suppliers.</p>
+  <div class="stat-row">
+    <div class="mini-stat"><span class="mini-num">{{ output_vat|peso }}</span><span>Ledger Output VAT</span></div>
+    <div class="mini-stat"><span class="mini-num">{{ sale_vat_total|peso }}</span><span>Sum of Sale.vat_amount</span></div>
+    <div class="mini-stat"><span class="mini-num" style="color:{{ '#15803d' if output_diff == 0 else '#b91c1c' }};">{{ output_diff|peso }}</span><span>Difference</span></div>
+  </div>
+  <div class="stat-row" style="margin-top:10px;">
+    <div class="mini-stat"><span class="mini-num">{{ input_vat|peso }}</span><span>Ledger Input VAT</span></div>
+    <div class="mini-stat"><span class="mini-num">{{ expense_vat_total|peso }}</span><span>Sum of Expense.vat_amount</span></div>
+    <div class="mini-stat"><span class="mini-num" style="color:{{ '#15803d' if input_diff == 0 else '#b91c1c' }};">{{ input_diff|peso }}</span><span>Difference</span></div>
+  </div>
+</div>
+{% endblock %}

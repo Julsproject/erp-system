@@ -884,6 +884,70 @@ def ledger_profit_loss(
 
 
 # --------------------------------------------------------------------------- #
+# VAT Report — Output VAT (from Sales) vs Input VAT (from Expenses), netted
+# --------------------------------------------------------------------------- #
+def _vat_period_total(db: Session, system_key: str, period_start: date, period_end: date) -> Decimal:
+    """Net period movement for the account currently tagged with this
+    system_key, signed by its own normal_balance so it reads as a positive
+    accrual regardless of which side it normally sits on."""
+    account = db.query(models.Account).filter(models.Account.system_key == system_key).first()
+    if not account:
+        return ZERO
+    row = (
+        db.query(func.coalesce(func.sum(models.JournalLine.debit), 0), func.coalesce(func.sum(models.JournalLine.credit), 0))
+        .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
+        .filter(models.JournalLine.account_id == account.id,
+                models.JournalEntry.txn_date.between(period_start, period_end),
+                models.JournalEntry.status == "posted")
+        .one()
+    )
+    debit, credit = Decimal(str(row[0] or 0)), Decimal(str(row[1] or 0))
+    return (debit - credit) if account.normal_balance == "debit" else (credit - debit)
+
+
+@router.get("/accounting/vat-report", response_class=HTMLResponse)
+def vat_report(
+    request: Request, days: int = 30, date_from: str = "", date_to: str = "",
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    period_start, period_end, custom = _resolve_period(days, date_from, date_to)
+
+    output_vat = _vat_period_total(db, "OUTPUT_VAT", period_start, period_end)
+    input_vat = _vat_period_total(db, "INPUT_VAT", period_start, period_end)
+    vat_payable = output_vat - input_vat
+
+    # Reconciliation vs. the operational figures those postings came from.
+    sale_vat_total = (
+        db.query(func.coalesce(func.sum(models.Sale.vat_amount), 0))
+        .filter(models.Sale.txn_type == "sale", models.Sale.is_voided.is_(False),
+                _local_date(models.Sale.created_at).between(period_start, period_end))
+        .scalar()
+    )
+    sale_vat_total = Decimal(str(sale_vat_total or 0))
+
+    expense_vat_total = (
+        db.query(func.coalesce(func.sum(models.Expense.vat_amount), 0))
+        .filter(models.Expense.is_voided.is_(False), models.Expense.expense_date.between(period_start, period_end))
+        .scalar()
+    )
+    expense_vat_total = Decimal(str(expense_vat_total or 0))
+
+    return templates.TemplateResponse(
+        "accounting/vat_report.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "output_vat": output_vat, "input_vat": input_vat, "vat_payable": vat_payable,
+         "sale_vat_total": sale_vat_total, "expense_vat_total": expense_vat_total,
+         "output_diff": output_vat - sale_vat_total, "input_diff": input_vat - expense_vat_total,
+         "days": days, "date_from": date_from, "date_to": date_to,
+         "period_start": period_start, "period_end": period_end, "custom": custom},
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Reconciliation: ledger Sales total vs the existing operational Sales report
 # --------------------------------------------------------------------------- #
 @router.get("/accounting/reconcile-sales", response_class=HTMLResponse)
