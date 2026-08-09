@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Manual Journal Entries · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Manual Journal Entries</h1>
+    <p class="muted">For anything the automatic posting engine doesn't cover — capital injections, corrections, closing entries.</p>
+  </div>
+  <div class="head-actions">
+    <a class="btn-secondary" href="/accounting/coa">← Chart of Accounts</a>
+    <a class="btn" href="/accounting/journal-entries/new">+ New Entry</a>
+  </div>
+</div>
+
+{% if request.query_params.get('created') %}
+<div class="alert" style="background:#dcfce7;color:#15803d;">Saved as draft: {{ request.query_params.get('created') }}. It won't affect any report until you Post it below.</div>
+{% endif %}
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Journal #</th><th>Date</th><th>Description</th><th>Status</th><th class="num">Debit</th><th class="num">Credit</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for e in entries %}
+      <tr>
+        <td class="strong">{{ e.journal_no }}</td>
+        <td>{{ e.txn_date.strftime('%b %d, %Y') }}</td>
+        <td>{{ e.description }}{% if e.reference_no %} <span class="muted">({{ e.reference_no }})</span>{% endif %}</td>
+        <td>
+          {% if e.status == 'draft' %}<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:4px;font-size:12px;">Draft</span>
+          {% elif e.status == 'reversed' %}<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:4px;font-size:12px;">Reversed</span>
+          {% else %}<span style="background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:4px;font-size:12px;">Posted</span>{% endif %}
+        </td>
+        <td class="num">{{ e.lines|sum(attribute='debit')|peso }}</td>
+        <td class="num">{{ e.lines|sum(attribute='credit')|peso }}</td>
+        <td style="white-space:nowrap;">
+          {% if e.status == 'draft' %}
+          <form method="post" action="/accounting/journal-entries/{{ e.id }}/post" style="display:inline;">
+            <button class="btn-link" type="submit" onclick="return confirm('Post this entry? It will start affecting every report immediately.')">Post</button>
+          </form>
+          <form method="post" action="/accounting/journal-entries/{{ e.id }}/delete" style="display:inline;">
+            <button class="btn-link" type="submit" onclick="return confirm('Delete this draft?')">Delete</button>
+          </form>
+          {% elif e.status == 'posted' %}
+          <form method="post" action="/accounting/journal-entries/{{ e.id }}/reverse" style="display:inline;">
+            <button class="btn-link" type="submit" onclick="return confirm('Reverse this entry? A mirror-image entry will be posted; this one will never be edited or deleted.')">Reverse</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No manual entries yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -130,7 +130,7 @@ class JournalEntry(Base):
     source_type = Column(String(20), nullable=False)  # sale | reversal | manual (more per phase)
     source_id = Column(Integer, nullable=True, index=True)  # polymorphic (e.g. sales.id) — no FK on purpose
     description = Column(String(255))
-    status = Column(String(12), nullable=False, server_default="posted")  # posted | reversed
+    status = Column(String(12), nullable=False, server_default="posted")  # draft | posted | reversed
     is_reversal_of_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=True)
     entered_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     posted_at = Column(DateTime(timezone=True), server_default=func.now())

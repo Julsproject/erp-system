@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}New Journal Entry · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">New Journal Entry</h1>
+  <a class="btn-link" href="/accounting/journal-entries">← Manual Journal Entries</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<form class="card form" method="post" action="/accounting/journal-entries" novalidate id="jeForm">
+  <label>Date
+    <input name="txn_date" type="date" value="{{ today }}" required>
+  </label>
+  <label>Reference # <span class="muted">— optional</span>
+    <input name="reference_no">
+  </label>
+  <label class="full">Description
+    <input name="description" required placeholder="e.g. Owner capital injection, year-end correction">
+  </label>
+
+  <div class="full">
+    <table class="grid" id="lineTable">
+      <thead>
+        <tr><th>Account</th><th style="width:110px;">Side</th><th style="width:140px;">Amount</th><th>Memo</th><th></th></tr>
+      </thead>
+      <tbody id="lineBody"></tbody>
+      <tfoot>
+        <tr>
+          <td colspan="2" class="strong">Totals</td>
+          <td class="num strong" id="totalsCell">Dr ₱0.00 / Cr ₱0.00</td>
+          <td colspan="2" id="balanceCell" class="muted">Add at least 2 lines</td>
+        </tr>
+      </tfoot>
+    </table>
+    <button type="button" class="btn-secondary" onclick="addLine()" style="margin-top:10px;">+ Add line</button>
+  </div>
+
+  <div class="form-actions full">
+    <button class="btn" type="submit">Save as Draft</button>
+    <a class="btn-secondary" href="/accounting/journal-entries">Cancel</a>
+  </div>
+  <p class="muted full">Saved as a draft first — it won't affect any report or balance until someone explicitly
+    Posts it from the Manual Journal Entries list.</p>
+</form>
+
+<script>
+const ACCOUNTS = [
+  {% for a in accounts %}{id: {{ a.id }}, label: {{ (a.code ~ " · " ~ a.name)|tojson }}},{% endfor %}
+];
+
+function accountOptions(selected) {
+  return ACCOUNTS.map(a => `<option value="${a.id}" ${a.id === selected ? 'selected' : ''}>${a.label}</option>`).join('');
+}
+
+function addLine(side) {
+  const tbody = document.getElementById('lineBody');
+  const row = document.createElement('tr');
+  row.innerHTML = `
+    <td><select name="account_id">${accountOptions(null)}</select></td>
+    <td><select name="side">
+      <option value="debit" ${side === 'debit' ? 'selected' : ''}>Debit</option>
+      <option value="credit" ${side === 'credit' ? 'selected' : ''}>Credit</option>
+    </select></td>
+    <td><input name="amount" type="number" step="0.01" min="0.01" oninput="recalc()"></td>
+    <td><input name="memo" placeholder="optional"></td>
+    <td><button type="button" class="btn-link" onclick="this.closest('tr').remove(); recalc();">Remove</button></td>
+  `;
+  tbody.appendChild(row);
+  row.querySelector('select[name=side]').addEventListener('change', recalc);
+  recalc();
+}
+
+function recalc() {
+  let debit = 0, credit = 0;
+  document.querySelectorAll('#lineBody tr').forEach(row => {
+    const amt = parseFloat(row.querySelector('input[name=amount]').value) || 0;
+    const side = row.querySelector('select[name=side]').value;
+    if (side === 'debit') debit += amt; else credit += amt;
+  });
+  document.getElementById('totalsCell').textContent = `Dr ₱${debit.toFixed(2)} / Cr ₱${credit.toFixed(2)}`;
+  const balanceCell = document.getElementById('balanceCell');
+  if (debit === 0 && credit === 0) {
+    balanceCell.textContent = 'Add at least 2 lines'; balanceCell.style.color = '';
+  } else if (Math.abs(debit - credit) < 0.005) {
+    balanceCell.textContent = 'Balanced ✓'; balanceCell.style.color = '#15803d';
+  } else {
+    balanceCell.textContent = `Out of balance by ₱${Math.abs(debit - credit).toFixed(2)}`; balanceCell.style.color = '#b91c1c';
+  }
+}
+
+addLine('debit');
+addLine('credit');
+</script>
+{% endblock %}

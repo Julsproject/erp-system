@@ -112,12 +112,16 @@ def _next_journal_no(db: Session) -> str:
 
 
 def post_journal(db: Session, *, txn_date, source_type: str, source_id, description: str,
-                  lines: list, reference_no: str = None, entered_by_id: int = None) -> models.JournalEntry:
+                  lines: list, reference_no: str = None, entered_by_id: int = None, status: str = "posted") -> models.JournalEntry:
     """lines: [{"function_key": "SALE_CASH", "amount": Decimal, "side": "debit"|"credit", "memo": "..."}, ...]
     A line can give "_account_id" directly instead of "function_key" — for
     the handful of cases (like an Expense's per-category account) where the
     target account is a real FK on the source record, not a fixed function
-    the whole shop shares one mapping for.
+    the whole shop shares one mapping for. The manual Journal Entry screen
+    uses "_account_id" for every line and passes status="draft" so it lands
+    in the books only once someone approves it (see post_draft_entry) — every
+    balance-summing query in this module excludes status="draft" for exactly
+    this reason.
     Does NOT commit — caller commits once, so the source transaction and its
     journal entry land or roll back together."""
     resolved = []
@@ -147,13 +151,34 @@ def post_journal(db: Session, *, txn_date, source_type: str, source_id, descript
     entry = models.JournalEntry(
         journal_no=_next_journal_no(db), txn_date=txn_date, reference_no=reference_no,
         source_type=source_type, source_id=source_id, description=description,
-        entered_by_id=entered_by_id,
+        entered_by_id=entered_by_id, status=status,
     )
     db.add(entry)
     db.flush()  # need entry.id for the lines
     for ln in resolved:
         db.add(models.JournalLine(entry_id=entry.id, **ln))
     return entry
+
+
+def post_draft_entry(db: Session, entry: models.JournalEntry) -> bool:
+    """The 'approve' step of the manual Journal Entry workflow — flips a
+    draft into the books. Returns False (no-op) if it wasn't a draft."""
+    if entry.status != "draft":
+        return False
+    entry.status = "posted"
+    return True
+
+
+def delete_draft_entry(db: Session, entry: models.JournalEntry) -> bool:
+    """Drafts never affected any balance, so unlike a posted entry they can
+    just be deleted outright — no reversal needed. Returns False (no-op) if
+    it wasn't a draft."""
+    if entry.status != "draft":
+        return False
+    for line in list(entry.lines):
+        db.delete(line)
+    db.delete(entry)
+    return True
 
 
 def reverse_journal(db: Session, entry: models.JournalEntry, *, reason: str = None, entered_by_id: int = None) -> models.JournalEntry:
@@ -562,7 +587,8 @@ def _account_balance_before(db: Session, account: models.Account, before: date) 
     row = (
         db.query(func.coalesce(func.sum(models.JournalLine.debit), 0), func.coalesce(func.sum(models.JournalLine.credit), 0))
         .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
-        .filter(models.JournalLine.account_id == account.id, models.JournalEntry.txn_date < before)
+        .filter(models.JournalLine.account_id == account.id, models.JournalEntry.txn_date < before,
+                models.JournalEntry.status != "draft")
         .one()
     )
     debit, credit = Decimal(str(row[0] or 0)), Decimal(str(row[1] or 0))
@@ -590,7 +616,8 @@ def general_ledger(
             db.query(models.JournalLine, models.JournalEntry)
             .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
             .filter(models.JournalLine.account_id == account.id,
-                    models.JournalEntry.txn_date.between(period_start, period_end))
+                    models.JournalEntry.txn_date.between(period_start, period_end),
+                    models.JournalEntry.status != "draft")
             .order_by(models.JournalEntry.txn_date, models.JournalEntry.id)
             .all()
         )
@@ -621,7 +648,8 @@ def _trial_balance_rows(db: Session, as_of: date):
         totals = (
             db.query(func.coalesce(func.sum(models.JournalLine.debit), 0), func.coalesce(func.sum(models.JournalLine.credit), 0))
             .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
-            .filter(models.JournalLine.account_id == account.id, models.JournalEntry.txn_date <= as_of)
+            .filter(models.JournalLine.account_id == account.id, models.JournalEntry.txn_date <= as_of,
+                    models.JournalEntry.status != "draft")
             .one()
         )
         debit, credit = Decimal(str(totals[0] or 0)), Decimal(str(totals[1] or 0))
@@ -738,7 +766,8 @@ def cash_book(
             db.query(models.JournalLine, models.JournalEntry)
             .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
             .filter(models.JournalLine.account_id == account.id,
-                    models.JournalEntry.txn_date.between(period_start, period_end))
+                    models.JournalEntry.txn_date.between(period_start, period_end),
+                    models.JournalEntry.status != "draft")
             .order_by(models.JournalEntry.txn_date, models.JournalEntry.id)
             .all()
         )
@@ -790,7 +819,7 @@ def _pl_ledger_data(db: Session, period_start: date, period_end: date):
                 .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
                 .filter(models.JournalLine.account_id == account.id,
                         models.JournalEntry.txn_date.between(period_start, period_end),
-                        models.JournalEntry.status == "posted")
+                        models.JournalEntry.status != "draft")
                 .one()
             )
             debit, credit = Decimal(str(row[0] or 0)), Decimal(str(row[1] or 0))
@@ -898,7 +927,7 @@ def _vat_period_total(db: Session, system_key: str, period_start: date, period_e
         .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
         .filter(models.JournalLine.account_id == account.id,
                 models.JournalEntry.txn_date.between(period_start, period_end),
-                models.JournalEntry.status == "posted")
+                models.JournalEntry.status != "draft")
         .one()
     )
     debit, credit = Decimal(str(row[0] or 0)), Decimal(str(row[1] or 0))
@@ -981,7 +1010,8 @@ def _subledger(request: Request, db: Session, user, *, kind: str, system_key: st
         all_rows = (
             db.query(models.JournalLine, models.JournalEntry)
             .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
-            .filter(models.JournalLine.account_id == account.id, models.JournalEntry.txn_date <= period_end)
+            .filter(models.JournalLine.account_id == account.id, models.JournalEntry.txn_date <= period_end,
+                    models.JournalEntry.status != "draft")
             .order_by(models.JournalEntry.txn_date, models.JournalEntry.id)
             .all()
         )
@@ -1047,6 +1077,127 @@ def ap_subledger(
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     return _subledger(request, db, user, kind="ap", system_key="AP", party_id=party_id, days=days, date_from=date_from, date_to=date_to)
+
+
+# --------------------------------------------------------------------------- #
+# Manual Journal Entry — draft/post/reverse workflow. Built last on purpose
+# (see the accounting plan): a "fix it by hand" UI is exactly where a real
+# posting bug could get hidden instead of caught, so every automatic
+# posting path had to be trustworthy first. Two-step (draft, then a
+# separate explicit "Post" click) so a mistake doesn't hit the books
+# before someone's looked at it a second time — the same approve-gate idea
+# as _can_void_sale in pos.py, just without a separate role for it since
+# every other accounting screen in this app is already is_staff-gated.
+# --------------------------------------------------------------------------- #
+@router.get("/accounting/journal-entries", response_class=HTMLResponse)
+def journal_entries_list(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    entries = (
+        db.query(models.JournalEntry)
+        .filter(models.JournalEntry.source_type == "manual")
+        .order_by(models.JournalEntry.id.desc())
+        .limit(100)
+        .all()
+    )
+    return templates.TemplateResponse(
+        "accounting/journal_entries.html",
+        {"request": request, "app_name": request.app.title, "user": user, "entries": entries},
+    )
+
+
+@router.get("/accounting/journal-entries/new", response_class=HTMLResponse)
+def journal_entry_new(request: Request, error: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    accounts = db.query(models.Account).filter(models.Account.is_active.is_(True)).order_by(models.Account.code).all()
+    return templates.TemplateResponse(
+        "accounting/journal_entry_form.html",
+        {"request": request, "app_name": request.app.title, "user": user, "accounts": accounts,
+         "today": _today().isoformat(), "error": error},
+    )
+
+
+@router.post("/accounting/journal-entries")
+async def journal_entry_create(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    form = await request.form()
+    txn_date = _parse_date(form.get("txn_date", "")) or _today()
+    description = (form.get("description") or "").strip()
+    reference_no = (form.get("reference_no") or "").strip() or None
+
+    account_ids = form.getlist("account_id")
+    sides = form.getlist("side")
+    amounts = form.getlist("amount")
+    memos = form.getlist("memo")
+
+    lines = []
+    for account_id, side, amount, memo in zip(account_ids, sides, amounts, memos):
+        if not account_id or not amount:
+            continue
+        amt = _money(amount)
+        if amt <= 0:
+            continue
+        lines.append({"_account_id": int(account_id), "amount": amt, "side": side, "memo": (memo or "").strip() or None})
+
+    if not description:
+        return RedirectResponse("/accounting/journal-entries/new?error=Description+is+required.", status_code=302)
+
+    try:
+        entry = post_journal(
+            db, txn_date=txn_date, source_type="manual", source_id=None, description=description,
+            lines=lines, reference_no=reference_no, entered_by_id=user.id, status="draft",
+        )
+    except PostingError as e:
+        return RedirectResponse(f"/accounting/journal-entries/new?error={str(e)}", status_code=302)
+    db.commit()
+    return RedirectResponse(f"/accounting/journal-entries?created={entry.journal_no}", status_code=302)
+
+
+@router.post("/accounting/journal-entries/{entry_id:int}/post")
+def journal_entry_post(entry_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    entry = db.get(models.JournalEntry, entry_id)
+    if entry and entry.source_type == "manual":
+        post_draft_entry(db, entry)
+        db.commit()
+    return RedirectResponse("/accounting/journal-entries", status_code=302)
+
+
+@router.post("/accounting/journal-entries/{entry_id:int}/delete")
+def journal_entry_delete(entry_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    entry = db.get(models.JournalEntry, entry_id)
+    if entry and entry.source_type == "manual":
+        delete_draft_entry(db, entry)
+        db.commit()
+    return RedirectResponse("/accounting/journal-entries", status_code=302)
+
+
+@router.post("/accounting/journal-entries/{entry_id:int}/reverse")
+def journal_entry_reverse(entry_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    entry = db.get(models.JournalEntry, entry_id)
+    if entry and entry.source_type == "manual" and entry.status == "posted":
+        reverse_journal(db, entry, reason="Manual reversal", entered_by_id=user.id)
+        db.commit()
+    return RedirectResponse("/accounting/journal-entries", status_code=302)
 
 
 # --------------------------------------------------------------------------- #
