@@ -13,6 +13,7 @@ bouncing an issued one just leaves the purchase's balance as it was.
 """
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Request, status
@@ -21,8 +22,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from . import accounting, audit, models
+from .credits import _outstanding_sales
 from .database import get_db
 from .deps import get_current_user, is_staff
+from .suppliers import _outstanding_purchases
 from .templating import templates
 
 router = APIRouter()
@@ -141,35 +144,58 @@ def clear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user
     if not pdc or pdc.status not in ("pending", "deposited"):
         return RedirectResponse(f"/pdc/{pdc_id}", status_code=302)
 
+    applications = list(pdc.applications)
+    if not applications:
+        # Legacy PDC from before pdc_applications existed (shouldn't happen
+        # post-migration — every row got backfilled one — but a defensive
+        # fallback costs nothing).
+        if pdc.sale_id:
+            applications = [models.PdcApplication(pdc_id=pdc.id, sale_id=pdc.sale_id, amount=pdc.amount)]
+        elif pdc.purchase_id:
+            applications = [models.PdcApplication(pdc_id=pdc.id, purchase_id=pdc.purchase_id, amount=pdc.amount)]
+
     if pdc.direction == "received":
-        settlement = models.ReceivableSettlement(
-            sale_id=pdc.sale_id, method="cheque", amount=pdc.amount,
-            bank=pdc.bank, cheque_no=pdc.cheque_no, cheque_date=pdc.cheque_date.isoformat(),
-            cashier_id=user.id,
-        )
-        db.add(settlement)
-        db.flush()
-        pdc.settlement_id = settlement.id
-        sale = db.get(models.Sale, pdc.sale_id) if pdc.sale_id else None
-        if sale:
+        last_settlement_id = None
+        for app in applications:
+            if not app.sale_id:
+                continue
+            sale = db.get(models.Sale, app.sale_id)
+            if not sale:
+                continue
+            settlement = models.ReceivableSettlement(
+                sale_id=app.sale_id, method="cheque", amount=app.amount,
+                bank=pdc.bank, cheque_no=pdc.cheque_no, cheque_date=pdc.cheque_date.isoformat(),
+                cashier_id=user.id,
+            )
+            db.add(settlement)
+            db.flush()
+            last_settlement_id = settlement.id
             try:
-                accounting.post_receivable_settlement(db, sale, amount=pdc.amount, method="cheque", entered_by_id=user.id)
+                accounting.post_receivable_settlement(db, sale, amount=app.amount, method="cheque", entered_by_id=user.id)
             except accounting.PostingError:
                 pass
-    elif pdc.purchase_id:
-        purchase = db.get(models.Purchase, pdc.purchase_id)
-        if purchase:
+        # Informational only when a cheque covers one invoice; with several,
+        # this just points at the last settlement it created.
+        pdc.settlement_id = last_settlement_id
+    else:
+        for app in applications:
+            if not app.purchase_id:
+                continue
+            purchase = db.get(models.Purchase, app.purchase_id)
+            if not purchase:
+                continue
             # Same partial-payment idea as the received side: clearing posts
-            # a PurchaseSettlement for this cheque's amount, and the purchase
-            # only flips to "paid" once that brings the balance to zero —
-            # a cheque might only be covering part of what's owed.
+            # a PurchaseSettlement for this application's amount, and the
+            # purchase only flips to "paid" once that brings its own balance
+            # to zero — independently per purchase, since one cheque can now
+            # cover several at once.
             db.add(models.PurchaseSettlement(
-                purchase_id=purchase.id, method="cheque", amount=pdc.amount,
+                purchase_id=purchase.id, method="cheque", amount=app.amount,
                 bank=pdc.bank, cheque_no=pdc.cheque_no, cheque_date=pdc.cheque_date.isoformat(),
                 created_by=user.id,
             ))
             try:
-                accounting.post_purchase_settlement(db, purchase, amount=pdc.amount, method="cheque", entered_by_id=user.id)
+                accounting.post_purchase_settlement(db, purchase, amount=app.amount, method="cheque", entered_by_id=user.id)
             except accounting.PostingError:
                 pass
             db.flush()
@@ -238,3 +264,116 @@ def cancel_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), use
         )
         db.commit()
     return RedirectResponse(f"/pdc/{pdc_id}", status_code=status.HTTP_302_FOUND)
+
+
+# --------------------------------------------------------------------------- #
+# Manual multi-invoice entry — one physical cheque, several invoices at once.
+# --------------------------------------------------------------------------- #
+@router.get("/pdc/new", response_class=HTMLResponse)
+def new_pdc(
+    request: Request, direction: str = "received", q: str = "",
+    customer_id: int = 0, supplier_id: int = 0, error: str = "",
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    direction = "issued" if direction == "issued" else "received"
+    q = (q or "").strip()
+
+    party = None
+    owed = []
+    matches = []
+    if direction == "received":
+        if customer_id:
+            party = db.get(models.Customer, customer_id)
+            if party:
+                owed = _outstanding_sales(db, party.id)
+        elif q:
+            matches = (
+                db.query(models.Customer)
+                .join(models.Sale, models.Sale.customer_id == models.Customer.id)
+                .filter(models.Sale.receivable_amount > 0, models.Customer.name.ilike(f"%{q}%"))
+                .distinct().order_by(models.Customer.name).limit(20).all()
+            )
+    else:
+        if supplier_id:
+            party = db.get(models.Supplier, supplier_id)
+            if party:
+                owed = _outstanding_purchases(db, party.id)
+        elif q:
+            matches = (
+                db.query(models.Supplier)
+                .join(models.Purchase, models.Purchase.supplier_id == models.Supplier.id)
+                .filter(models.Purchase.txn_type == "receive", models.Purchase.status == "confirmed",
+                        models.Supplier.name.ilike(f"%{q}%"))
+                .distinct().order_by(models.Supplier.name).limit(20).all()
+            )
+
+    return templates.TemplateResponse(
+        "pdc/new.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "direction": direction, "q": q, "party": party, "owed": owed, "matches": matches,
+         "today": _today().isoformat(), "error": error},
+    )
+
+
+@router.post("/pdc/new")
+async def create_pdc(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    form = await request.form()
+    direction = "issued" if form.get("direction") == "issued" else "received"
+    customer_id = int(form.get("customer_id") or 0) or None
+    supplier_id = int(form.get("supplier_id") or 0) or None
+    bank = (form.get("bank") or "").strip() or None
+    cheque_no = (form.get("cheque_no") or "").strip() or None
+    raw_date = (form.get("cheque_date") or "").strip()
+
+    def back_with_error(msg):
+        qs = f"direction={direction}&customer_id={customer_id or ''}&supplier_id={supplier_id or ''}"
+        return RedirectResponse(f"/pdc/new?{qs}&error={quote(msg)}", status_code=status.HTTP_302_FOUND)
+
+    try:
+        cheque_date = date.fromisoformat(raw_date)
+    except ValueError:
+        return back_with_error("Enter a valid cheque date (the date printed on the cheque).")
+
+    ids = form.getlist("apply_id")
+    amounts = form.getlist("apply_amount")
+    applications = []
+    total = Decimal("0")
+    for raw_id, raw_amount in zip(ids, amounts):
+        try:
+            amount = Decimal(str(raw_amount).strip() or "0")
+        except Exception:
+            continue
+        if amount <= 0:
+            continue
+        applications.append((int(raw_id), amount))
+        total += amount
+
+    if not applications:
+        return back_with_error("Select at least one invoice and amount.")
+
+    pdc = models.PostDatedCheque(
+        direction=direction, amount=total, bank=bank, cheque_no=cheque_no, cheque_date=cheque_date,
+        customer_id=customer_id, supplier_id=supplier_id, created_by=user.id,
+    )
+    db.add(pdc)
+    db.flush()
+    for entity_id, amount in applications:
+        if direction == "received":
+            db.add(models.PdcApplication(pdc_id=pdc.id, sale_id=entity_id, amount=amount))
+        else:
+            db.add(models.PdcApplication(pdc_id=pdc.id, purchase_id=entity_id, amount=amount))
+    audit.record(
+        db, user=user, request=request, action="create", entity_type="post_dated_cheque",
+        entity_id=pdc.id, entity_label=pdc.cheque_no or f"PDC-{pdc.id}",
+        summary=f"Recorded {direction} cheque {pdc.cheque_no or pdc.id} against {len(applications)} invoice(s) — {total}",
+    )
+    db.commit()
+    return RedirectResponse(f"/pdc/{pdc.id}", status_code=status.HTTP_302_FOUND)

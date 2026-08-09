@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}New Cheque · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">New Cheque {{ '(to a supplier)' if direction == 'issued' else '(from a customer)' }}</h1>
+  <a class="btn-secondary" href="/pdc">← Back to Cheques</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<div class="seg" style="margin-bottom:16px;">
+  <a class="seg-btn {{ 'active' if direction == 'received' }}" href="/pdc/new?direction=received">Received (customer)</a>
+  <a class="seg-btn {{ 'active' if direction == 'issued' }}" href="/pdc/new?direction=issued">Issued (supplier)</a>
+</div>
+
+{% if not party %}
+<form class="card form" method="get" action="/pdc/new">
+  <input type="hidden" name="direction" value="{{ direction }}">
+  <label class="full">{{ 'Find customer' if direction == 'received' else 'Find supplier' }}
+    <input type="search" name="q" value="{{ q }}" placeholder="Type a name…" autofocus>
+  </label>
+  <div class="form-actions full"><button class="btn" type="submit">Search</button></div>
+</form>
+
+{% if matches %}
+<div class="table-wrap" style="margin-top:14px;">
+  <table class="grid">
+    <thead><tr><th>Name</th><th></th></tr></thead>
+    <tbody>
+      {% for m in matches %}
+      <tr>
+        <td>{{ m.name }}</td>
+        <td class="row-actions">
+          {% if direction == 'received' %}
+          <a class="btn-link" href="/pdc/new?direction=received&customer_id={{ m.id }}">Select →</a>
+          {% else %}
+          <a class="btn-link" href="/pdc/new?direction=issued&supplier_id={{ m.id }}">Select →</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% elif q %}
+<p class="muted" style="margin-top:14px;">No matches with an outstanding balance.</p>
+{% endif %}
+
+{% else %}
+<form class="card form" method="post" action="/pdc/new" id="pdcForm">
+  <input type="hidden" name="direction" value="{{ direction }}">
+  {% if direction == 'received' %}<input type="hidden" name="customer_id" value="{{ party.id }}">
+  {% else %}<input type="hidden" name="supplier_id" value="{{ party.id }}">{% endif %}
+
+  <label>{{ 'Customer' if direction == 'received' else 'Supplier' }}
+    <input value="{{ party.name }}" disabled>
+  </label>
+  <label>Cheque date
+    <input type="date" name="cheque_date" value="{{ today }}" required>
+  </label>
+  <label>Bank
+    <input name="bank" placeholder="Optional">
+  </label>
+  <label>Cheque #
+    <input name="cheque_no" placeholder="Optional">
+  </label>
+
+  <div class="full">
+    <table class="grid" id="applyTable">
+      <thead>
+        <tr><th></th><th>Invoice</th><th class="num">Outstanding</th><th style="width:140px;">Apply amount</th></tr>
+      </thead>
+      <tbody>
+        {% for entity, outstanding in owed %}
+        <tr>
+          <td><input type="checkbox" class="apply-check" onchange="toggleRow(this)" checked></td>
+          <td>{{ entity.invoice_no if direction == 'received' else entity.ref_no }}</td>
+          <td class="num">{{ outstanding|peso }}</td>
+          <td>
+            <input type="hidden" name="apply_id" value="{{ entity.id }}" class="apply-id" disabled>
+            <input type="number" name="apply_amount" step="0.01" min="0" value="{{ outstanding }}"
+                   max="{{ outstanding }}" class="apply-amount" oninput="recalc()">
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty">Nothing outstanding for this {{ 'customer' if direction == 'received' else 'supplier' }}.</td></tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr><td colspan="3" class="strong">Cheque total</td><td class="num strong" id="totalCell">₱0.00</td></tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <div class="form-actions full">
+    <button class="btn" type="submit" {{ 'disabled' if not owed }}>Save Cheque</button>
+    <a class="btn-secondary" href="/pdc/new?direction={{ direction }}">Choose a different {{ 'customer' if direction == 'received' else 'supplier' }}</a>
+  </div>
+</form>
+
+<script>
+function toggleRow(cb) {
+  const row = cb.closest('tr');
+  const idInput = row.querySelector('.apply-id');
+  const amtInput = row.querySelector('.apply-amount');
+  idInput.disabled = !cb.checked;
+  amtInput.disabled = !cb.checked;
+  recalc();
+}
+function recalc() {
+  let total = 0;
+  document.querySelectorAll('.apply-amount').forEach(inp => {
+    if (!inp.disabled) total += parseFloat(inp.value) || 0;
+  });
+  document.getElementById('totalCell').textContent = '₱' + total.toFixed(2);
+}
+document.querySelectorAll('.apply-id').forEach(el => { el.disabled = false; });
+recalc();
+</script>
+{% endif %}
+{% endblock %}

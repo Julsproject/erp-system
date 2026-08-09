@@ -467,12 +467,15 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
 
     db.flush()  # need sale.id / sale.customer_id before creating the cheque records below
     for row in cheque_rows:
-        db.add(models.PostDatedCheque(
+        pdc = models.PostDatedCheque(
             direction="received", amount=_money(row["amount"]),
             bank=row["bank"], cheque_no=row["cheque_no"], cheque_date=row["cheque_date"],
             sale_id=sale.id, customer_id=sale.customer_id,
             created_by=user.id,
-        ))
+        )
+        db.add(pdc)
+        db.flush()
+        db.add(models.PdcApplication(pdc_id=pdc.id, sale_id=sale.id, amount=_money(row["amount"])))
 
     # Auto-post to the accounting ledger (Phase 1: Sales only — see
     # app/accounting.py). Never blocks the sale itself: a missing/misconfigured
@@ -895,12 +898,15 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
     # Same idea as refunds: point the exchange at the invoice it came from.
     ex.invoice_no = typed_invoice or _linked_ref(db, "EXC", orig) or f"EXC-{ex.id:06d}"
     if pending_cheque:
-        db.add(models.PostDatedCheque(
+        cheque_pdc = models.PostDatedCheque(
             direction="received", amount=_money(pending_cheque["amount"]),
             bank=pending_cheque["bank"], cheque_no=pending_cheque["cheque_no"],
             cheque_date=pending_cheque["cheque_date"],
             sale_id=ex.id, customer_id=ex.customer_id, created_by=user.id,
-        ))
+        )
+        db.add(cheque_pdc)
+        db.flush()
+        db.add(models.PdcApplication(pdc_id=cheque_pdc.id, sale_id=ex.id, amount=_money(pending_cheque["amount"])))
     if pending_credit_note:
         db.add(models.ReceivableSettlement(
             sale_id=orig.id, method="credit_note", amount=pending_credit_note,

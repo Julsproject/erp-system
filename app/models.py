@@ -606,6 +606,29 @@ class PostDatedCheque(Base):
     purchase = relationship("Purchase")
     supplier = relationship("Supplier")
     creator = relationship("User")
+    applications = relationship("PdcApplication", back_populates="pdc", cascade="all, delete-orphan")
+
+
+class PdcApplication(Base):
+    """Which invoice(s) a single cheque is actually paying, and how much of
+    it goes to each — replaces the old single sale_id/purchase_id-per-PDC
+    shape, which forced "one cheque, five invoices" into five separate
+    PostDatedCheque rows sharing a cheque number (see credits.py's
+    pay_full_submit). Every PDC has at least one of these once created
+    through the current UI; older PDCs (pre-migration) keep their
+    sale_id/purchase_id as a legacy fallback — see PostDatedCheque's own
+    columns, which stay for that reason and aren't written to anymore."""
+    __tablename__ = "pdc_applications"
+
+    id = Column(Integer, primary_key=True)
+    pdc_id = Column(Integer, ForeignKey("post_dated_cheques.id"), nullable=False)
+    sale_id = Column(Integer, ForeignKey("sales.id"), nullable=True)
+    purchase_id = Column(Integer, ForeignKey("purchases.id"), nullable=True)
+    amount = Column(Numeric(12, 2), nullable=False, server_default="0")
+
+    pdc = relationship("PostDatedCheque", back_populates="applications")
+    sale = relationship("Sale")
+    purchase = relationship("Purchase")
 
 
 class Supplier(Base):

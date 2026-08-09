@@ -693,6 +693,8 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
             created_by=user.id,
         )
         db.add(pdc)
+        db.flush()
+        db.add(models.PdcApplication(pdc_id=pdc.id, purchase_id=purchase.id, amount=purchase.total))
 
     # Auto-post to the accounting ledger (Phase 2 — see app/accounting.py).
     # Never blocks the purchase itself, same reasoning as the Sales side.
@@ -757,6 +759,7 @@ async def settle_purchase_pay(purchase_id: int, request: Request, db: Session = 
         )
         db.add(pdc)
         db.flush()
+        db.add(models.PdcApplication(pdc_id=pdc.id, purchase_id=purchase.id, amount=_money(amount)))
         db.commit()
         return RedirectResponse(f"/pdc/{pdc.id}", status_code=http_status.HTTP_302_FOUND)
 

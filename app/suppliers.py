@@ -372,19 +372,24 @@ async def supplier_pay_full_submit(supplier_id: int, request: Request, db: Sessi
 
     # Pays every outstanding delivery off in full, oldest first — same
     # "clear the whole balance" idea as a customer's Pay Full. Cheque opens
-    # one PDC per purchase (each needs its own purchase_id to reconcile),
-    # all from the same physical cheque; it doesn't settle until cleared.
-    for purchase, outstanding in owed:
-        if method == "cheque":
-            db.add(models.PostDatedCheque(
-                direction="issued", amount=outstanding,
-                bank=(form.get("bank") or "").strip() or None,
-                cheque_no=(form.get("cheque_no") or "").strip() or None,
-                cheque_date=cheque_date,
-                purchase_id=purchase.id, supplier_id=supplier.id,
-                created_by=user.id,
-            ))
-        else:
+    # ONE PDC for the whole total, with one PdcApplication row per purchase
+    # it's covering — a physical cheque is one piece of paper, not one per
+    # purchase; it doesn't settle until cleared.
+    if method == "cheque":
+        pdc = models.PostDatedCheque(
+            direction="issued", amount=total,
+            bank=(form.get("bank") or "").strip() or None,
+            cheque_no=(form.get("cheque_no") or "").strip() or None,
+            cheque_date=cheque_date,
+            supplier_id=supplier.id,
+            created_by=user.id,
+        )
+        db.add(pdc)
+        db.flush()
+        for purchase, outstanding in owed:
+            db.add(models.PdcApplication(pdc_id=pdc.id, purchase_id=purchase.id, amount=outstanding))
+    else:
+        for purchase, outstanding in owed:
             db.add(models.PurchaseSettlement(
                 purchase_id=purchase.id, method=method, amount=outstanding, created_by=user.id,
             ))

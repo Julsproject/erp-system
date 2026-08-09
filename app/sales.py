@@ -458,6 +458,7 @@ async def settle_pay(sale_id: int, request: Request, db: Session = Depends(get_d
         )
         db.add(pdc)
         db.flush()
+        db.add(models.PdcApplication(pdc_id=pdc.id, sale_id=sale.id, amount=amount))
         db.commit()
         return RedirectResponse(f"/pdc/{pdc.id}", status_code=status.HTTP_302_FOUND)
 

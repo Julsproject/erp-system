@@ -313,19 +313,24 @@ async def pay_full_submit(customer_id: int, request: Request, db: Session = Depe
 
     # Pays every outstanding invoice off in full, oldest first — this is
     # "clear the whole balance," not a partial amount, so there's nothing to
-    # split or leave short. Cheque still opens one PDC per invoice (each
-    # needs its own sale_id to reconcile against), all from the same cheque.
-    for sale, outstanding in owed:
-        if method == "cheque":
-            db.add(models.PostDatedCheque(
-                direction="received", amount=outstanding,
-                bank=(form.get("bank") or "").strip() or None,
-                cheque_no=(form.get("cheque_no") or "").strip() or None,
-                cheque_date=cheque_date,
-                sale_id=sale.id, customer_id=customer.id,
-                created_by=user.id,
-            ))
-        else:
+    # split or leave short. Cheque opens ONE PDC for the whole total, with
+    # one PdcApplication row per invoice it's covering — a physical cheque
+    # is one piece of paper, not one per invoice.
+    if method == "cheque":
+        pdc = models.PostDatedCheque(
+            direction="received", amount=total,
+            bank=(form.get("bank") or "").strip() or None,
+            cheque_no=(form.get("cheque_no") or "").strip() or None,
+            cheque_date=cheque_date,
+            customer_id=customer.id,
+            created_by=user.id,
+        )
+        db.add(pdc)
+        db.flush()
+        for sale, outstanding in owed:
+            db.add(models.PdcApplication(pdc_id=pdc.id, sale_id=sale.id, amount=outstanding))
+    else:
+        for sale, outstanding in owed:
             db.add(models.ReceivableSettlement(
                 sale_id=sale.id, method=method, amount=outstanding, cashier_id=user.id,
             ))
