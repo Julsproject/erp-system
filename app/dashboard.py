@@ -226,8 +226,14 @@ def dashboard(
         .group_by(models.Payment.method)
         .all()
     )
-    labels = {"cash": "Cash", "gcash": "GCash", "card": "Card", "bank_transfer": "Bank Transfer", "receivable": "Receivable"}
-    colors = {"cash": "#16a34a", "gcash": "#2563eb", "card": "#7c3aed", "bank_transfer": "#0891b2", "receivable": "#d97706"}
+    labels = {
+        "cash": "Cash", "gcash": "GCash", "maya": "Maya", "other_ewallet": "Other E-Wallet",
+        "card": "Card", "bank_transfer": "Bank Transfer", "receivable": "Receivable",
+    }
+    colors = {
+        "cash": "#16a34a", "gcash": "#2563eb", "maya": "#059669", "other_ewallet": "#65a30d",
+        "card": "#7c3aed", "bank_transfer": "#0891b2", "receivable": "#d97706",
+    }
     pay_totals = {m: Decimal(str(a or 0)) for m, a in pay_rows}
     # Change is always handed back in physical cash regardless of which method
     # funded the original payment (see pos.py) — net it out of the cash

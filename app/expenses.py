@@ -18,7 +18,10 @@ from .templating import templates
 router = APIRouter()
 
 PAGE_SIZE = 15
-PAYMENT_METHODS = [("cash", "Cash"), ("gcash", "GCash"), ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque")]
+PAYMENT_METHODS = [
+    ("cash", "Cash"), ("gcash", "GCash"), ("maya", "Maya"), ("other_ewallet", "Other E-Wallet"),
+    ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque"),
+]
 
 
 def _dec(value, default="0") -> Decimal:

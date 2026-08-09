@@ -232,6 +232,8 @@
             <option value="bank_transfer">Bank Transfer</option>
             <option value="receivable">Credits</option>
             <option value="gcash">GCash</option>
+            <option value="maya">Maya</option>
+            <option value="other_ewallet">Other E-Wallet</option>
             <option value="cheque">Cheque</option>
           </select>
         </label>
@@ -276,6 +278,8 @@
             <option value="bank_transfer">Bank Transfer</option>
             <option value="receivable" id="retMethodReceivableOpt">Credits</option>
             <option value="gcash">GCash</option>
+            <option value="maya">Maya</option>
+            <option value="other_ewallet">Other E-Wallet</option>
             <option value="cheque">Cheque</option>
           </select>
         </label>
@@ -367,7 +371,7 @@
 <script>
 const peso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const VAT_DIV = 1.12, VAT_RATE = 0.12;
-const METHODS = [['cash','Cash'],['bank_transfer','Bank Transfer'],['receivable','Credits'],['gcash','GCash'],['cheque','Cheque']];
+const METHODS = [['cash','Cash'],['bank_transfer','Bank Transfer'],['receivable','Credits'],['gcash','GCash'],['maya','Maya'],['other_ewallet','Other E-Wallet'],['cheque','Cheque']];
 let cart = [];
 let payments = [{ method: 'cash', amount: '' }];
 let paymentMode = 'full';   // 'full' | 'split'

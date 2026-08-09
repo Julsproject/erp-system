@@ -29,7 +29,10 @@ STATUS_LABELS = {"delivered": "Delivered", "cancelled": "Cancelled"}
 # How a driver can collect a COD balance. Cheque is deliberately excluded: a
 # post-dated cheque doesn't settle anything on the spot, and handing the goods
 # over against one is a decision for the office, not the driver.
-COD_METHODS = [("cash", "Cash"), ("gcash", "GCash"), ("card", "Card"), ("bank_transfer", "Bank Transfer")]
+COD_METHODS = [
+    ("cash", "Cash"), ("gcash", "GCash"), ("maya", "Maya"), ("other_ewallet", "Other E-Wallet"),
+    ("card", "Card"), ("bank_transfer", "Bank Transfer"),
+]
 
 ZERO = Decimal("0")
 

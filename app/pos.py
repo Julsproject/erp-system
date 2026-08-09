@@ -29,6 +29,8 @@ router = APIRouter()
 METHOD_LABELS = {
     "cash": "Cash",
     "gcash": "GCash",
+    "maya": "Maya",
+    "other_ewallet": "Other E-Wallet",
     "card": "Card",
     "bank_transfer": "Bank Transfer",
     "cheque": "Cheque",
@@ -666,7 +668,7 @@ async def pos_refund(request: Request, db: Session = Depends(get_db), user=Depen
     # (Credit doesn't apply here — there's nothing new being sold to owe
     # against, so there's no receivable for it to sit on.)
     method = (data.get("payment_method") or "cash").strip().lower()
-    if method not in ("cash", "gcash", "bank_transfer", "cheque"):
+    if method not in ("cash", "gcash", "maya", "other_ewallet", "bank_transfer", "cheque"):
         method = "cash"
 
     refund.subtotal = -gross
@@ -816,7 +818,7 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
         # the customer still owes: Cash/GCash/Bank Transfer settle now;
         # Cheque and Credit both sit as a receivable until cleared/paid off.
         method = (data.get("payment_method") or "cash").strip().lower()
-        if method not in ("cash", "gcash", "bank_transfer", "cheque", "receivable"):
+        if method not in ("cash", "gcash", "maya", "other_ewallet", "bank_transfer", "cheque", "receivable"):
             method = "cash"
         if method in ("cheque", "receivable") and not ex.customer_id:
             return JSONResponse({"ok": False, "error": "Cheque or Credit needs a customer name."}, status_code=400)
@@ -868,7 +870,7 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
         # credit balance first instead of paying cash for it. Only whatever's
         # left over (return worth more than what's still owed) pays out.
         method = (data.get("payment_method") or "cash").strip().lower()
-        if method not in ("cash", "gcash", "bank_transfer", "cheque"):
+        if method not in ("cash", "gcash", "maya", "other_ewallet", "bank_transfer", "cheque"):
             method = "cash"
         gross = -diff
         applied_to_credit = Decimal("0")

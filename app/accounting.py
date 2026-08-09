@@ -203,7 +203,8 @@ def reverse_journal(db: Session, entry: models.JournalEntry, *, reason: str = No
 
 
 SALE_FUNCTION_KEYS = {
-    "cash": "SALE_CASH", "gcash": "SALE_GCASH", "card": "SALE_CARD", "bank_transfer": "SALE_BANK_TRANSFER",
+    "cash": "SALE_CASH", "gcash": "SALE_GCASH", "maya": "SALE_MAYA", "other_ewallet": "SALE_OTHER_EWALLET",
+    "card": "SALE_CARD", "bank_transfer": "SALE_BANK_TRANSFER",
     "cheque": "SALE_BANK_TRANSFER",  # a cheque clears into the bank — reuse that mapping rather than add a new one
 }
 
@@ -277,6 +278,7 @@ def post_receivable_settlement(db: Session, sale: models.Sale, *, amount: Decima
 
 PURCHASE_PAY_FUNCTION_KEYS = {
     "cash": "PURCHASE_PAY_CASH", "gcash": "PURCHASE_PAY_GCASH",
+    "maya": "PURCHASE_PAY_MAYA", "other_ewallet": "PURCHASE_PAY_OTHER_EWALLET",
     "bank_transfer": "PURCHASE_PAY_BANK_TRANSFER", "cheque": "PURCHASE_PAY_CHEQUE", "other": "PURCHASE_PAY_OTHER",
 }
 
@@ -360,6 +362,7 @@ def reverse_purchase_posting(db: Session, purchase: models.Purchase, *, reason: 
 
 EXPENSE_PAY_FUNCTION_KEYS = {
     "cash": "EXPENSE_PAY_CASH", "gcash": "EXPENSE_PAY_GCASH",
+    "maya": "EXPENSE_PAY_MAYA", "other_ewallet": "EXPENSE_PAY_OTHER_EWALLET",
     "bank_transfer": "EXPENSE_PAY_BANK_TRANSFER", "cheque": "EXPENSE_PAY_CHEQUE",
 }
 
@@ -736,7 +739,7 @@ def _cash_accounts(db: Session):
         db.query(models.Account)
         .filter(
             models.Account.is_active.is_(True),
-            (models.Account.system_key.in_(("CASH_ON_HAND", "GCASH", "BANK")) | models.Account.id.in_(linked_ids or [0])),
+            (models.Account.system_key.in_(("CASH_ON_HAND", "GCASH", "MAYA", "OTHER_EWALLET", "BANK")) | models.Account.id.in_(linked_ids or [0])),
         )
         .order_by(models.Account.code)
         .all()

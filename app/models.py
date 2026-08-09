@@ -533,7 +533,7 @@ class Payment(Base):
 
     id = Column(Integer, primary_key=True)
     sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False)
-    method = Column(String(20), nullable=False)  # cash | gcash | card | bank_transfer | receivable
+    method = Column(String(20), nullable=False)  # cash | gcash | maya | other_ewallet | card | bank_transfer | receivable
     amount = Column(Numeric(12, 2), nullable=False, server_default="0")
 
     sale = relationship("Sale", back_populates="payments")
@@ -545,7 +545,7 @@ class ReceivableSettlement(Base):
 
     id = Column(Integer, primary_key=True)
     sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False)
-    method = Column(String(20), nullable=False)  # cash | gcash | card | bank_transfer | cheque | credit_note
+    method = Column(String(20), nullable=False)  # cash | gcash | maya | other_ewallet | card | bank_transfer | cheque | credit_note
     amount = Column(Numeric(12, 2), nullable=False, server_default="0")
     bank = Column(String(60))          # for cheque
     cheque_no = Column(String(40))     # for cheque
@@ -653,7 +653,7 @@ class Purchase(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     confirmed_at = Column(DateTime(timezone=True), nullable=True)
-    payment_method = Column(String(20), nullable=True)   # cash | bank_transfer | cheque | gcash | other
+    payment_method = Column(String(20), nullable=True)   # cash | bank_transfer | cheque | gcash | maya | other_ewallet | other
     paid_at = Column(DateTime(timezone=True), nullable=True)
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -682,7 +682,7 @@ class PurchaseSettlement(Base):
 
     id = Column(Integer, primary_key=True)
     purchase_id = Column(Integer, ForeignKey("purchases.id"), nullable=False)
-    method = Column(String(20), nullable=False)  # cash | bank_transfer | cheque | gcash | other
+    method = Column(String(20), nullable=False)  # cash | bank_transfer | cheque | gcash | maya | other_ewallet | other
     amount = Column(Numeric(12, 2), nullable=False, server_default="0")
     bank = Column(String(60))          # for cheque
     cheque_no = Column(String(40))     # for cheque
@@ -835,7 +835,7 @@ class Expense(Base):
     # unless the payee's receipt actually shows VAT.
     vat_amount = Column(Numeric(12, 2), nullable=False, server_default="0")
     expense_date = Column(Date, nullable=False)
-    payment_method = Column(String(20), nullable=False, server_default="cash")  # cash|gcash|bank_transfer|cheque
+    payment_method = Column(String(20), nullable=False, server_default="cash")  # cash|gcash|maya|other_ewallet|bank_transfer|cheque
     reference_no = Column(String(60))           # OR#, cheque #, transfer ref — freeform
     notes = Column(String(255))
     is_voided = Column(Boolean, nullable=False, server_default="false")
@@ -876,7 +876,7 @@ class Delivery(Base):
     is_cod = Column(Boolean, nullable=False, server_default="false")
     cod_amount = Column(Numeric(12, 2), nullable=False, server_default="0")   # expected at scheduling
     collected_amount = Column(Numeric(12, 2), nullable=False, server_default="0")
-    collected_method = Column(String(20))          # cash | gcash | card | bank_transfer
+    collected_method = Column(String(20))          # cash | gcash | maya | other_ewallet | card | bank_transfer
     collected_at = Column(DateTime(timezone=True), nullable=True)
     settlement_id = Column(Integer, ForeignKey("receivable_settlements.id"), nullable=True)
 

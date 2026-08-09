@@ -40,7 +40,10 @@ def _weighted_avg_cost(product: models.Product, base_qty: Decimal, unit_cost_per
     blended = ((old_qty * old_cost) + (base_qty * unit_cost_per_base)) / (old_qty + base_qty)
     return blended.quantize(CENTS, rounding=ROUND_HALF_UP)
 
-PAYMENT_METHODS = [("cash", "Cash"), ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque"), ("gcash", "GCash"), ("other", "Other")]
+PAYMENT_METHODS = [
+    ("cash", "Cash"), ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque"),
+    ("gcash", "GCash"), ("maya", "Maya"), ("other_ewallet", "Other E-Wallet"), ("other", "Other"),
+]
 STATUS_LABELS = {"paid": "Paid", "cancelled": "Cancelled"}
 PAGE_SIZE = 15
 
