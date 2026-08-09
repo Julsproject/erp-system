@@ -28,6 +28,17 @@
     <small class="hint">Balance when you started tracking this account here — deposits/withdrawals build on top of this.</small>
   </label>
 
+  <label>Ledger account <span class="muted">— optional</span>
+    <select name="gl_account_id">
+      <option value="">— not linked —</option>
+      {% for a in ledger_accounts %}
+      <option value="{{ a.id }}" {{ 'selected' if account and account.gl_account_id == a.id }}>{{ a.code }} · {{ a.name }}</option>
+      {% endfor %}
+    </select>
+    <small class="hint">Which Chart of Accounts entry this account IS. Link it to let deposits/withdrawals
+      that record a contra account (below) post to the accounting ledger too.</small>
+  </label>
+
   {% if account %}
   <label>Status
     <select name="status">

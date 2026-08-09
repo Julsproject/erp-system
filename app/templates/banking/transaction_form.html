@@ -33,6 +33,17 @@
     <input name="description" placeholder="{{ 'e.g. Cash sales banked, EOD deposit' if txn_type == 'deposit' else 'e.g. Paid to supplier, cash withdrawal' }}">
   </label>
 
+  <label class="full">Contra account (other side) <span class="muted">— optional</span>
+    <select name="contra_account_id">
+      <option value="">— none — (won't post to the accounting ledger)</option>
+      {% for a in contra_accounts %}
+      <option value="{{ a.id }}">{{ a.code }} · {{ a.name }}</option>
+      {% endfor %}
+    </select>
+    <small class="hint">What this money moved to/from — e.g. Sales Revenue for a cash deposit, or Operating Expenses
+      for a withdrawal to pay a bill. Leave blank to just track this transaction without posting to the ledger.</small>
+  </label>
+
   <div class="form-actions full">
     <button class="btn" type="submit">Save {{ 'deposit' if txn_type == 'deposit' else 'withdrawal' }}</button>
     <a class="btn-secondary" href="/banking/accounts/{{ account.id }}">Cancel</a>

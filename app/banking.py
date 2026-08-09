@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from . import audit, models
+from . import accounting, audit, models
 from .database import get_db
 from .deps import get_current_user, is_staff
 from .templating import templates
@@ -79,20 +79,24 @@ def list_accounts(request: Request, db: Session = Depends(get_db), user=Depends(
     )
 
 
-def _render_account_form(request, user, account=None, error=None):
+def _render_account_form(request, db, user, account=None, error=None):
+    ledger_accounts = db.query(models.Account).filter(
+        models.Account.is_active.is_(True), models.Account.account_type == "asset",
+    ).order_by(models.Account.code).all()
     return templates.TemplateResponse(
         "banking/account_form.html",
-        {"request": request, "app_name": request.app.title, "user": user, "account": account, "error": error},
+        {"request": request, "app_name": request.app.title, "user": user, "account": account, "error": error,
+         "ledger_accounts": ledger_accounts},
     )
 
 
 @router.get("/banking/accounts/new", response_class=HTMLResponse)
-def new_account(request: Request, user=Depends(get_current_user)):
+def new_account(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
-    return _render_account_form(request, user)
+    return _render_account_form(request, db, user)
 
 
 @router.post("/banking/accounts")
@@ -104,14 +108,16 @@ async def create_account(request: Request, db: Session = Depends(get_db), user=D
     form = await request.form()
     name = (form.get("name") or "").strip()
     if not name:
-        return _render_account_form(request, user, error="Account name is required.")
+        return _render_account_form(request, db, user, error="Account name is required.")
     if db.query(models.BankAccount).filter(func.lower(models.BankAccount.name) == name.lower()).first():
-        return _render_account_form(request, user, error=f"An account named '{name}' already exists.")
+        return _render_account_form(request, db, user, error=f"An account named '{name}' already exists.")
+    gl_account_id = (form.get("gl_account_id") or "").strip()
     account = models.BankAccount(
         name=name,
         bank_name=(form.get("bank_name") or "").strip() or None,
         account_no=(form.get("account_no") or "").strip() or None,
         opening_balance=_dec(form.get("opening_balance")),
+        gl_account_id=int(gl_account_id) if gl_account_id else None,
     )
     db.add(account)
     db.flush()
@@ -133,7 +139,7 @@ def edit_account(account_id: int, request: Request, db: Session = Depends(get_db
     account = db.get(models.BankAccount, account_id)
     if not account:
         return RedirectResponse("/banking", status_code=302)
-    return _render_account_form(request, user, account=account)
+    return _render_account_form(request, db, user, account=account)
 
 
 @router.post("/banking/accounts/{account_id:int}")
@@ -148,16 +154,18 @@ async def update_account(account_id: int, request: Request, db: Session = Depend
     form = await request.form()
     name = (form.get("name") or "").strip()
     if not name:
-        return _render_account_form(request, user, account=account, error="Account name is required.")
+        return _render_account_form(request, db, user, account=account, error="Account name is required.")
     clash = db.query(models.BankAccount).filter(func.lower(models.BankAccount.name) == name.lower(), models.BankAccount.id != account.id).first()
     if clash:
-        return _render_account_form(request, user, account=account, error=f"An account named '{name}' already exists.")
+        return _render_account_form(request, db, user, account=account, error=f"An account named '{name}' already exists.")
     before = audit.snapshot(account, ["name", "bank_name", "account_no", "opening_balance", "is_active"])
     account.name = name
     account.bank_name = (form.get("bank_name") or "").strip() or None
     account.account_no = (form.get("account_no") or "").strip() or None
     account.opening_balance = _dec(form.get("opening_balance"))
     account.is_active = (form.get("status") or "active") == "active"
+    gl_account_id = (form.get("gl_account_id") or "").strip()
+    account.gl_account_id = int(gl_account_id) if gl_account_id else None
     db.flush()
     after = audit.snapshot(account, ["name", "bank_name", "account_no", "opening_balance", "is_active"])
     changes = audit.diff(before, after)
@@ -247,11 +255,13 @@ def new_transaction(
         return RedirectResponse("/banking", status_code=302)
     if txn_type not in TXN_LABELS:
         txn_type = "deposit"
+    contra_accounts = db.query(models.Account).filter(models.Account.is_active.is_(True)).order_by(models.Account.code).all()
     return templates.TemplateResponse(
         "banking/transaction_form.html",
         {
             "request": request, "app_name": request.app.title, "user": user,
             "account": account, "txn_type": txn_type, "today": date.today().isoformat(), "error": error,
+            "contra_accounts": contra_accounts,
         },
     )
 
@@ -275,6 +285,7 @@ async def create_transaction(account_id: int, request: Request, db: Session = De
             f"/banking/accounts/{account_id}/transactions/new?txn_type={txn_type}&error=Enter+an+amount+greater+than+zero.",
             status_code=302,
         )
+    contra_account_id = (form.get("contra_account_id") or "").strip()
     txn = models.BankTransaction(
         account_id=account.id,
         txn_type=txn_type,
@@ -282,10 +293,15 @@ async def create_transaction(account_id: int, request: Request, db: Session = De
         txn_date=_parse_date((form.get("txn_date") or "").strip()) or date.today(),
         description=(form.get("description") or "").strip() or None,
         reference_no=(form.get("reference_no") or "").strip() or None,
+        contra_account_id=int(contra_account_id) if contra_account_id else None,
         created_by=user.id,
     )
     db.add(txn)
     db.flush()
+    try:
+        accounting.post_bank_transaction(db, txn, entered_by_id=user.id)
+    except accounting.PostingError:
+        pass
     audit.record(
         db, user=user, request=request, action="create", entity_type="bank_transaction",
         entity_id=txn.id, entity_label=account.name,
@@ -306,6 +322,7 @@ def void_transaction(txn_id: int, request: Request, db: Session = Depends(get_db
         return RedirectResponse("/banking", status_code=302)
     account_id = txn.account_id
     txn.is_voided = True
+    accounting.reverse_bank_transaction_posting(db, txn, reason=f"Voided {TXN_LABELS.get(txn.txn_type, txn.txn_type)}", entered_by_id=user.id)
     audit.record(
         db, user=user, request=request, action="void", entity_type="bank_transaction",
         entity_id=txn.id, entity_label=(txn.account.name if txn.account else None),

@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from . import models
+from . import accounting, models
 from .database import get_db
 from .deps import get_current_user, is_staff
 from .templating import templates
@@ -124,6 +124,12 @@ def clear_pdc(pdc_id: int, db: Session = Depends(get_db), user=Depends(get_curre
         db.add(settlement)
         db.flush()
         pdc.settlement_id = settlement.id
+        sale = db.get(models.Sale, pdc.sale_id) if pdc.sale_id else None
+        if sale:
+            try:
+                accounting.post_receivable_settlement(db, sale, amount=pdc.amount, method="cheque", entered_by_id=user.id)
+            except accounting.PostingError:
+                pass
     elif pdc.purchase_id:
         purchase = db.get(models.Purchase, pdc.purchase_id)
         if purchase:
@@ -136,6 +142,10 @@ def clear_pdc(pdc_id: int, db: Session = Depends(get_db), user=Depends(get_curre
                 bank=pdc.bank, cheque_no=pdc.cheque_no, cheque_date=pdc.cheque_date.isoformat(),
                 created_by=user.id,
             ))
+            try:
+                accounting.post_purchase_settlement(db, purchase, amount=pdc.amount, method="cheque", entered_by_id=user.id)
+            except accounting.PostingError:
+                pass
             db.flush()
             paid_so_far = (
                 db.query(func.coalesce(func.sum(models.PurchaseSettlement.amount), 0))

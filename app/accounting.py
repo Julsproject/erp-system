@@ -179,6 +179,7 @@ def reverse_journal(db: Session, entry: models.JournalEntry, *, reason: str = No
 
 SALE_FUNCTION_KEYS = {
     "cash": "SALE_CASH", "gcash": "SALE_GCASH", "card": "SALE_CARD", "bank_transfer": "SALE_BANK_TRANSFER",
+    "cheque": "SALE_BANK_TRANSFER",  # a cheque clears into the bank — reuse that mapping rather than add a new one
 }
 
 
@@ -372,6 +373,50 @@ def reverse_expense_posting(db: Session, expense: models.Expense, *, reason: str
     entry = (
         db.query(models.JournalEntry)
         .filter(models.JournalEntry.source_type == "expense", models.JournalEntry.source_id == expense.id,
+                models.JournalEntry.status == "posted")
+        .first()
+    )
+    if not entry:
+        return None
+    return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id)
+
+
+def post_bank_transaction(db: Session, txn: models.BankTransaction, *, entered_by_id: int = None):
+    """Called from banking.py's create_transaction. Only posts if BOTH the
+    BankAccount has a gl_account_id AND the transaction was given a contra
+    account — most deposits/withdrawals happen through Sales/Purchases/
+    Expenses instead (which already post themselves via their own account);
+    this is for the rest (capital injections, inter-account transfers,
+    bank fees/interest not otherwise recorded)."""
+    account = txn.account
+    if not account or not account.gl_account_id or not txn.contra_account_id:
+        return None
+    amount = Decimal(str(txn.amount or 0))
+    if amount <= 0:
+        return None
+    if txn.txn_type == "deposit":
+        lines = [
+            {"function_key": None, "_account_id": account.gl_account_id, "amount": amount, "side": "debit"},
+            {"function_key": None, "_account_id": txn.contra_account_id, "amount": amount, "side": "credit"},
+        ]
+    else:
+        lines = [
+            {"function_key": None, "_account_id": txn.contra_account_id, "amount": amount, "side": "debit"},
+            {"function_key": None, "_account_id": account.gl_account_id, "amount": amount, "side": "credit"},
+        ]
+    return post_journal(
+        db, txn_date=txn.txn_date, source_type="bank_transaction", source_id=txn.id,
+        description=(txn.description or f"{txn.txn_type.title()} — {account.name}"),
+        reference_no=txn.reference_no, lines=lines, entered_by_id=entered_by_id,
+    )
+
+
+def reverse_bank_transaction_posting(db: Session, txn: models.BankTransaction, *, reason: str, entered_by_id: int = None):
+    """Called from banking.py's void_transaction. No-op if this transaction
+    was never posted (no gl_account_id/contra_account_id set at the time)."""
+    entry = (
+        db.query(models.JournalEntry)
+        .filter(models.JournalEntry.source_type == "bank_transaction", models.JournalEntry.source_id == txn.id,
                 models.JournalEntry.status == "posted")
         .first()
     )

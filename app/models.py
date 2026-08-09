@@ -903,8 +903,13 @@ class BankAccount(Base):
     opening_balance = Column(Numeric(12, 2), nullable=False, server_default="0")
     is_active = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # Which Chart of Accounts asset account this bank/cash box IS, in the
+    # ledger (Accounting Phase 5). Nullable — an account with none set just
+    # doesn't post to the GL yet.
+    gl_account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True, unique=True)
 
     transactions = relationship("BankTransaction", back_populates="account", cascade="all, delete-orphan")
+    gl_account = relationship("Account")
 
 
 class BankTransaction(Base):
@@ -922,12 +927,19 @@ class BankTransaction(Base):
     description = Column(String(255))
     reference_no = Column(String(60))
     is_voided = Column(Boolean, nullable=False, server_default="false")
+    # The OTHER side of this manual entry for ledger posting — e.g. Owner's
+    # Equity for a capital deposit, or another bank account's GL account for
+    # a transfer. Nullable — a transaction with none set just isn't posted
+    # (most deposits/withdrawals happen through Sales/Purchases/Expenses
+    # instead, which already post themselves; this is for the rest).
+    contra_account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)
 
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     account = relationship("BankAccount", back_populates="transactions")
     creator = relationship("User")
+    contra_account = relationship("Account")
 
 
 class AppSetting(Base):
