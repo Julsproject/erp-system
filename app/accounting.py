@@ -177,14 +177,16 @@ def reverse_journal(db: Session, entry: models.JournalEntry, *, reason: str = No
     return reversal
 
 
+SALE_FUNCTION_KEYS = {
+    "cash": "SALE_CASH", "gcash": "SALE_GCASH", "card": "SALE_CARD", "bank_transfer": "SALE_BANK_TRANSFER",
+}
+
+
 def post_sale(db: Session, sale: models.Sale, *, method_rows: list, receivable_amount: Decimal, entered_by_id: int = None):
     """Called from pos.py's _finalize_sale right after sale.id is flushed.
     Posts revenue + VAT + whatever the customer actually paid with — no
     COGS/Inventory leg yet (see the accounting plan: that waits on Purchases
     posting, which is what actually builds up the Inventory account)."""
-    SALE_FUNCTION_KEYS = {
-        "cash": "SALE_CASH", "gcash": "SALE_GCASH", "card": "SALE_CARD", "bank_transfer": "SALE_BANK_TRANSFER",
-    }
     lines = []
     for method, amount in method_rows:
         if method in ("receivable", "cheque"):
@@ -225,6 +227,26 @@ def reverse_sale_posting(db: Session, sale: models.Sale, *, reason: str, entered
     if not entry:
         return None
     return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id)
+
+
+def post_receivable_settlement(db: Session, sale: models.Sale, *, amount: Decimal, method: str, entered_by_id: int = None):
+    """Called from sales.py's settle_pay and credits.py's pay_full_submit —
+    a customer paying down what they owe on a credit sale. Dr the mapped
+    money account, Cr Accounts Receivable. The cheque branch in both
+    callers defers to a PDC and posts nothing yet, same as everywhere else
+    a cheque appears in this app."""
+    fkey = SALE_FUNCTION_KEYS.get(method)
+    if not fkey:
+        return None  # unrecognized method — nothing sane to post
+    lines = [
+        {"function_key": fkey, "amount": amount, "side": "debit", "memo": method},
+        {"function_key": "AR", "amount": amount, "side": "credit"},
+    ]
+    return post_journal(
+        db, txn_date=_today(), source_type="sale_settlement", source_id=sale.id,
+        description=f"Payment on {sale.invoice_no}", reference_no=sale.invoice_no,
+        lines=lines, entered_by_id=entered_by_id,
+    )
 
 
 PURCHASE_PAY_FUNCTION_KEYS = {

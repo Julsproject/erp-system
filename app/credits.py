@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from . import models, settings_store
+from . import accounting, models, settings_store
 from .database import get_db
 from .deps import get_current_user
 from .sales import SETTLE_METHODS
@@ -329,5 +329,9 @@ async def pay_full_submit(customer_id: int, request: Request, db: Session = Depe
             db.add(models.ReceivableSettlement(
                 sale_id=sale.id, method=method, amount=outstanding, cashier_id=user.id,
             ))
+            try:
+                accounting.post_receivable_settlement(db, sale, amount=outstanding, method=method, entered_by_id=user.id)
+            except accounting.PostingError:
+                pass
     db.commit()
     return RedirectResponse(f"/credits/{customer_id}", status_code=status.HTTP_302_FOUND)

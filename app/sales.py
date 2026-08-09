@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import models
+from . import accounting, models
 from .database import get_db
 from .deps import get_current_user, is_staff
 from .templating import templates
@@ -465,5 +465,9 @@ async def settle_pay(sale_id: int, request: Request, db: Session = Depends(get_d
         sale_id=sale.id, method=method, amount=amount,
         cashier_id=user.id,
     ))
+    try:
+        accounting.post_receivable_settlement(db, sale, amount=amount, method=method, entered_by_id=user.id)
+    except accounting.PostingError:
+        pass
     db.commit()
     return RedirectResponse(_back_url(user, sale), status_code=status.HTTP_302_FOUND)
