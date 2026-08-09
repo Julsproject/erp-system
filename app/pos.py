@@ -616,6 +616,7 @@ async def pos_refund(request: Request, db: Session = Depends(get_db), user=Depen
         # an inventory search the cashier typed in, not a verified original
         # sale line. Flagged so it surfaces in Notifications for a spot-check.
         no_invoice_return=(orig is None),
+        receipt_type=(data.get("receipt_type") or "").strip() or None,
     )
     db.add(refund)
 
@@ -735,6 +736,7 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
         # their price(s) came from an inventory search, not a verified sale
         # line — flagged for a Notifications spot-check.
         no_invoice_return=(orig is None and bool(returned)),
+        receipt_type=(data.get("receipt_type") or "").strip() or None,
     )
     db.add(ex)
 

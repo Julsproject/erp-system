@@ -1082,7 +1082,7 @@ async function checkout() {
   btn.disabled = true; btn.textContent = 'Processing…';
 
   if (cart.length === 0) {
-    const payload = { items: items, payment_method: document.getElementById('retMethod').value, invoice_no: invoiceBox.value };
+    const payload = { items: items, payment_method: document.getElementById('retMethod').value, invoice_no: invoiceBox.value, receipt_type: receiptTypeBox.value };
     // Keyed off whether an invoice was actually matched, not the manual-mode
     // toggle — items can land in the return list via the main search box
     // (search always targets "return" while active) without ever flipping
@@ -1114,6 +1114,7 @@ async function checkout() {
     payment_method: document.getElementById('retMethod').value,
     amount_tendered: document.getElementById('retTendered').value,
     invoice_no: invoiceBox.value,
+    receipt_type: receiptTypeBox.value,
   };
   if (document.getElementById('retMethod').value === 'cheque') {
     payload.cheque_date = document.getElementById('retChequeDate').value;
