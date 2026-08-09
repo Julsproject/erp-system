@@ -36,6 +36,36 @@
   </table>
 </div>
 
+{% if expense_categories %}
+<h2 style="margin:24px 0 10px;font-size:16px;">Expense category accounts <span class="muted" style="font-weight:400;">— optional</span></h2>
+<p class="muted" style="font-size:12.5px;margin:0 0 12px;">
+  A category with none set posts to the fallback "Expense — fallback debit account" mapping above instead.
+</p>
+<div class="table-wrap">
+  <table class="grid">
+    <thead><tr><th>Category</th><th>Posts to</th></tr></thead>
+    <tbody>
+      {% for c in expense_categories %}
+      <tr>
+        <td class="strong">{{ c.name }}</td>
+        <td>
+          <form method="post" action="/accounting/expense-category-account/{{ c.id }}" style="display:inline-flex;gap:8px;align-items:center;">
+            <select name="account_id" style="min-width:260px;">
+              <option value="">— use fallback —</option>
+              {% for a in expense_accounts %}
+              <option value="{{ a.id }}" {{ 'selected' if c.account_id == a.id }}>{{ a.code }} · {{ a.name }}</option>
+              {% endfor %}
+            </select>
+            <button class="btn-link" type="submit">Save</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 <p class="muted" style="margin-top:14px;font-size:12.5px;">
   Only active accounts show up here. If the account you want isn't listed, activate it first from the
   <a href="/accounting/coa">Chart of Accounts</a>.

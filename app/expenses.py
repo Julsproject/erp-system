@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import audit, models
+from . import accounting, audit, models
 from .database import get_db
 from .deps import get_current_user, is_staff
 from .templating import templates
@@ -146,6 +146,7 @@ def _apply_form(expense: models.Expense, db: Session, form):
     expense.payee = (form.get("payee") or "").strip() or None
     expense.description = (form.get("description") or "").strip() or None
     expense.amount = _dec(form.get("amount"))
+    expense.vat_amount = _dec(form.get("vat_amount"))
     raw_date = (form.get("expense_date") or "").strip()
     expense.expense_date = _parse_date(raw_date) or date.today()
     method = (form.get("payment_method") or "cash").strip().lower()
@@ -168,6 +169,10 @@ async def create_expense(request: Request, db: Session = Depends(get_db), user=D
     db.add(expense)
     db.flush()
     expense.ref_no = f"EXP-{expense.id:06d}"
+    try:
+        accounting.post_expense(db, expense, entered_by_id=user.id)
+    except accounting.PostingError:
+        pass
     audit.record(
         db, user=user, request=request, action="create", entity_type="expense",
         entity_id=expense.id, entity_label=expense.ref_no,
@@ -178,6 +183,8 @@ async def create_expense(request: Request, db: Session = Depends(get_db), user=D
 
 
 @router.post("/expenses/{expense_id:int}")
+# TODO(accounting): editing an expense after it posted doesn't repost a
+# correction — same known gap as pos.py's edit_sale_items.
 async def update_expense(expense_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -213,6 +220,7 @@ def void_expense(expense_id: int, request: Request, db: Session = Depends(get_db
     expense = db.get(models.Expense, expense_id)
     if expense:
         expense.is_voided = True
+        accounting.reverse_expense_posting(db, expense, reason=f"Voided {expense.ref_no}", entered_by_id=user.id)
         audit.record(
             db, user=user, request=request, action="void", entity_type="expense",
             entity_id=expense.id, entity_label=expense.ref_no,

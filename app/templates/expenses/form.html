@@ -24,6 +24,11 @@
            value="{{ expense.amount if expense else '' }}">
   </label>
 
+  <label>VAT <span class="muted">(₱, optional — already included in Amount above)</span>
+    <input name="vat_amount" type="number" step="0.01" min="0"
+           value="{{ expense.vat_amount if expense and expense.vat_amount else '' }}" placeholder="0.00">
+  </label>
+
   <label>Date
     <input name="expense_date" type="date" required
            value="{{ expense.expense_date.isoformat() if expense and expense.expense_date else today }}">

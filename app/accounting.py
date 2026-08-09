@@ -114,6 +114,10 @@ def _next_journal_no(db: Session) -> str:
 def post_journal(db: Session, *, txn_date, source_type: str, source_id, description: str,
                   lines: list, reference_no: str = None, entered_by_id: int = None) -> models.JournalEntry:
     """lines: [{"function_key": "SALE_CASH", "amount": Decimal, "side": "debit"|"credit", "memo": "..."}, ...]
+    A line can give "_account_id" directly instead of "function_key" — for
+    the handful of cases (like an Expense's per-category account) where the
+    target account is a real FK on the source record, not a fixed function
+    the whole shop shares one mapping for.
     Does NOT commit — caller commits once, so the source transaction and its
     journal entry land or roll back together."""
     resolved = []
@@ -123,7 +127,12 @@ def post_journal(db: Session, *, txn_date, source_type: str, source_id, descript
         amount = _money(ln["amount"])
         if amount <= 0:
             continue
-        account = _resolve_mapping(db, ln["function_key"])
+        if ln.get("_account_id"):
+            account = db.get(models.Account, ln["_account_id"])
+            if not account or not account.is_active:
+                raise PostingError(f"Account #{ln['_account_id']} is missing or inactive.")
+        else:
+            account = _resolve_mapping(db, ln["function_key"])
         debit = amount if ln["side"] == "debit" else ZERO
         credit = amount if ln["side"] == "credit" else ZERO
         total_debit += debit
@@ -301,6 +310,54 @@ def reverse_purchase_posting(db: Session, purchase: models.Purchase, *, reason: 
     return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id)
 
 
+EXPENSE_PAY_FUNCTION_KEYS = {
+    "cash": "EXPENSE_PAY_CASH", "gcash": "EXPENSE_PAY_GCASH",
+    "bank_transfer": "EXPENSE_PAY_BANK_TRANSFER", "cheque": "EXPENSE_PAY_CHEQUE",
+}
+
+
+def post_expense(db: Session, expense: models.Expense, *, entered_by_id: int = None):
+    """Called from expenses.py's create_expense. Dr the expense category's
+    own mapped account (falls back to EXPENSE_DEFAULT if the category has
+    none set) plus an Input VAT line if vat_amount > 0; Cr whichever money
+    account the payment method maps to."""
+    amount = Decimal(str(expense.amount or 0))
+    if amount <= 0:
+        return None
+    vat = Decimal(str(expense.vat_amount or 0))
+    net = amount - vat
+    lines = []
+    if expense.category and expense.category.account_id and expense.category.account.is_active:
+        lines.append({"function_key": None, "amount": net, "side": "debit",
+                       "_account_id": expense.category.account_id, "memo": expense.category.name})
+    else:
+        lines.append({"function_key": "EXPENSE_DEFAULT", "amount": net, "side": "debit"})
+    if vat > 0:
+        lines.append({"function_key": "INPUT_VAT", "amount": vat, "side": "debit"})
+    pay_key = EXPENSE_PAY_FUNCTION_KEYS.get(expense.payment_method, "EXPENSE_PAY_CASH")
+    lines.append({"function_key": pay_key, "amount": amount, "side": "credit", "memo": expense.payment_method})
+
+    return post_journal(
+        db, txn_date=expense.expense_date or _today(), source_type="expense", source_id=expense.id,
+        description=f"Expense {expense.ref_no}" + (f" — {expense.payee}" if expense.payee else ""),
+        reference_no=expense.reference_no, lines=lines, entered_by_id=entered_by_id,
+    )
+
+
+def reverse_expense_posting(db: Session, expense: models.Expense, *, reason: str, entered_by_id: int = None):
+    """Called from expenses.py's void_expense. No-op if this expense predates
+    Phase 3 and never got a journal entry."""
+    entry = (
+        db.query(models.JournalEntry)
+        .filter(models.JournalEntry.source_type == "expense", models.JournalEntry.source_id == expense.id,
+                models.JournalEntry.status == "posted")
+        .first()
+    )
+    if not entry:
+        return None
+    return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id)
+
+
 # --------------------------------------------------------------------------- #
 # Chart of Accounts
 # --------------------------------------------------------------------------- #
@@ -394,11 +451,27 @@ def mappings_list(request: Request, db: Session = Depends(get_db), user=Depends(
         return RedirectResponse("/pos", status_code=302)
     mappings = db.query(models.AccountMapping).order_by(models.AccountMapping.function_key).all()
     accounts = db.query(models.Account).filter(models.Account.is_active.is_(True)).order_by(models.Account.code).all()
+    expense_accounts = [a for a in accounts if a.account_type == "expense"]
+    expense_categories = db.query(models.ExpenseCategory).order_by(models.ExpenseCategory.name).all()
     return templates.TemplateResponse(
         "accounting/mappings.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "mappings": mappings, "accounts": accounts},
+         "mappings": mappings, "accounts": accounts,
+         "expense_accounts": expense_accounts, "expense_categories": expense_categories},
     )
+
+
+@router.post("/accounting/expense-category-account/{category_id:int}")
+def expense_category_account_update(category_id: int, account_id: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    category = db.get(models.ExpenseCategory, category_id)
+    if category:
+        category.account_id = int(account_id) if account_id else None
+        db.commit()
+    return RedirectResponse("/accounting/mappings", status_code=302)
 
 
 @router.post("/accounting/mappings/{mapping_id:int}")

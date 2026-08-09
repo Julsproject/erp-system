@@ -801,7 +801,13 @@ class ExpenseCategory(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String(80), nullable=False, unique=True)
+    # Which Chart of Accounts expense account this category posts to by
+    # default (Accounting Phase 3). Nullable — a category with none set
+    # falls back to the generic "Operating Expenses" mapping.
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    account = relationship("Account")
 
 
 class Expense(Base):
@@ -820,6 +826,10 @@ class Expense(Base):
     payee = Column(String(150))                # who got paid — vendor, landlord, employee...
     description = Column(String(255))
     amount = Column(Numeric(12, 2), nullable=False, server_default="0")
+    # VAT portion already included in `amount`, same inclusive convention as
+    # Sale.vat_amount — most small-shop expenses have none, so this stays 0
+    # unless the payee's receipt actually shows VAT.
+    vat_amount = Column(Numeric(12, 2), nullable=False, server_default="0")
     expense_date = Column(Date, nullable=False)
     payment_method = Column(String(20), nullable=False, server_default="cash")  # cash|gcash|bank_transfer|cheque
     reference_no = Column(String(60))           # OR#, cheque #, transfer ref — freeform
