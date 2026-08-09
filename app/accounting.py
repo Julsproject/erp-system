@@ -697,6 +697,68 @@ def export_trial_balance(days: int = 30, date_from: str = "", date_to: str = "",
 
 
 # --------------------------------------------------------------------------- #
+# Cash Book / Bank Ledger — General Ledger, filtered to cash-like accounts
+# --------------------------------------------------------------------------- #
+def _cash_accounts(db: Session):
+    linked_ids = [
+        aid for (aid,) in db.query(models.BankAccount.gl_account_id)
+        .filter(models.BankAccount.gl_account_id.isnot(None)).all()
+    ]
+    return (
+        db.query(models.Account)
+        .filter(
+            models.Account.is_active.is_(True),
+            (models.Account.system_key.in_(("CASH_ON_HAND", "GCASH", "BANK")) | models.Account.id.in_(linked_ids or [0])),
+        )
+        .order_by(models.Account.code)
+        .all()
+    )
+
+
+@router.get("/accounting/cash-book", response_class=HTMLResponse)
+def cash_book(
+    request: Request, account_id: int = 0, days: int = 30, date_from: str = "", date_to: str = "",
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    period_start, period_end, custom = _resolve_period(days, date_from, date_to)
+    accounts = _cash_accounts(db)
+    account = db.get(models.Account, account_id) if account_id else (accounts[0] if accounts else None)
+    if account and account not in accounts:
+        account = accounts[0] if accounts else None
+
+    rows = []
+    opening = closing = ZERO
+    if account:
+        opening = _account_balance_before(db, account, period_start)
+        entries = (
+            db.query(models.JournalLine, models.JournalEntry)
+            .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
+            .filter(models.JournalLine.account_id == account.id,
+                    models.JournalEntry.txn_date.between(period_start, period_end))
+            .order_by(models.JournalEntry.txn_date, models.JournalEntry.id)
+            .all()
+        )
+        running = opening
+        for line, entry in entries:
+            delta = (line.debit - line.credit) if account.normal_balance == "debit" else (line.credit - line.debit)
+            running += delta
+            rows.append({"entry": entry, "line": line, "balance": running})
+        closing = running
+
+    return templates.TemplateResponse(
+        "accounting/cash_book.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "accounts": accounts, "account": account, "rows": rows, "opening": opening, "closing": closing,
+         "days": days, "date_from": date_from, "date_to": date_to,
+         "period_start": period_start, "period_end": period_end, "custom": custom},
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Balance Sheet + ledger-based P&L
 # --------------------------------------------------------------------------- #
 def _type_balance(db: Session, account_type: str, as_of: date) -> Decimal:
