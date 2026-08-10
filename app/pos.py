@@ -36,6 +36,11 @@ METHOD_LABELS = {
     "cheque": "Cheque",
     "receivable": "Receivable",
 }
+# Payment methods a completed sale's method can be *corrected* to. Cheque and
+# Receivable are deliberately excluded — switching TO either would need to
+# open a PDC / start a credit balance from scratch, which isn't a same-day
+# correction anymore; void and re-ring the sale instead for those.
+EDIT_PAYMENT_METHODS = ["cash", "gcash", "maya", "other_ewallet", "card", "bank_transfer"]
 
 # VAT is INCLUSIVE: the selling price already contains it.
 #   net of VAT = total / 1.12        VAT = total - net of VAT
@@ -927,6 +932,7 @@ def pos_receipt(
     void_error: str = "",
     edit_date_error: str = "",
     edit_items_error: str = "",
+    edit_payment_error: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -965,7 +971,10 @@ def pos_receipt(
          "can_edit_date": is_staff(user), "edit_date_error": EDIT_DATE_ERRORS.get(edit_date_error),
          "today_iso": datetime.now(MANILA).date().isoformat(),
          "can_edit_items": is_staff(user) and _can_edit_sale_items(db, sale) is None,
-         "edit_items_error": EDIT_ITEMS_ERRORS.get(edit_items_error)},
+         "edit_items_error": EDIT_ITEMS_ERRORS.get(edit_items_error),
+         "can_edit_payment": is_staff(user) and _can_edit_sale_items(db, sale) is None,
+         "edit_payment_error": EDIT_ITEMS_ERRORS.get(edit_payment_error),
+         "edit_payment_methods": EDIT_PAYMENT_METHODS, "method_labels": METHOD_LABELS},
     )
 
 
@@ -1005,6 +1014,7 @@ EDIT_ITEMS_ERRORS = {
     "linked": "This sale has a refund or exchange linked to it — void that first.",
     "pdc": "This sale has a post-dated cheque recorded against it.",
     "empty": "A sale needs at least one item.",
+    "invalid": "Not a valid payment method to switch to.",
 }
 
 
@@ -1155,6 +1165,70 @@ def edit_sale_date(
         entity_id=sale.id, entity_label=sale.invoice_no,
         summary=f"Corrected transaction date for sale {sale.invoice_no}",
         changes={"created_at": [old_created_at.isoformat() if old_created_at else None, new_created_at.isoformat()]},
+    )
+    db.commit()
+    return _back()
+
+
+@router.post("/pos/receipt/{sale_id:int}/edit-payment")
+def edit_sale_payment_method(
+    sale_id: int,
+    request: Request,
+    new_method: str = Form(""),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Correct the payment method on an already-finalized sale — e.g. the
+    cashier rang it up as Cash by mistake when the customer actually paid
+    GCash. Same eligibility as item editing (_can_edit_sale_items): a
+    single-payment, non-credit, non-voided, non-linked plain sale, since
+    this is really "reverse the old payment, apply the new one" under the
+    hood — anywhere item editing wouldn't be safe, this isn't either.
+    Re-posts the ledger entry too, so the money moves from the old mapped
+    account to the new one instead of leaving a stale posting behind."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    sale = db.get(models.Sale, sale_id)
+    if not sale:
+        return RedirectResponse("/pos", status_code=302)
+
+    def _back(err=None):
+        suffix = f"&edit_payment_error={err}" if err else ""
+        return RedirectResponse(f"/pos/receipt/{sale_id}?from=sales{suffix}", status_code=302)
+
+    if not is_staff(user):
+        return _back("denied")
+    block_reason = _can_edit_sale_items(db, sale)
+    if block_reason:
+        return _back(block_reason)
+
+    new_method = (new_method or "").strip().lower()
+    if new_method not in EDIT_PAYMENT_METHODS:
+        return _back("invalid")
+
+    payment = sale.payments[0]
+    old_method = payment.method
+    if new_method == old_method:
+        return _back()
+
+    payment.method = new_method
+    sale.payment_method = METHOD_LABELS[new_method]
+
+    # Move the ledger posting from the old money account to the new one —
+    # reverse what was posted, then post fresh with the corrected method.
+    accounting.reverse_sale_posting(db, sale, reason=f"Payment method corrected: {old_method} -> {new_method}", entered_by_id=user.id)
+    try:
+        accounting.post_sale(
+            db, sale, method_rows=[(new_method, sale.total)], receivable_amount=Decimal("0"), entered_by_id=user.id,
+        )
+    except accounting.PostingError:
+        pass
+
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="sale",
+        entity_id=sale.id, entity_label=sale.invoice_no,
+        summary=f"Corrected payment method for sale {sale.invoice_no}: {old_method} → {new_method}",
+        changes={"payment_method": [old_method, new_method]},
     )
     db.commit()
     return _back()

@@ -131,6 +131,27 @@
     {% if edit_date_error %}
     <div class="void-error">⚠ {{ edit_date_error }}</div>
     {% endif %}
+    {% if edit_payment_error %}
+    <div class="void-error">⚠ {{ edit_payment_error }}</div>
+    {% endif %}
+
+    {% if can_edit_payment and not sale.is_voided and sale.payments|length == 1 %}
+    <form id="editPaymentForm" method="post" action="/pos/receipt/{{ sale.id }}/edit-payment"
+          style="display:none;margin:0 0 12px;padding:9px 11px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:12px;">
+      <label style="color:var(--ink);">Correct the payment method
+        <select name="new_method" style="display:block;margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;">
+          {% for m in edit_payment_methods %}
+          <option value="{{ m }}" {{ 'selected' if sale.payments[0].method == m }}>{{ method_labels.get(m, m) }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <div style="margin-top:8px;display:flex;gap:8px;">
+        <button type="submit" class="btn print" style="padding:6px 12px;font-size:12px;">Save</button>
+        <button type="button" class="btn back" style="padding:6px 12px;font-size:12px;" onclick="hideEditPayment()">Cancel</button>
+      </div>
+      <p style="margin:8px 0 0;color:var(--muted);">Moves the ledger posting to the corrected account too. Only for a plain, single-payment sale — void and re-ring for anything more involved (split payment, credit, cheque).</p>
+    </form>
+    {% endif %}
 
     {% if can_edit_date and not sale.is_voided %}
     <form id="editDateForm" method="post" action="/pos/receipt/{{ sale.id }}/edit-date"
@@ -243,7 +264,11 @@
 
     <div class="r-pay">
       {% for p in sale.payments %}
-      <div class="row"><span>{{ p.method.replace('_',' ')|title }}</span><b>{{ p.amount|peso }}</b></div>
+      <div class="row"><span>{{ p.method.replace('_',' ')|title }}</span><b>{{ p.amount|peso }}</b>
+        {% if can_edit_payment and not sale.is_voided and loop.first and loop.length == 1 %}
+        <a href="#" onclick="showEditPayment(event)" style="font-size:11px;margin-left:6px;">✎ edit</a>
+        {% endif %}
+      </div>
       {% endfor %}
       {% if sale.change_amount and sale.change_amount > 0 %}
       <div class="row"><span>Change</span><b>{{ sale.change_amount|peso }}</b></div>
@@ -321,6 +346,19 @@
       document.getElementById('editDateForm').style.display = 'none';
     }
     {% if edit_date_error %}showEditDate();{% endif %}
+  </script>
+  {% endif %}
+
+  {% if can_edit_payment and not sale.is_voided and sale.payments|length == 1 %}
+  <script>
+    function showEditPayment(e) {
+      if (e) e.preventDefault();
+      document.getElementById('editPaymentForm').style.display = 'block';
+    }
+    function hideEditPayment() {
+      document.getElementById('editPaymentForm').style.display = 'none';
+    }
+    {% if edit_payment_error %}showEditPayment();{% endif %}
   </script>
   {% endif %}
 </body>
