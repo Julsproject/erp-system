@@ -460,6 +460,28 @@ class SaleLine(Base):
     sale = relationship("Sale", back_populates="lines")
 
 
+class CancelledReceipt(Base):
+    """A physical receipt (DRS/DRB/SI/...) that was spoiled, mis-written, or
+    otherwise never used for a real sale — recorded so the booklet's number
+    sequence stays fully accounted for (used-by-a-sale + cancelled = every
+    number issued), which is what a BIR audit actually checks for, not just
+    the ones that turned into revenue. Deliberately its own small table, not
+    a Sale row with some "cancelled" flag — this never had a customer,
+    items, or a total; it's just "this number exists and here's why it was
+    never used."""
+    __tablename__ = "cancelled_receipts"
+
+    id = Column(Integer, primary_key=True)
+    receipt_type = Column(String(10), nullable=False)  # DRS | DRB | SI | ... — same free-text convention as Sale.receipt_type
+    invoice_no = Column(String(20), nullable=False)
+    cancelled_date = Column(Date, nullable=False)
+    reason = Column(String(255), nullable=True)
+    recorded_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    recorded_by = relationship("User")
+
+
 class Quotation(Base):
     """A price estimate given to a customer, before it becomes a real sale.
 

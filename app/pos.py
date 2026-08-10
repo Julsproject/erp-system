@@ -525,32 +525,136 @@ async def pos_checkout(request: Request, db: Session = Depends(get_db), user=Dep
     return {"ok": True, "sale_id": sale.id, "invoice_no": sale.invoice_no}
 
 
+def _last_receipt_number(receipt_type: str, invoice_no: str):
+    """(prefix, digits-as-int, width) parsed from an invoice #, or None if it
+    doesn't end in digits."""
+    if not invoice_no:
+        return None
+    m = re.match(r"^(.*?)(\d+)$", invoice_no)
+    if not m:
+        return None
+    return m.group(1), int(m.group(2)), len(m.group(2))
+
+
 @router.get("/pos/next-invoice")
 def pos_next_invoice(receipt_type: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Suggest the next invoice # for a receipt booklet (DRS/DRB/SI/...) by
-    incrementing the last one used for that same type — each booklet has its
-    own physical numbering, separate from the others. Returns "" when there's
-    no prior invoice of that type to count from, or its number doesn't end in
-    digits to increment."""
+    incrementing the last one used for that same type — either by a real
+    sale OR logged as cancelled/spoiled (see /pos/cancelled-receipts), so a
+    torn-out receipt doesn't get its number silently reissued. Each booklet
+    has its own physical numbering, separate from the others. Returns ""
+    when there's nothing of that type to count from, or its number doesn't
+    end in digits to increment."""
     if not user:
         return JSONResponse({"invoice_no": ""}, status_code=401)
     receipt_type = (receipt_type or "").strip()
     if not receipt_type:
         return {"invoice_no": ""}
-    last = (
+    last_sale = (
         db.query(models.Sale)
         .filter(models.Sale.receipt_type == receipt_type, models.Sale.txn_type == "sale")
         .order_by(models.Sale.id.desc())
         .first()
     )
-    if not last or not last.invoice_no:
+    last_cancelled = (
+        db.query(models.CancelledReceipt)
+        .filter(models.CancelledReceipt.receipt_type == receipt_type)
+        .order_by(models.CancelledReceipt.id.desc())
+        .first()
+    )
+    candidates = [
+        _last_receipt_number(receipt_type, last_sale.invoice_no if last_sale else None),
+        _last_receipt_number(receipt_type, last_cancelled.invoice_no if last_cancelled else None),
+    ]
+    candidates = [c for c in candidates if c]
+    if not candidates:
         return {"invoice_no": ""}
-    m = re.match(r"^(.*?)(\d+)$", last.invoice_no)
-    if not m:
-        return {"invoice_no": ""}
-    prefix, digits = m.group(1), m.group(2)
-    next_no = str(int(digits) + 1).zfill(len(digits))
+    prefix, number, width = max(candidates, key=lambda c: c[1])
+    next_no = str(number + 1).zfill(width)
     return {"invoice_no": f"{prefix}{next_no}"}
+
+
+RECEIPT_TYPES = ["DRS", "DRB", "SI"]
+
+
+@router.get("/pos/cancelled-receipts", response_class=HTMLResponse)
+def cancelled_receipts_list(
+    request: Request, receipt_type: str = "", page: int = 1,
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    page = max(page, 1)
+    query = db.query(models.CancelledReceipt)
+    if receipt_type:
+        query = query.filter(models.CancelledReceipt.receipt_type == receipt_type)
+    total = query.count()
+    pages = max((total + 14) // 15, 1)
+    page = min(page, pages)
+    rows = (
+        query.order_by(models.CancelledReceipt.cancelled_date.desc(), models.CancelledReceipt.id.desc())
+        .offset((page - 1) * 15).limit(15).all()
+    )
+    return templates.TemplateResponse(
+        "pos/cancelled_receipts.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "rows": rows, "receipt_type": receipt_type, "receipt_types": RECEIPT_TYPES,
+         "page": page, "pages": pages, "total": total, "today": datetime.now(MANILA).date().isoformat()},
+    )
+
+
+@router.post("/pos/cancelled-receipts")
+def cancelled_receipts_create(
+    request: Request, receipt_type: str = Form(...), invoice_no: str = Form(...),
+    cancelled_date: str = Form(""), reason: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    receipt_type = (receipt_type or "").strip().upper()
+    invoice_no = (invoice_no or "").strip()
+    if not receipt_type or not invoice_no:
+        return RedirectResponse("/pos/cancelled-receipts?error=Receipt+type+and+invoice+%23+are+required.", status_code=302)
+    try:
+        c_date = date.fromisoformat(cancelled_date) if cancelled_date else datetime.now(MANILA).date()
+    except ValueError:
+        c_date = datetime.now(MANILA).date()
+
+    row = models.CancelledReceipt(
+        receipt_type=receipt_type, invoice_no=invoice_no, cancelled_date=c_date,
+        reason=(reason or "").strip() or None, recorded_by_id=user.id,
+    )
+    db.add(row)
+    db.flush()
+    audit.record(
+        db, user=user, request=request, action="create", entity_type="cancelled_receipt",
+        entity_id=row.id, entity_label=f"{receipt_type} {invoice_no}",
+        summary=f"Logged cancelled/unused receipt {receipt_type} #{invoice_no}" + (f" — {row.reason}" if row.reason else ""),
+    )
+    db.commit()
+    return RedirectResponse("/pos/cancelled-receipts", status_code=302)
+
+
+@router.post("/pos/cancelled-receipts/{row_id:int}/delete")
+def cancelled_receipts_delete(row_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    row = db.get(models.CancelledReceipt, row_id)
+    if row:
+        audit.record(
+            db, user=user, request=request, action="delete", entity_type="cancelled_receipt",
+            entity_id=row.id, entity_label=f"{row.receipt_type} {row.invoice_no}",
+            summary=f"Removed cancelled-receipt log entry {row.receipt_type} #{row.invoice_no} (data-entry correction)",
+        )
+        db.delete(row)
+        db.commit()
+    return RedirectResponse("/pos/cancelled-receipts", status_code=302)
 
 
 @router.get("/pos/lookup")
