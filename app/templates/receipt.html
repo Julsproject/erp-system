@@ -1,9 +1,10 @@
+{% set display_invoice = (sale.receipt_type ~ sale.invoice_no) if (sale.receipt_type and sale.invoice_no) else sale.invoice_no %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Receipt {{ sale.invoice_no }} · {{ app_name }}</title>
+  <title>Receipt {{ display_invoice }} · {{ app_name }}</title>
   <style>
     :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --logo-blue:#4a90d9; --logo-gray:#5b6472; }
     * { box-sizing: border-box; }
@@ -93,7 +94,7 @@
       {% if biz.receipt_contact %}<div class="r-sub">{{ biz.receipt_contact }}</div>{% endif %}
       {% if biz.receipt_tin %}<div class="r-sub">TIN: {{ biz.receipt_tin }}</div>{% endif %}
       <div class="r-doc-type">{{ doc_label }}</div>
-      <div class="r-meta-line">Invoice: <b>{{ sale.invoice_no }}</b></div>
+      <div class="r-meta-line">Invoice: <b>{{ display_invoice }}</b></div>
       <div class="r-meta-line">{{ sale.created_at.strftime('%b %d, %Y %I:%M %p') if sale.created_at else '' }}</div>
       <div class="r-meta-line">Cashier: <b>{{ sale.cashier.full_name or sale.cashier.username if sale.cashier else '—' }}</b></div>
       {% if sale.encoded_by %}<div class="r-meta-line">Encoded by: <b>{{ sale.encoded_by.name }}</b></div>{% endif %}
@@ -102,7 +103,7 @@
     <div class="r-head-2col">
       <div class="r-head-left">
         <div class="r-doc-type">{{ doc_label }}</div>
-        <div class="r-meta-line">Invoice #: <b>{{ sale.invoice_no }}</b>{% if can_edit_invoice and not sale.is_voided %} <a href="#" onclick="showEditInvoice(event)" style="font-size:11px;">✎ edit</a>{% endif %}</div>
+        <div class="r-meta-line">Invoice #: <b>{{ display_invoice }}</b>{% if can_edit_invoice and not sale.is_voided %} <a href="#" onclick="showEditInvoice(event)" style="font-size:11px;">✎ edit</a>{% endif %}</div>
         <div class="r-meta-line">Date: <b>{{ sale.created_at.strftime('%b %d, %Y %I:%M %p') if sale.created_at else '' }}</b>{% if can_edit_date and not sale.is_voided %} <a href="#" onclick="showEditDate(event)" style="font-size:11px;">✎ edit</a>{% endif %}</div>
         <div class="r-meta-line">Cashier: <b>{{ sale.cashier.full_name or sale.cashier.username if sale.cashier else '—' }}</b></div>
         {% if sale.encoded_by %}<div class="r-meta-line">Encoded by: <b>{{ sale.encoded_by.name }}</b></div>{% endif %}
@@ -215,7 +216,7 @@
     {% if original %}
     <div class="r-link {{ 'refund' if sale.txn_type == 'refund' else 'exchange' }}">
       {{ '↩ Refund of' if sale.txn_type == 'refund' else '⇄ Exchange from' }} Invoice
-      <a href="/pos/receipt/{{ original.id }}?from=sales">{{ original.invoice_no }}</a>
+      <a href="/pos/receipt/{{ original.id }}?from=sales">{{ (original.receipt_type ~ original.invoice_no) if (original.receipt_type and original.invoice_no) else original.invoice_no }}</a>
     </div>
     {% elif sale.no_invoice_return %}
     <div class="r-link refund" style="background:#fffbeb;border-color:#fcd34d;color:#92400e;">
@@ -225,7 +226,7 @@
     {% for lt in linked %}
     <div class="r-link {{ 'refund' if lt.txn_type == 'refund' else 'exchange' }}">
       ⚠ This invoice has {{ 'a refund' if lt.txn_type == 'refund' else 'an exchange' }}:
-      <a href="/pos/receipt/{{ lt.id }}?from=sales">{{ lt.invoice_no }}</a> · {{ lt.total|peso }}
+      <a href="/pos/receipt/{{ lt.id }}?from=sales">{{ (lt.receipt_type ~ lt.invoice_no) if (lt.receipt_type and lt.invoice_no) else lt.invoice_no }}</a> · {{ lt.total|peso }}
     </div>
     {% endfor %}
 
@@ -368,7 +369,7 @@
   </form>
   <script>
     function voidSale() {
-      const reason = prompt("Reason for voiding invoice {{ sale.invoice_no }}? (required)\nThis reverses the stock and payment for this sale everywhere in the system.");
+      const reason = prompt("Reason for voiding invoice {{ display_invoice }}? (required)\nThis reverses the stock and payment for this sale everywhere in the system.");
       if (reason === null) return;
       if (!reason.trim()) { alert("A reason is required to void a sale."); return; }
       document.getElementById('voidReason').value = reason.trim();

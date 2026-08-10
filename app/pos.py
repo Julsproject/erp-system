@@ -1703,8 +1703,9 @@ def pos_receipt_pdf(sale_id: int, db: Session = Depends(get_db), user=Depends(ge
     biz = settings_store.get_all(db)
     doc_label = "Refund Slip" if sale.txn_type == "refund" else ("Exchange Slip" if sale.txn_type == "exchange" else "Sales Invoice")
 
+    display_invoice = f"{sale.receipt_type}{sale.invoice_no}" if (sale.receipt_type and sale.invoice_no) else sale.invoice_no
     doc_meta = [
-        f"Invoice #: {sale.invoice_no}",
+        f"Invoice #: {display_invoice}",
         f"Date: {sale.created_at.strftime('%b %d, %Y %I:%M %p') if sale.created_at else ''}",
     ]
     if sale.cashier:
