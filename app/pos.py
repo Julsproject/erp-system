@@ -972,9 +972,10 @@ def pos_receipt(
          "today_iso": datetime.now(MANILA).date().isoformat(),
          "can_edit_items": is_staff(user) and _can_edit_sale_items(db, sale) is None,
          "edit_items_error": EDIT_ITEMS_ERRORS.get(edit_items_error),
-         "can_edit_payment": is_staff(user) and _can_edit_sale_items(db, sale) is None,
+         "can_edit_payment": is_staff(user) and _can_edit_sale_payment(db, sale) is None,
          "edit_payment_error": EDIT_ITEMS_ERRORS.get(edit_payment_error),
-         "edit_payment_methods": EDIT_PAYMENT_METHODS, "method_labels": METHOD_LABELS},
+         "edit_payment_methods": EDIT_PAYMENT_METHODS, "method_labels": METHOD_LABELS,
+         "is_credit_sale": (sale.receivable_amount or 0) > 0},
     )
 
 
@@ -1015,6 +1016,8 @@ EDIT_ITEMS_ERRORS = {
     "pdc": "This sale has a post-dated cheque recorded against it.",
     "empty": "A sale needs at least one item.",
     "invalid": "Not a valid payment method to switch to.",
+    "needs_customer": "Type a customer name to put this on their credit account.",
+    "partially_paid": "This credit sale already has a payment recorded against it — settle or void it instead of switching methods.",
 }
 
 
@@ -1036,6 +1039,27 @@ def _can_edit_sale_items(db: Session, sale: models.Sale):
         return "linked"
     if db.query(models.PostDatedCheque.id).filter(models.PostDatedCheque.sale_id == sale.id).first():
         return "pdc"
+    return None
+
+
+def _can_edit_sale_payment(db: Session, sale: models.Sale):
+    """Same idea as _can_edit_sale_items but WITHOUT the "credit" rejection
+    — a credit sale is exactly one of the two directions edit_sale_payment_
+    method supports (switching it back to a direct-tender method), so this
+    is the looser check the receipt page uses to decide whether to show the
+    "edit payment" control at all. The route itself applies the tighter,
+    direction-specific checks (e.g. "partially_paid") at submit time."""
+    if sale.is_voided:
+        return "voided"
+    if sale.txn_type != "sale":
+        return "type"
+    if db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id).first():
+        return "linked"
+    if db.query(models.PostDatedCheque.id).filter(models.PostDatedCheque.sale_id == sale.id).first():
+        return "pdc"
+    is_credit = (sale.receivable_amount or 0) > 0
+    if not is_credit and len(sale.payments) != 1:
+        return "split"
     return None
 
 
@@ -1171,21 +1195,30 @@ def edit_sale_date(
 
 
 @router.post("/pos/receipt/{sale_id:int}/edit-payment")
-def edit_sale_payment_method(
-    sale_id: int,
-    request: Request,
-    new_method: str = Form(""),
-    db: Session = Depends(get_db),
-    user=Depends(get_current_user),
-):
+async def edit_sale_payment_method(sale_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Correct the payment method on an already-finalized sale — e.g. the
     cashier rang it up as Cash by mistake when the customer actually paid
-    GCash. Same eligibility as item editing (_can_edit_sale_items): a
-    single-payment, non-credit, non-voided, non-linked plain sale, since
-    this is really "reverse the old payment, apply the new one" under the
-    hood — anywhere item editing wouldn't be safe, this isn't either.
-    Re-posts the ledger entry too, so the money moves from the old mapped
-    account to the new one instead of leaving a stale posting behind."""
+    GCash, or a walk-in cash sale actually needs to go on the customer's
+    credit account instead. Two directions, each with its own eligibility:
+
+    Direct-tender <-> direct-tender (e.g. Cash -> GCash): same guard as
+    item editing (_can_edit_sale_items) — a single-payment, non-credit,
+    non-voided, non-linked plain sale, since this is really "reverse the
+    old payment, apply the new one" under the hood.
+
+    Direct-tender -> Credit: same guard, PLUS the sale needs a customer
+    (typed in if it was a Walk-in sale) so it has somewhere to become an
+    outstanding balance. Sets receivable_amount/due_date exactly like a
+    credit sale rung up that way from the start.
+
+    Credit -> direct-tender: only if NOTHING has been paid against it yet
+    (zero ReceivableSettlement) — once the customer's started paying it
+    down, this needs Credits' own tools, not this shortcut. Everything
+    else item editing checks (voided/type/linked/PDC) still applies.
+
+    Every path re-posts the ledger: reverse what was posted, then post
+    fresh with the corrected method, so the money moves to the right
+    account instead of leaving a stale posting behind."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     sale = db.get(models.Sale, sale_id)
@@ -1198,11 +1231,98 @@ def edit_sale_payment_method(
 
     if not is_staff(user):
         return _back("denied")
+
+    form = await request.form()
+    new_method = (form.get("new_method") or "").strip().lower()
+    is_currently_credit = (sale.receivable_amount or 0) > 0
+
+    if is_currently_credit and new_method != "receivable":
+        # Credit -> direct-tender. Same base checks as item editing, minus
+        # the "credit" one (that's the whole point here) — done by hand
+        # instead of calling _can_edit_sale_items, which would reject a
+        # credit sale outright.
+        if sale.is_voided:
+            return _back("voided")
+        if sale.txn_type != "sale":
+            return _back("type")
+        if db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id).first():
+            return _back("linked")
+        if db.query(models.PostDatedCheque.id).filter(models.PostDatedCheque.sale_id == sale.id).first():
+            return _back("pdc")
+        if new_method not in EDIT_PAYMENT_METHODS:
+            return _back("invalid")
+        settled = (
+            db.query(func.coalesce(func.sum(models.ReceivableSettlement.amount), 0))
+            .filter(models.ReceivableSettlement.sale_id == sale.id)
+            .scalar()
+        )
+        if Decimal(str(settled or 0)) > 0:
+            return _back("partially_paid")
+
+        sale.receivable_amount = Decimal("0")
+        sale.due_date = None
+        sale.amount_tendered = sale.total
+        sale.change_amount = Decimal("0")
+        sale.payment_method = METHOD_LABELS[new_method]
+        db.add(models.Payment(sale_id=sale.id, method=new_method, amount=sale.total))
+
+        accounting.reverse_sale_posting(db, sale, reason=f"Payment method corrected: receivable -> {new_method}", entered_by_id=user.id)
+        try:
+            accounting.post_sale(db, sale, method_rows=[(new_method, sale.total)], receivable_amount=Decimal("0"), entered_by_id=user.id)
+        except accounting.PostingError:
+            pass
+        audit.record(
+            db, user=user, request=request, action="update", entity_type="sale",
+            entity_id=sale.id, entity_label=sale.invoice_no,
+            summary=f"Corrected payment method for sale {sale.invoice_no}: receivable → {new_method}",
+            changes={"payment_method": ["receivable", new_method]},
+        )
+        db.commit()
+        return _back()
+
+    if not is_currently_credit and new_method == "receivable":
+        # Direct-tender -> Credit.
+        block_reason = _can_edit_sale_items(db, sale)
+        if block_reason:
+            return _back(block_reason)
+        customer_id = sale.customer_id
+        if not customer_id:
+            typed_name = (form.get("customer_name") or "").strip()
+            if not typed_name:
+                return _back("needs_customer")
+            customer = get_or_create_customer(db, typed_name)
+            customer_id = customer.id
+            sale.customer_id = customer_id
+            sale.customer_name = customer.name
+        customer = db.get(models.Customer, customer_id)
+        days = customer.credit_days if customer and customer.credit_days is not None else 15
+
+        old_method = sale.payments[0].method
+        db.query(models.Payment).filter(models.Payment.sale_id == sale.id).delete(synchronize_session=False)
+        sale.receivable_amount = sale.total
+        sale.amount_tendered = Decimal("0")
+        sale.change_amount = Decimal("0")
+        sale.due_date = date.today() + timedelta(days=int(days))
+        sale.payment_method = METHOD_LABELS["receivable"]
+
+        accounting.reverse_sale_posting(db, sale, reason=f"Payment method corrected: {old_method} -> receivable", entered_by_id=user.id)
+        try:
+            accounting.post_sale(db, sale, method_rows=[], receivable_amount=sale.total, entered_by_id=user.id)
+        except accounting.PostingError:
+            pass
+        audit.record(
+            db, user=user, request=request, action="update", entity_type="sale",
+            entity_id=sale.id, entity_label=sale.invoice_no,
+            summary=f"Corrected payment method for sale {sale.invoice_no}: {old_method} → receivable (due {sale.due_date})",
+            changes={"payment_method": [old_method, "receivable"]},
+        )
+        db.commit()
+        return _back()
+
+    # Direct-tender -> direct-tender (unchanged from before).
     block_reason = _can_edit_sale_items(db, sale)
     if block_reason:
         return _back(block_reason)
-
-    new_method = (new_method or "").strip().lower()
     if new_method not in EDIT_PAYMENT_METHODS:
         return _back("invalid")
 
@@ -1214,8 +1334,6 @@ def edit_sale_payment_method(
     payment.method = new_method
     sale.payment_method = METHOD_LABELS[new_method]
 
-    # Move the ledger posting from the old money account to the new one —
-    # reverse what was posted, then post fresh with the corrected method.
     accounting.reverse_sale_posting(db, sale, reason=f"Payment method corrected: {old_method} -> {new_method}", entered_by_id=user.id)
     try:
         accounting.post_sale(
