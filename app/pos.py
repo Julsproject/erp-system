@@ -1041,6 +1041,7 @@ def pos_receipt(
     edit_date_error: str = "",
     edit_items_error: str = "",
     edit_payment_error: str = "",
+    edit_invoice_error: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -1077,6 +1078,7 @@ def pos_receipt(
          "linked": linked, "original": original, "credit_outstanding": credit_outstanding,
          "can_void": _can_void_sale(user), "void_error": VOID_ERRORS.get(void_error),
          "can_edit_date": is_staff(user), "edit_date_error": EDIT_DATE_ERRORS.get(edit_date_error),
+         "can_edit_invoice": is_staff(user), "edit_invoice_error": EDIT_INVOICE_ERRORS.get(edit_invoice_error),
          "today_iso": datetime.now(MANILA).date().isoformat(),
          "can_edit_items": is_staff(user) and _can_edit_sale_items(db, sale) is None,
          "edit_items_error": EDIT_ITEMS_ERRORS.get(edit_items_error),
@@ -1109,6 +1111,13 @@ EDIT_DATE_ERRORS = {
     "future": "Transaction date can't be in the future.",
 }
 
+EDIT_INVOICE_ERRORS = {
+    "denied": "You don't have permission to edit a sale's invoice #.",
+    "voided": "This sale is voided — its invoice # can't be edited.",
+    "empty": "Invoice # is required.",
+    "used": "That invoice # is already used by another sale.",
+}
+
 # Editing a sale's items in place is only offered for the simple, common
 # case — a same-day walk-in mistake caught before anything else built on
 # it. Anything involving credit, a cheque, a split payment, or a linked
@@ -1134,14 +1143,25 @@ def _can_edit_sale_items(db: Session, sale: models.Sale):
     in-place item editing. Same underlying restrictions as void (see
     void_sale) — an edit is really "reverse the old lines, apply new ones to
     the same invoice" under the hood, so anywhere void wouldn't be safe,
-    editing isn't either."""
+    editing isn't either. A credit sale is allowed too, but only if NOTHING
+    has been paid against it yet — once the customer's started paying it
+    down, correcting the total here would leave a settlement referring to
+    an amount that no longer matches (same "partially_paid" idea as
+    switching a credit sale's payment method back to direct-tender)."""
     if sale.is_voided:
         return "voided"
     if sale.txn_type != "sale":
         return "type"
-    if (sale.receivable_amount or 0) > 0:
-        return "credit"
-    if len(sale.payments) != 1:
+    is_credit = (sale.receivable_amount or 0) > 0
+    if is_credit:
+        settled = (
+            db.query(func.coalesce(func.sum(models.ReceivableSettlement.amount), 0))
+            .filter(models.ReceivableSettlement.sale_id == sale.id)
+            .scalar()
+        )
+        if Decimal(str(settled or 0)) > 0:
+            return "partially_paid"
+    elif len(sale.payments) != 1:
         return "split"
     if db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id).first():
         return "linked"
@@ -1241,6 +1261,52 @@ def void_sale(
         db, user=user, request=request, action="void", entity_type="sale",
         entity_id=sale.id, entity_label=sale.invoice_no,
         summary=f"Voided sale {sale.invoice_no}: {reason}",
+    )
+    db.commit()
+    return _back()
+
+
+@router.post("/pos/receipt/{sale_id:int}/edit-invoice")
+def edit_sale_invoice(
+    sale_id: int,
+    request: Request,
+    new_invoice_no: str = Form(""),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Correct the invoice # on an already-saved sale — for a typo when
+    copying the number off the physical booklet. Staff only, and the new
+    number must not collide with another sale's."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    sale = db.get(models.Sale, sale_id)
+    if not sale:
+        return RedirectResponse("/pos", status_code=302)
+
+    def _back(err=None):
+        suffix = f"&edit_invoice_error={err}" if err else ""
+        return RedirectResponse(f"/pos/receipt/{sale_id}?from=sales{suffix}", status_code=302)
+
+    if not is_staff(user):
+        return _back("denied")
+    if sale.is_voided:
+        return _back("voided")
+
+    new_invoice_no = (new_invoice_no or "").strip()
+    if not new_invoice_no:
+        return _back("empty")
+    if new_invoice_no == sale.invoice_no:
+        return _back()
+    if db.query(models.Sale.id).filter(models.Sale.invoice_no == new_invoice_no, models.Sale.id != sale.id).first():
+        return _back("used")
+
+    old_invoice_no = sale.invoice_no
+    sale.invoice_no = new_invoice_no
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="sale",
+        entity_id=sale.id, entity_label=sale.invoice_no,
+        summary=f"Corrected invoice # for sale: {old_invoice_no} → {new_invoice_no}",
+        changes={"invoice_no": [old_invoice_no, new_invoice_no]},
     )
     db.commit()
     return _back()
@@ -1587,13 +1653,23 @@ async def edit_sale_items(sale_id: int, request: Request, db: Session = Depends(
     sale.net_amount = _money(net)
     sale.total = _money(total)
 
-    # Exactly one non-credit payment is guaranteed by _can_edit_sale_items —
-    # auto-adjust it to settle the corrected total exactly (per shop's own
-    # choice: this is a same-day cash-drawer correction, not a new sale).
-    payment = sale.payments[0]
-    payment.amount = _money(total)
-    sale.amount_tendered = _money(total)
-    sale.change_amount = Decimal("0")
+    # _can_edit_sale_items guarantees either exactly one non-credit payment,
+    # or an unsettled credit sale — auto-adjust whichever one applies to
+    # match the corrected total exactly (per shop's own choice: this is a
+    # same-day correction, not a new sale).
+    if (sale.receivable_amount or 0) > 0:
+        sale.receivable_amount = _money(total)
+        # _finalize_sale records a Payment row even for a receivable/cheque
+        # "method" (see its `for method, amount in method_rows` loop) — keep
+        # it in sync too, or it's left showing the pre-edit amount forever.
+        for payment in sale.payments:
+            if payment.method in ("receivable", "cheque"):
+                payment.amount = _money(total)
+    else:
+        payment = sale.payments[0]
+        payment.amount = _money(total)
+        sale.amount_tendered = _money(total)
+        sale.change_amount = Decimal("0")
 
     audit.record(
         db, user=user, request=request, action="update", entity_type="sale",

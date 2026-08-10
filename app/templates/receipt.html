@@ -102,7 +102,7 @@
     <div class="r-head-2col">
       <div class="r-head-left">
         <div class="r-doc-type">{{ doc_label }}</div>
-        <div class="r-meta-line">Invoice #: <b>{{ sale.invoice_no }}</b></div>
+        <div class="r-meta-line">Invoice #: <b>{{ sale.invoice_no }}</b>{% if can_edit_invoice and not sale.is_voided %} <a href="#" onclick="showEditInvoice(event)" style="font-size:11px;">✎ edit</a>{% endif %}</div>
         <div class="r-meta-line">Date: <b>{{ sale.created_at.strftime('%b %d, %Y %I:%M %p') if sale.created_at else '' }}</b>{% if can_edit_date and not sale.is_voided %} <a href="#" onclick="showEditDate(event)" style="font-size:11px;">✎ edit</a>{% endif %}</div>
         <div class="r-meta-line">Cashier: <b>{{ sale.cashier.full_name or sale.cashier.username if sale.cashier else '—' }}</b></div>
         {% if sale.encoded_by %}<div class="r-meta-line">Encoded by: <b>{{ sale.encoded_by.name }}</b></div>{% endif %}
@@ -140,6 +140,9 @@
     {% if edit_payment_error %}
     <div class="void-error">⚠ {{ edit_payment_error }}</div>
     {% endif %}
+    {% if edit_invoice_error %}
+    <div class="void-error">⚠ {{ edit_invoice_error }}</div>
+    {% endif %}
 
     {% if can_edit_payment and not sale.is_voided and (is_credit_sale or sale.payments|length == 1) %}
     <form id="editPaymentForm" method="post" action="/pos/receipt/{{ sale.id }}/edit-payment"
@@ -169,6 +172,21 @@
         <button type="button" class="btn back" style="padding:6px 12px;font-size:12px;" onclick="hideEditPayment()">Cancel</button>
       </div>
       <p style="margin:8px 0 0;color:var(--muted);">Moves the ledger posting to the corrected account too — switching to Credit opens (or adds to) the customer's account here, same as ringing it up on credit from the start. Switching a credit sale back only works if nothing's been paid on it yet.</p>
+    </form>
+    {% endif %}
+
+    {% if can_edit_invoice and not sale.is_voided %}
+    <form id="editInvoiceForm" method="post" action="/pos/receipt/{{ sale.id }}/edit-invoice"
+          style="display:none;margin:0 0 12px;padding:9px 11px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:12px;">
+      <label style="color:var(--ink);">Correct the invoice #
+        <input type="text" name="new_invoice_no" value="{{ sale.invoice_no }}"
+               style="display:block;margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;">
+      </label>
+      <div style="margin-top:8px;display:flex;gap:8px;">
+        <button type="submit" class="btn print" style="padding:6px 12px;font-size:12px;">Save</button>
+        <button type="button" class="btn back" style="padding:6px 12px;font-size:12px;" onclick="hideEditInvoice()">Cancel</button>
+      </div>
+      <p style="margin:8px 0 0;color:var(--muted);">For a typo on the booklet number — must not already be used by another sale.</p>
     </form>
     {% endif %}
 
@@ -356,6 +374,19 @@
       document.getElementById('voidReason').value = reason.trim();
       document.getElementById('voidForm').submit();
     }
+  </script>
+  {% endif %}
+
+  {% if can_edit_invoice and not sale.is_voided %}
+  <script>
+    function showEditInvoice(e) {
+      if (e) e.preventDefault();
+      document.getElementById('editInvoiceForm').style.display = 'block';
+    }
+    function hideEditInvoice() {
+      document.getElementById('editInvoiceForm').style.display = 'none';
+    }
+    {% if edit_invoice_error %}showEditInvoice();{% endif %}
   </script>
   {% endif %}
 
