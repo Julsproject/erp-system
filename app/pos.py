@@ -284,7 +284,7 @@ async def pos_quick_product(request: Request, db: Session = Depends(get_db), use
     return {"ok": True, "existed": False, "product": _product_payload_for_pos(product)}
 
 
-def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied, discount_total, lines, payments, txn_date=None, receipt_type=None, encoded_by_id=None):
+def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied, discount_total, lines, payments, txn_date=None, receipt_type=None, encoded_by_id=None, delivery_address=None, notes=None):
     """Create and commit a real Sale from line items + payments.
 
     Shared by POS checkout and by quotations converting to a paid sale, so the
@@ -327,6 +327,8 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
         invoice_no=invoice_no, receipt_type=(receipt_type or "").strip() or None,
         customer_name=customer_name or None, cashier_id=user.id,
         encoded_by_id=encoded_by_id,
+        delivery_address=(delivery_address or "").strip() or None,
+        notes=(notes or "").strip() or None,
     )
     if backdated:
         sale.created_at = backdated
@@ -517,6 +519,8 @@ async def pos_checkout(request: Request, db: Session = Depends(get_db), user=Dep
         txn_date=data.get("txn_date"),
         receipt_type=data.get("receipt_type"),
         encoded_by_id=data.get("encoded_by_id"),
+        delivery_address=data.get("delivery_address"),
+        notes=data.get("notes"),
     )
     if not ok:
         return JSONResponse({"ok": False, "error": result}, status_code=400)
@@ -1631,11 +1635,15 @@ def pos_receipt_pdf(sale_id: int, db: Session = Depends(get_db), user=Depends(ge
         doc_meta.append(f"Cashier: {sale.cashier.full_name or sale.cashier.username}")
 
     party_lines = [sale.customer_name or "Walk-in"]
-    if sale.customer:
-        if sale.customer.tin:
-            party_lines.append(f"TIN {sale.customer.tin}")
-        if sale.customer.address:
-            party_lines.append(sale.customer.address)
+    if sale.customer and sale.customer.tin:
+        party_lines.append(f"TIN {sale.customer.tin}")
+    # The sale's own delivery address (editable per sale) wins over the
+    # customer's saved one — same as what's shown on the on-screen receipt.
+    delivery_addr = sale.delivery_address or (sale.customer.address if sale.customer else None)
+    if delivery_addr:
+        party_lines.append(f"Delivery Address: {delivery_addr}")
+    if sale.notes:
+        party_lines.append(f"Note: {sale.notes}")
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm, leftMargin=18 * mm, rightMargin=18 * mm)

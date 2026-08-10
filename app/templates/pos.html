@@ -158,6 +158,13 @@
         <div id="custResults" class="cust-dropdown" style="display:none;"></div>
         <button type="button" class="btn-link" style="margin-top:4px;font-size:12px;" onclick="showNewCustomer()">＋ New / edit customer details</button>
       </label>
+      <label class="pos-customer">Delivery address <span class="muted">(optional — for delivery items)</span>
+        <input id="deliveryAddress" type="text" placeholder="Auto-fills from the customer's saved address" autocomplete="off">
+        <small class="hint">Editing this doesn't change the customer's saved address — use "New / edit customer details" above for that.</small>
+      </label>
+      <label class="pos-customer">Note <span class="muted">(optional — additional instructions)</span>
+        <input id="saleNotes" type="text" placeholder="e.g. call before delivering, leave at guard house" autocomplete="off">
+      </label>
       <label class="pos-customer">Transaction date <span class="muted">(MM/DD — year is automatic, blank = today)</span>
         <input id="txnDate" type="text" placeholder="e.g. 8/8" autocomplete="off" oninput="updateTxnDatePreview()"
                title="Set the real date this sale happened when encoding a past transaction. Type just month/day — the year fills in automatically (this year, or last year if that day hasn't happened yet this year). Leave blank for a live sale today.">
@@ -430,6 +437,8 @@ function toggleOverallDiscType() {
 
 const searchBox = document.getElementById('posSearch');
 const customerBox = document.getElementById('customerName');
+const deliveryAddressBox = document.getElementById('deliveryAddress');
+const saleNotesBox = document.getElementById('saleNotes');
 const invoiceBox = document.getElementById('invoiceNo');
 const receiptTypeBox = document.getElementById('receiptType');
 const txnDateBox = document.getElementById('txnDate');
@@ -577,7 +586,7 @@ function renderCustResults(list) {
     el.type = 'button'; el.className = 'cust-item';
     el.innerHTML = '<span class="cust-item-name">' + escapeHtml(c.name) + '</span>' +
       (c.tin ? '<span class="cust-item-sub">TIN ' + escapeHtml(c.tin) + '</span>' : '');
-    el.onclick = () => { customerBox.value = c.name; hideCustResults(); computeTotals(); };
+    el.onclick = () => { customerBox.value = c.name; if (c.address) deliveryAddressBox.value = c.address; hideCustResults(); computeTotals(); };
     custResults.appendChild(el);
   });
   custResults.style.display = 'block';
@@ -829,6 +838,7 @@ async function saveCustomerDetails() {
   const data = await res.json();
   if (!data.ok) { err.textContent = data.error || 'Could not save the customer.'; err.style.display = 'block'; return; }
   customerBox.value = data.customer.name;
+  if (payload.address.trim()) deliveryAddressBox.value = payload.address.trim();
   hideNewCustomer();
   computeTotals();
 }
@@ -838,6 +848,7 @@ function clearCart() {
   document.getElementById('draftBanner').style.display = 'none';
   cart = []; payments = [{ method: 'cash', amount: '' }];
   document.getElementById('overallDiscount').value = 0; customerBox.value = ''; invoiceBox.value = '';
+  deliveryAddressBox.value = ''; saleNotesBox.value = '';
   document.getElementById('encodedBy').value = '';
   // Transaction date is deliberately NOT reset here — when encoding a batch
   // of backlogged sales for the same day, retyping "8/2" before every single
@@ -944,6 +955,8 @@ function saveDraft() {
       invoice: invoiceBox.value,
       receiptType: receiptTypeBox.value,
       customer: customerBox.value,
+      deliveryAddress: deliveryAddressBox.value,
+      notes: saleNotesBox.value,
       txnDate: txnDateBox.value,
       encodedById: document.getElementById('encodedBy').value,
       vat: document.getElementById('vatOn').checked,
@@ -977,6 +990,8 @@ function restoreDraft() {
   invoiceBox.value = d.invoice || '';
   if (d.receiptType) receiptTypeBox.value = d.receiptType;
   customerBox.value = d.customer || '';
+  deliveryAddressBox.value = d.deliveryAddress || '';
+  saleNotesBox.value = d.notes || '';
   txnDateBox.value = d.txnDate || '';
   document.getElementById('encodedBy').value = d.encodedById || '';
   updateTxnDatePreview();
@@ -1205,6 +1220,8 @@ async function checkout() {
       invoice_no: invoiceBox.value,
       receipt_type: receiptTypeBox.value,
       customer_name: customerBox.value,
+      delivery_address: deliveryAddressBox.value,
+      notes: saleNotesBox.value,
       txn_date: quickDateToISO(txnDateBox.value).iso,
       encoded_by_id: document.getElementById('encodedBy').value,
       vat_applied: document.getElementById('vatOn').checked,

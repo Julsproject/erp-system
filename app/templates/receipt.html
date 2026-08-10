@@ -124,6 +124,12 @@
     {% endif %}
 
     <div class="r-billto">Customer: <b>{{ sale.customer_name or 'Walk-in' }}</b></div>
+    {% if sale.delivery_address %}
+    <div class="r-billto">Delivery Address: <b>{{ sale.delivery_address }}</b></div>
+    {% endif %}
+    {% if sale.notes %}
+    <div class="r-billto">Note: <b>{{ sale.notes }}</b></div>
+    {% endif %}
 
     {% if void_error %}
     <div class="void-error">⚠ {{ void_error }}</div>

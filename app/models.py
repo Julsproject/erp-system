@@ -419,6 +419,16 @@ class Sale(Base):
     voided_at = Column(DateTime(timezone=True), nullable=True)
     voided_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
+    # Where this sale's items go, for delivery — auto-filled from the
+    # customer's own address when one's on file, but freely editable per
+    # sale without ever writing back to Customer.address (a one-off "actually
+    # deliver to my office, not my billing address" shouldn't overwrite their
+    # record — use "New / edit customer details" in POS for that).
+    delivery_address = Column(String(255), nullable=True)
+    # Freeform additional instructions ("call before delivering", "leave at
+    # the guard house") — blank by default, shown on the receipt.
+    notes = Column(String(255), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     lines = relationship("SaleLine", back_populates="sale", cascade="all, delete-orphan")
