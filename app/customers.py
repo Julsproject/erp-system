@@ -37,6 +37,52 @@ def get_or_create_customer(db: Session, name: str):
     return cust
 
 
+@router.post("/customers/quick")
+async def quick_customer(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Create (or update) a customer straight from POS, without leaving the
+    sale — same idea as /suppliers/quick on the Purchases form. Unlike that
+    one, an existing match by name gets its details UPDATED here rather than
+    left alone: the whole point of this popup is "I already have this
+    walk-in typed in, let me also attach their TIN/address/terms now,"
+    which only makes sense if a second save on the same name actually
+    changes something."""
+    if not user:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    if not is_staff(user):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+
+    data = await request.json()
+    name = (data.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "Customer name is required."}, status_code=400)
+
+    tin = (data.get("tin") or "").strip() or None
+    address = (data.get("address") or "").strip() or None
+    raw_days = (data.get("credit_days") or "").strip() if isinstance(data.get("credit_days"), str) else data.get("credit_days")
+    try:
+        credit_days = int(raw_days) if raw_days not in (None, "") else None
+    except (TypeError, ValueError):
+        credit_days = None
+
+    customer = db.query(models.Customer).filter(func.lower(models.Customer.name) == name.lower()).first()
+    if customer:
+        if tin:
+            customer.tin = tin
+        if address:
+            customer.address = address
+        if credit_days is not None:
+            customer.credit_days = credit_days
+    else:
+        customer = models.Customer(
+            name=name, tin=tin, address=address,
+            credit_days=credit_days if credit_days is not None else 15,
+        )
+        db.add(customer)
+    db.commit()
+    db.refresh(customer)
+    return {"ok": True, "customer": {"id": customer.id, "name": customer.name}}
+
+
 @router.get("/customers/search")
 def search_customers(q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     """JSON autocomplete for the POS customer field."""

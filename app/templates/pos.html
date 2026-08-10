@@ -102,6 +102,36 @@
   <datalist id="np-subcats">{% for sc in subcategories %}<option value="{{ sc.name }}">{% endfor %}</datalist>
   <datalist id="np-units">{% for u in unit_types %}<option value="{{ u.name }}">{% endfor %}</datalist>
 
+  <!-- POPUP: add/edit a customer's details (TIN, address, credit terms)
+       without leaving POS. Typing a plain name in the Customer field above
+       and doing nothing else still just works (get_or_create_customer makes
+       a bare-name record at checkout) — this is only for when you actually
+       want to attach more than a name, same idea as "New supplier" on the
+       Purchases form. Leaving the field blank keeps the sale Walk-in. -->
+  <div id="ncOverlay" class="modal-overlay" style="display:none;" onclick="if (event.target === this) hideNewCustomer();">
+    <div class="modal-box np-panel">
+      <h3 class="np-title" id="ncTitle">New customer</h3>
+      <label>Customer name
+        <input id="ncName" type="text" autocomplete="off">
+      </label>
+      <label>TIN <span class="muted">— optional</span>
+        <input id="ncTin" type="text" placeholder="optional" autocomplete="off">
+      </label>
+      <label>Address <span class="muted">— optional</span>
+        <input id="ncAddress" type="text" placeholder="optional" autocomplete="off">
+      </label>
+      <label>Credit terms (days) <span class="muted">— for later credit sales</span>
+        <input id="ncCreditDays" type="number" min="0" step="1" placeholder="15">
+      </label>
+      <div class="np-actions">
+        <button type="button" class="btn" onclick="saveCustomerDetails()">Save &amp; select</button>
+        <button type="button" class="btn-secondary" onclick="hideNewCustomer()">Cancel</button>
+      </div>
+      <div id="ncError" class="alert" style="display:none;margin:10px 0 0;"></div>
+      <p class="hint np-hint">Leave the Customer field blank on the sale itself if this is a plain Walk-in — this popup is only for when you want to record more than just a name.</p>
+    </div>
+  </div>
+
   <!-- RIGHT: cart -->
   <section class="card pos-cart-panel">
     <div id="draftBanner" class="alert" style="display:none;background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8;margin-bottom:14px;">
@@ -126,6 +156,7 @@
       <label class="pos-customer cust-field">Customer <span class="muted">(optional)</span>
         <input id="customerName" type="text" placeholder="Walk-in — type to find existing" autocomplete="off">
         <div id="custResults" class="cust-dropdown" style="display:none;"></div>
+        <button type="button" class="btn-link" style="margin-top:4px;font-size:12px;" onclick="showNewCustomer()">＋ New / edit customer details</button>
       </label>
       <label class="pos-customer">Transaction date <span class="muted">(MM/DD — year is automatic, blank = today)</span>
         <input id="txnDate" type="text" placeholder="e.g. 8/8" autocomplete="off" oninput="updateTxnDatePreview()"
@@ -767,6 +798,39 @@ async function createProduct() {
   document.getElementById('npSubcategory').value = '';
   document.getElementById('npUnit').value = ''; document.getElementById('npCost').value = '';
   document.getElementById('npBeginning').value = ''; document.getElementById('npStockQty').value = ''; document.getElementById('npReorder').value = '';
+}
+
+/* ---- add/edit a customer's details (TIN, address, credit terms) without
+   leaving POS — mirrors "New supplier" on the Purchases form ---- */
+function showNewCustomer() {
+  const typed = customerBox.value.trim();
+  document.getElementById('ncName').value = typed;
+  document.getElementById('ncTin').value = '';
+  document.getElementById('ncAddress').value = '';
+  document.getElementById('ncCreditDays').value = '';
+  document.getElementById('ncTitle').textContent = typed ? 'Edit customer' : 'New customer';
+  document.getElementById('ncError').style.display = 'none';
+  document.getElementById('ncOverlay').style.display = 'flex';
+}
+function hideNewCustomer() {
+  document.getElementById('ncOverlay').style.display = 'none';
+}
+async function saveCustomerDetails() {
+  const name = document.getElementById('ncName').value.trim();
+  const err = document.getElementById('ncError');
+  if (!name) { err.textContent = 'Customer name is required.'; err.style.display = 'block'; return; }
+  const payload = {
+    name: name,
+    tin: document.getElementById('ncTin').value,
+    address: document.getElementById('ncAddress').value,
+    credit_days: document.getElementById('ncCreditDays').value,
+  };
+  const res = await fetch('/customers/quick', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+  const data = await res.json();
+  if (!data.ok) { err.textContent = data.error || 'Could not save the customer.'; err.style.display = 'block'; return; }
+  customerBox.value = data.customer.name;
+  hideNewCustomer();
+  computeTotals();
 }
 
 function clearCart() {
