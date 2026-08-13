@@ -1,6 +1,6 @@
 # Hardware ERP
 
-An in-house **POS + Inventory + Sales** system for a hardware store. Runs on one PC and is usable from any device on the same network through a web browser.
+An in-house **POS + Inventory + Sales + full Accounting** system for a hardware store (Leafar Merchandising). Runs on one PC and is usable from any device on the same network through a web browser.
 
 - **Stack:** Python + FastAPI + Jinja2 (server-rendered) · PostgreSQL · Docker Compose
 - **Access:** a web browser — on the host PC or any phone/PC on the same LAN
@@ -8,47 +8,75 @@ An in-house **POS + Inventory + Sales** system for a hardware store. Runs on one
 
 ---
 
-## Features (built so far)
+## Features
 
-**Inventory**
-- Products with **Category** and **Unit Type** (create-your-own — just type a new one)
-- **Three selling prices on every item**, set on the product form and on the
-  purchase screen's quick "create product" panel:
-  - **Fixed** — typed in directly (the default POS price).
-  - **Markup %** — `cost × (1 + pct/100)`, a % *on top of cost*.
-  - **Margin %** — `cost ÷ (1 − pct/100)`, a % *of the selling price*.
+### Inventory
+- Products with **Category**, **Sub Category**, **Unit Type**, and **Shelf** (all create-your-own — just type a new one)
+- **Three selling prices on every item** — Fixed, Markup %, Margin % — computed from cost and kept in sync by shared math in `app/pricing.py`
+- **Units ladder**: sell one product in several units (e.g. Bag = 40 kg, Sack = 25 kg), each optionally chained off another unit (e.g. "1 Elf Load = 6 Sack") and each with its own Fixed/Markup/Margin pricing
+- **Shelves** (`/shelves`): where each product physically sits in the store — browse by shelf, filter Inventory by shelf, and pull a shelf's items into a Stock Count in one click
+- **Bulk import** from Excel/CSV — two flows: Normal Products (no unit conversion) and Units & Conversions (ladder pricing); download-a-template-first on both
+- **Stock Count** (cycle count, `/stock-count`): scan/search or bulk-add-by-shelf, live variance vs system qty, per-unit count entry (e.g. "2 sacks + 1 open bag"), bulk upload of counted quantities from Excel, apply corrections on Complete (logged to Activity Log, Stock Card, and Inventory Adjustments report)
+- **Stock Card** (`/products/{id}/stock-card`, admin) — full per-product movement ledger with running balance
+- **Month-End Rollover** — folds Stocks Qty into Actual Beginning at month end; history kept per product, per month
+- Search + pagination, VAT-able toggle, Archive
 
-  You enter the two percentages; their prices are calculated from cost and
-  refresh whenever the cost changes. Each row shows its profit and **true
-  margin**, because markup and margin are not interchangeable: on a ₱300 cost,
-  30% markup gives ₱390 (only a 23.1% margin) while 30% margin gives ₱428.57.
-  Since the Gross Profit reports measure profit as a share of revenue, a
-  markup-priced sale always reports a lower % than the number typed.
-  Shared maths lives in `app/pricing.py` so the form, the purchase panel and
-  the server can't drift apart.
-- **Choosing a price at POS** — the per-line *unit* dropdown lists all three
-  (`piece`, `piece · Markup`, `piece · Margin`) with their prices, so the
-  cashier picks one from the control they already use; different lines can use
-  different prices. The extra options only appear once a markup/margin % is
-  set, so items priced the old way look unchanged. `sale_lines.price_tier`
-  records which price was charged (shown on the receipt), so two sales of the
-  same item at different prices can be told apart later.
-- Columns: Product Name, Category, Unit Type, Cost of Sales, Selling Price, Actual Beginning Stocks, Stocks Qty, **Total Qty** (auto)
-- Search + pagination (fast with a large catalog)
-- **Bulk import** from Excel/CSV (download a template, fill it, upload)
-- **Units ladder** (multi-unit): sell one product in several units (e.g. Bag = 50 kg) each with its own price
-- VAT-able toggle per product · Archive items
+### Point of Sale
+Three modes on one screen:
+- **Payment** — search & add products, choose the selling unit and price tier, per-line/overall discounts, live VAT, **Full or Split payment** (Cash / GCash / Maya / Other E-Wallet / Card / Bank Transfer / Cheque / Receivable), typed or auto invoice number with **receipt-type prefix** (DRS/DRB/SI), transaction date **backdating**, printable receipt (regular + thermal) and PDF
+- **Refund** — look up an invoice, tick items to refund, stock added back
+- **Exchange** — return items + buy new ones in one transaction; stock adjusted both ways
+- **Void a Sale** (admin/manager, cashier-permission toggle in Settings) — reverses stock and payment on a clean sale (no credit/refund/exchange/PDC attached) with a required reason; voided sales are pulled from every report but stay visible under **Voided Sales**
+- On-the-fly **new/edit customer**, calculator popup with keyboard/numpad support, cancelled-receipt-number tracking (`/pos/cancelled-receipts`)
 
-**Point of Sale** — three modes:
-- **Payment** — search & add products, choose the selling unit, per-line and overall discounts, live VAT, **Full or Split payment** (Cash / GCash / Card / Bank Transfer / Receivable), change, typed invoice number, printable receipt. Overselling is allowed (with a warning).
-- **Refund** — look up an invoice, tick the items to refund → cash out, **stock added back**.
-- **Exchange** — return items + buy new ones; pay the difference or get a cash refund; stock adjusted both ways.
-
-**Customers & Credit**
-- Customer accounts (Name, TIN, Address)
+### Customers & Credit
+- Customer accounts (Name, TIN, Address) with editable delivery address/note per sale
 - **Receivable ("utang")** as a payment method; auto-creates the customer
-- **Sales history** — All Sales (fully-paid) and **Receivables** (unpaid utang) with a **Pay** button to settle
+- **Sales history** — All Sales (fully-paid), **Receivables** (unpaid utang) with a Pay button, Returns, Exchanges, Voided Sales
 - **Credits** menu — search a customer → printable **Statement of Account**
+- **Quotations** — price estimates with a pending → confirmed → paid lifecycle; converts into a real Sale on payment
+
+### Purchasing & Suppliers
+- **Suppliers** — profiles + per-supplier purchase history
+- **Purchases** (`/purchases`) — receive goods (pending → confirmed → paid) or return goods to a supplier; confirming updates stock and the product's cost price; **Delivery date backdating**; item editing on unsettled purchases
+- **Payables** with due-date aging
+
+### Delivery Management
+- Schedule a delivery from a receipt or invoice # lookup; pending → out for delivery → delivered/cancelled
+- **Cash on Delivery (COD)** — ties into Receivables; marking Delivered records the collection as a settlement in the same step
+
+### Cash & Banking
+- Multiple bank accounts with a running balance derived from their deposit/withdrawal ledger (never stored)
+- **Post-dated cheques (PDC)** register — received (from a customer) or issued (to a supplier); clearing/bouncing only takes effect once the bank actually honors it; supports **multi-invoice application** and a 3-bucket due-date alert
+- **Bank Reconciliation** — match transactions against an imported bank statement (CSV import + Excel export)
+- **Petty Cash** as an account kind
+
+### Full Accounting (`/accounting`, admin)
+Double-entry bookkeeping layered on top of every other module — nothing is entered twice:
+- **Chart of Accounts** + account mappings
+- **Automatic posting** from Sales, Purchases, Expenses, Receivable settlements, and Banking/PDC — the journal entry is created the moment the underlying transaction happens
+- **General Ledger**, **Trial Balance** (Excel export), **manual Journal Entries** (draft/post/delete/reverse)
+- **Balance Sheet** and ledger-based **Profit & Loss**
+- **VAT Report** — Output VAT vs Input VAT, netted to VAT Payable
+- **Cash Book / Bank Ledger**, **Cash Flow Statement** (Excel export)
+- **AR / AP Subledgers** — per-customer / per-supplier drill-down
+- **Financial Dashboard** — rollup of every accounting report in one place
+
+### Reports (`/reports`)
+The operational/management-facing reports, separate from the ledger-based Accounting suite above:
+Profit & Loss, Sales by Product, Sales by Unit, Inventory Valuation, Low Margin, Inventory Adjustments, Month-End Rollover History, **Weekly Summary printout**.
+
+### Expenses
+Categorized (create-your-own), receipt #, file attachments, Credit Card as a payment method, filterable, void instead of delete.
+
+### Admin
+- **Users** (admin-only) — create cashier/manager/admin logins, roles
+- **Encoders** — a managed list of who actually wrote up a sale, separate from login accounts (for shops where several people share one POS login)
+- **Settings** (admin-only) — business name/receipt header, minimum-margin and low-stock alert thresholds, cashier-void permission toggle, change your own password
+- **Notifications Center** — one inbox for low/out-of-stock, below-cost pricing, overdue/due-soon credits, cheques due, pending deliveries, stale backup
+- **Activity Log** (admin-only) — system-wide who-did-what trail with before/after diffs on edits
+- **Cashier Activity** — read-only per-day summary of what a cashier processed
+- **Backup** (admin-only) — on-demand download + browse the automatic daily backups
 
 ---
 
@@ -62,7 +90,7 @@ An in-house **POS + Inventory + Sales** system for a hardware store. Runs on one
 
 ## Quick start (Docker — recommended)
 
-From this folder (`D:\hardware-erp`), open a terminal and run:
+From this folder, open a terminal and run:
 
 ```powershell
 docker compose up -d --build
@@ -85,8 +113,6 @@ That single command:
 
 ## Everyday commands
 
-Run these from the `D:\hardware-erp` folder:
-
 ```powershell
 docker compose up -d          # start (fast after the first build)
 docker compose down           # stop (all data is kept)
@@ -100,8 +126,6 @@ The system also **auto-starts** when the PC boots (as long as Docker Desktop is 
 ---
 
 ## Configuration (`.env`)
-
-Settings live in the `.env` file in this folder:
 
 ```
 APP_NAME=Hardware ERP          # shown on the login screen and receipts
@@ -117,6 +141,8 @@ docker compose up -d
 ```
 
 > The admin user is only **created** the first time. Changing `ADMIN_PASSWORD` later won't update an existing admin — change the password from inside the app instead (or ask the developer).
+
+Most other display/behavior settings (business name, receipt header, low-stock/margin thresholds, cashier-void permission) are editable from **Settings** in-app — no `.env` edit or rebuild needed for those.
 
 ---
 
@@ -138,7 +164,9 @@ Then browse **Databases → hardware_erp → Schemas → public → Tables**, ri
 
 ## Backup & restore
 
-Everything lives in the Postgres volume. To back up:
+An automatic daily backup service is included (`hardware-erp-backup` in `docker-compose.yml`) — it writes a dump to the shared `backups/` folder once a day and keeps `BACKUP_KEEP_DAYS` (default 31) of history. The **Backup** page in-app (admin-only) lets you download a fresh one on demand or re-download any of the scheduled ones.
+
+Manual equivalents:
 
 ```powershell
 docker exec hardware-erp-db pg_dump -U erp hardware_erp > backup.sql
@@ -156,56 +184,65 @@ type backup.sql | docker exec -i hardware-erp-db psql -U erp -d hardware_erp
 
 ```
 app/
-  main.py         FastAPI app + router registration (login/logout, dashboard)
+  main.py         FastAPI app + router registration
   config.py       settings loaded from .env
   database.py     SQLAlchemy engine + session
-  models.py       ORM models (users, products, units, sales, payments, customers, …)
+  models.py       ORM models (users, products, units, sales, payments, customers, accounting, …)
   auth.py         bcrypt password hashing
-  deps.py         shared auth dependency
-  templating.py   Jinja2 setup + ₱ / qty format filters
+  deps.py         shared auth dependencies (is_staff / is_admin)
+  templating.py   Jinja2 setup + peso / qty format filters
   seed.py         creates the initial admin user
-  products.py     Inventory module + Excel/CSV import
-  pos.py          Point of Sale: sale, refund, exchange, receipt
-  customers.py    Customer accounts
-  sales.py        Sales history + receivables + settlement
-  credits.py      Credit statements
-  templates/      HTML (Jinja2)
-  static/css/     styles
-migrations/       Alembic migrations (schema history, 0001…)
+  pricing.py       shared markup/margin math
+
+  products.py      Inventory + bulk import (normal + units)
+  shelves.py       Shelf locations
+  stock_count.py   Physical stock count
+  pos.py           POS: sale / refund / exchange / void / receipt
+  customers.py     Customer accounts
+  sales.py         Sales history + receivables + settlement + voided sales
+  quotations.py    Price estimates
+  credits.py       Credit statements
+  suppliers.py     Supplier profiles
+  purchases.py     Purchasing / receiving / returns
+  deliveries.py    Delivery scheduling + COD
+  expenses.py      Business expenses
+  banking.py       Bank accounts + ledger + reconciliation
+  pdc.py           Post-dated cheques
+  encoders.py      Who-wrote-up-the-sale list
+  reports.py       Operational reports (P&L, valuation, sales-by-*, weekly summary)
+  accounting.py    Full double-entry ledger: CoA, GL, Trial Balance, Balance Sheet, VAT, subledgers
+  dashboard.py     Home page: KPIs, charts, alerts
+  notifications.py Notifications Center
+  shifts.py        Cash drawer shift counts
+  activity.py      Cashier activity history
+  audit.py         Audit trail (record + view)
+  backup.py        DB backup UI
+  users.py         User accounts (admin-only)
+  settings.py      Settings UI (admin-only)
+
+  templates/       HTML (Jinja2), one folder per module
+  static/css/      styles
+migrations/        Alembic migrations (schema history)
 Dockerfile
 docker-compose.yml
-.env              your settings
+.env               your settings
 ```
 
 ---
 
 ## How the database is built
 
-Schema changes are versioned with **Alembic** migrations in `migrations/versions/`. They run **automatically on startup**, so you never run SQL by hand. Current migrations:
+Schema changes are versioned with **Alembic** migrations in `migrations/versions/`, numbered `0001` through the current head — they run **automatically on startup**, so you never run SQL by hand. Roughly, by range:
 
-| Rev | Adds |
+| Range | Covers |
 |---|---|
-| 0001 | users |
-| 0002 | categories, unit_types, products |
-| 0003 | product_units (units ladder), sales, sale_lines, stock_movements |
-| 0004 | customers, payments (split), receivable on sales |
-| 0005 | receivable_settlements (utang collections) |
-| 0006 | refund/exchange transaction type |
-| 0007 | suppliers, purchases (receiving) |
-| 0008 | dashboard support fields |
-| 0009 | cash_shifts (later dropped, see 0011) |
-| 0010 | quotations (estimates) |
-| 0011 | drop cash_shifts — replaced by automatic Cashier Activity history |
-| 0012 | purchase status lifecycle (pending/confirmed/paid/cancelled) |
-| 0013 | link a purchase return back to the delivery it came from |
-| 0014 | post_dated_cheques (PDC register) |
-| 0015 | expense_categories, expenses, deliveries |
-| 0016 | bank_accounts, bank_transactions (Cash & Banking) |
-| 0017 | app_settings (Settings UI), notifications (Notifications Center) |
-| 0018 | audit_log (system-wide who-did-what activity trail) |
-| 0019 | Cash on Delivery fields on deliveries (COD flag, amount, collection) |
-| 0020 | three selling prices per product (fixed + markup % + margin %) |
-| 0021 | sale_lines.price_tier — which of the three prices was charged |
+| 0001–0011 | Core: users, categories/unit types/products, POS + sales/refund/exchange, customers, receivables, suppliers/purchases, quotations |
+| 0012–0021 | Purchase status lifecycle, PDC register, expenses, deliveries, bank accounts, settings, notifications, audit log, three selling prices |
+| 0022–0034 | Cashier shifts, sub-categories, barcode, purchase settlements/valuation, stock count, purchase multiplier (added then removed) |
+| 0035–0041 | Per-unit markup/margin, month-end rollover history, void-a-sale, shelves, sale receipt type, encoders |
+| 0042–0053 | Full Accounting (Chart of Accounts, posting engine for Purchases/Expenses/Banking), bank reconciliation, PDC integrity, Maya/Other E-Wallet, Petty Cash, PDC multi-invoice, expense enhancements, cancelled receipt tracking, per-sale delivery address |
+
+Check `migrations/versions/` for the exact list — each file's name and docstring describe what it adds.
 
 ---
 
@@ -229,115 +266,16 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ## Troubleshooting
 
 - **Docker Desktop won't start / "engine is unable to start"** → open PowerShell **as Administrator**, run `wsl --update`, then `wsl --shutdown`, quit and reopen Docker Desktop until it shows **Engine running**.
+- **Docker Desktop shows an "Inference manager" crash popup** → unrelated to this app (it's Docker's bundled AI/model-runner feature); dismiss with the **X**, don't click Quit or Reset — the app/database containers keep running fine underneath.
 - **Can't reach the app from another device** → make sure both devices are on the same Wi-Fi/LAN, use the host PC's IPv4 (`ipconfig`), and allow port `8000` through Windows Firewall if prompted.
 - **pgAdmin "password authentication failed for user erp"** → you're on the wrong port. Use **5433**, not 5432.
 - **Login fails** → default is `admin` / `admin123`; confirm the containers are up with `docker compose ps`.
+- **Port 5433 already allocated on startup** → another Postgres container on this machine (from an unrelated project) is holding that host port. Either stop that container, or change the host-side port mapping for `hardware-erp-db` in `docker-compose.yml`.
 
 ---
 
-## Roadmap
+## Role permissions
 
-Checked against an 18-module wishlist (photo of a handwritten list) and prioritized
-into tiers. This section is the source of truth for "what's left" — keep it updated
-so picking this up from a different device doesn't require re-deriving status from
-git log.
-
-### ✅ Core operations (done)
-Dashboard · Sales/POS (payment, refund, exchange, split payment incl. **Cheque**
-as a post-dated-cheque-backed method) · Inventory · Purchasing (PO lifecycle) ·
-Customers · Suppliers · Quotations · PDC (post-dated cheque) register ·
-role-based access (admin vs cashier) · pagination + filters across all list pages.
-
-### ✅ Tier 1 (done)
-- **Expenses** (`/expenses`) — categorized (create-your-own, same idea as Product
-  categories), filterable, admin-only, void instead of delete.
-- **Delivery Management** (`/deliveries`) — schedule from a receipt or by invoice #
-  lookup, pending → out for delivery → delivered/cancelled. Open to cashiers too
-  (operational, not back-office).
-- **Cash on Delivery (COD)** — lives on the *delivery*, deliberately not as a POS
-  payment method: a walk-in sale is paid at the counter, so "collect on handover"
-  only makes sense once there is something to hand over. The sale is rung up as a
-  Receivable; ticking **COD** when scheduling the delivery (offered only when the
-  invoice still has a balance) marks that balance as the driver's to collect.
-  Marking the delivery **Delivered** is what records the collection — it creates
-  the `ReceivableSettlement` in the same step, so handover and payment can't drift
-  apart. Partial collections are supported (the remainder stays outstanding).
-  While a COD delivery is open, the invoice is tagged **COD / "on delivery"** in
-  Receivables and is excluded from overdue-credit notifications — it is awaiting a
-  handover, not a customer who is late paying.
-- Dashboard: Expenses KPI tile + net-profit sub-line, custom date-range picker,
-  fixed the 90-day chart's overlapping labels (bars stay daily, labels thin to ~12).
-
-### ✅ Tier 2 (done)
-- **Reports** (`/reports`) — hub page; **Profit & Loss** (revenue, gross profit,
-  expenses by category, net profit, any date range) and **Inventory Valuation**
-  (by category and by product), both with Excel export.
-- **Cash & Banking** (`/banking`) — multiple bank accounts, running balance derived
-  from a deposit/withdrawal ledger (never stored, always computed). Scope was
-  deliberately limited to balance-tracking, not statement reconciliation — confirm
-  with the user before expanding that.
-
-### ✅ Tier 3 (Settings + Notifications done)
-1. **Settings UI** (`/settings`, admin-only) — done. Edit the **business name**
-   (drives the login screen, page titles and the receipt header) plus optional
-   **receipt address / contact / TIN / footer**, and **change your own password**,
-   all without editing `.env` or rebuilding. Backed by an `app_settings` key-value
-   table (adding a new setting is a new row, never a migration); the business name
-   is loaded into `app.title` on startup and updated in place on save. `.env` still
-   owns infrastructure config (DATABASE_URL, SECRET_KEY) — intentionally not editable
-   in-app.
-2. **Notifications Center** (`/notifications`, admin-only) — done. One inbox for the
-   alerts that were previously only nav badges + the Dashboard "Needs your attention"
-   widget: out/low stock, below-cost pricing, overdue & due-soon credits, cheques
-   due/overdue, pending deliveries, stale/missing backup. Conditions are **derived**
-   from live data and reconciled into `notifications` rows by a throttled sweep
-   (`notifications.sync_notifications`): a new condition inserts an unread row, a
-   cleared one is marked resolved (kept under the **History** tab), and a recurrence
-   raises a fresh row. Sidebar badge shows the unread count; supports mark-read /
-   mark-all-read. The old badges + dashboard widget were left in place — this is an
-   addition, not a replacement.
-
-### ✅ Tracking, Logs & History (done)
-Built in response to the owner's ask — "know if the business is moving or not,
-especially tracking, logs and history." Three connected pieces:
-
-1. **Activity Log** (`/audit`, admin-only, in the Admin nav group) — a system-wide
-   who-did-what trail backed by `audit_log`. Every meaningful change records the
-   actor, timestamp, client IP, a plain-language summary and (for edits) a
-   field-by-field **before → after** diff. Instrumented across: inventory
-   (create / edit / **stock adjustment** / archive / bulk import), sign-in
-   (login / failed login / logout), users (create / edit / password reset),
-   business settings + own-password change, expenses (create / edit / void),
-   banking (account edits, transaction create / void) and deliveries (schedule /
-   dispatch / complete / cancel). Filter by user, action, area and date.
-   Written via `audit.record(...)` in the same DB transaction as the change, so
-   the log can never disagree with what happened.
-2. **Stock Card** (`/products/{id}/stock-card`, admin-only, "Stock card" link per
-   inventory row) — surfaces the per-product `StockMovement` ledger that was being
-   recorded but never shown: every in/out (sale, refund, exchange, purchase,
-   return, manual adjustment) with a running balance anchored to the current
-   on-hand total. Manual stock edits now also write a movement (they previously
-   left no trace), so the ledger reconciles going forward; the implied opening
-   balance is shown for pre-tracking history (e.g. bulk imports).
-3. **Growth comparison + Sales-by-Product** — the Dashboard's period KPIs (Sales,
-   Gross Profit, Expenses) now show a **▲/▼ % vs the previous period of equal
-   length** — the direct "are we moving or not" read. Direction is taken from the
-   raw values so recovering from a loss reads correctly, and the % is suppressed
-   when the prior base is zero/negative (shown as "new" / arrow instead). New
-   **Sales by Product** report (`/reports/sales-by-product`) lists units sold,
-   revenue and gross profit per product for any date range, with Excel export —
-   surfacing slow movers and loss-making lines.
-
-### 🔜 Tier 3 — still open
-3. **Full Accounting** (GL, P&L, Balance Sheet, VAT/BIR reports) — deliberately
-   deprioritized: the owner's accountant/other software handles this externally.
-   Only revisit if that changes; until then the P&L report + per-module Excel
-   exports are the intended output for an accountant to work from.
-
-### Skip unless a specific need shows up
-- **Document Management** (file/receipt attachments) — no current need.
-- **Generic configurable Approval Workflow** — the pending → confirmed → paid
-  lifecycles already on Purchases/Quotations/PDC cover this for a small team; a
-  configurable approval engine would be over-engineering here.
-- **Full Employee/HR management** (attendance, payroll) — `users.py` stays scoped
-  to login accounts + role only; no payroll processing planned in-app.
+- **Cashier** — POS, own Activity, Credits/Customers lookup; everything else redirects to POS.
+- **Manager** — everything a Cashier can do, plus Inventory, Purchasing, Sales/Reports, Stock Count, Shelves, Finance (Expenses/Banking/Accounting reports), Void a Sale (if enabled in Settings).
+- **Admin** — everything a Manager can do, plus **Users**, **Backup**, and **Stock Card** — the three areas that stay admin-exclusive.
