@@ -7,10 +7,11 @@ A receive-type purchase has a status lifecycle, same idea as Quotations:
   paid      -> payment was later settled with the supplier; no stock effect.
 A return has no staging — it removes stock immediately, same as before.
 """
+import json
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
-from fastapi import APIRouter, Depends, Request, status as http_status
+from fastapi import APIRouter, Depends, Form, Request, status as http_status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -46,6 +47,47 @@ PAYMENT_METHODS = [
 ]
 STATUS_LABELS = {"paid": "Paid", "cancelled": "Cancelled"}
 PAGE_SIZE = 15
+
+EDIT_ITEMS_ERRORS = {
+    "denied": "Only staff can edit a purchase.",
+    "cancelled": "This purchase was cancelled — items can't be corrected.",
+    "return": "Returns can't be edited here — cancel it and re-enter it instead.",
+    "linked": "Item(s) from this delivery were already returned — cancel that return first.",
+    "settled": "A payment has already been recorded against this purchase — items can't be corrected anymore.",
+    "pdc": "A cheque was issued for this purchase — items can't be corrected anymore.",
+    "empty": "Add at least one item.",
+}
+
+EDIT_PAYMENT_ERRORS = {
+    "denied": "Only staff can edit a purchase.",
+    "cancelled": "This purchase was cancelled — payment method can't be corrected.",
+    "return": "Returns don't have a payment method to correct.",
+    "linked": "Item(s) from this delivery were already returned — cancel that return first.",
+    "settled": "A payment has already been recorded against this purchase — use Record a payment instead, or cancel and re-enter it.",
+    "pdc": "A cheque was issued for this purchase — payment method can't be corrected anymore.",
+    "cheque": "Correcting to/from Cheque isn't supported here — cancel this purchase and re-enter it instead.",
+    "invalid": "Choose a valid payment method.",
+    "posting": "No account is mapped for that payment method in Accounting Setup — nothing was changed.",
+}
+
+
+def _can_edit_purchase_items(db: Session, purchase: "models.Purchase"):
+    """Returns an EDIT_ITEMS_ERRORS key, or None if this purchase's items can
+    still be corrected. Editing is really "reverse the old lines' stock/cost
+    effect, apply corrected ones" under the hood (same idea as
+    pos._can_edit_sale_items) — so it's blocked anywhere that would leave a
+    settlement, return, or cheque referring to figures that no longer match."""
+    if purchase.status == "cancelled":
+        return "cancelled"
+    if purchase.txn_type != "receive":
+        return "return"
+    if db.query(models.Purchase.id).filter(models.Purchase.original_purchase_id == purchase.id).first():
+        return "linked"
+    if db.query(models.PurchaseSettlement.id).filter(models.PurchaseSettlement.purchase_id == purchase.id).first():
+        return "settled"
+    if db.query(models.PostDatedCheque.id).filter(models.PostDatedCheque.purchase_id == purchase.id).first():
+        return "pdc"
+    return None
 
 
 def _parse_date(s: str):
@@ -834,6 +876,8 @@ def view_purchase(
     purchase_id: int,
     request: Request,
     error: str = "",
+    edit_items_error: str = "",
+    edit_payment_error: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -888,6 +932,23 @@ def view_purchase(
     settled_map = _settled_for_purchases(db, [purchase.id])
     outstanding = _purchase_outstanding(purchase, settled_map)
 
+    suppliers = (
+        db.query(models.Supplier)
+        .filter(models.Supplier.is_active.is_(True))
+        .order_by(models.Supplier.name)
+        .all()
+    )
+    can_edit_details = is_staff(user) and purchase.status != "cancelled"
+    can_edit_items = is_staff(user) and _can_edit_purchase_items(db, purchase) is None
+    # Same eligibility as item editing — correcting the payment method is
+    # also "reverse the old posting, re-apply the corrected one" under the
+    # hood, so it's blocked wherever that would leave a settlement, return,
+    # or cheque referring to a posting that no longer matches.
+    can_edit_payment = (
+        is_staff(user) and purchase.txn_type == "receive"
+        and purchase.status != "cancelled" and _can_edit_purchase_items(db, purchase) is None
+    )
+
     return templates.TemplateResponse(
         "purchases/view.html",
         {"request": request, "app_name": request.app.title, "user": user,
@@ -895,8 +956,281 @@ def view_purchase(
          "linked_returns": linked_returns, "error": error, "pending_pdc": pending_pdc,
          "settlements": settlements, "outstanding": outstanding,
          "today": date.today(), "payment_methods": PAYMENT_METHODS,
-         "payment_method_labels": dict(PAYMENT_METHODS)},
+         "payment_method_labels": dict(PAYMENT_METHODS),
+         "suppliers": suppliers, "can_edit_details": can_edit_details,
+         "can_edit_items": can_edit_items, "can_edit_payment": can_edit_payment,
+         "edit_items_error": EDIT_ITEMS_ERRORS.get(edit_items_error),
+         "edit_payment_error": EDIT_PAYMENT_ERRORS.get(edit_payment_error)},
     )
+
+
+@router.post("/purchases/{purchase_id:int}/change-payment-method")
+async def change_payment_method(purchase_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Correct a payment method picked by mistake (e.g. clicked Cash instead
+    of Payable/Credit) — reverses the original receive posting and re-posts
+    it under the corrected method, flipping paid/payable status to match.
+    Gated by _can_edit_purchase_items, same as item editing: only available
+    before a settlement, return, or cheque already refers to the original
+    posting."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse(f"/purchases/{purchase_id}?edit_payment_error=denied", status_code=302)
+    purchase = db.get(models.Purchase, purchase_id)
+    if not purchase:
+        return RedirectResponse("/purchases", status_code=302)
+    if purchase.txn_type != "receive":
+        return RedirectResponse(f"/purchases/{purchase_id}?edit_payment_error=return", status_code=302)
+    block_reason = _can_edit_purchase_items(db, purchase)
+    if block_reason:
+        return RedirectResponse(f"/purchases/{purchase_id}?edit_payment_error={block_reason}", status_code=302)
+
+    form = await request.form()
+    raw_method = (form.get("method") or "").strip().lower()
+    is_payable = raw_method == "payable"
+    new_method = None if is_payable else raw_method
+    if not is_payable and new_method not in dict(PAYMENT_METHODS):
+        return RedirectResponse(f"/purchases/{purchase_id}?edit_payment_error=invalid", status_code=302)
+    if new_method == "cheque" or purchase.payment_method == "cheque":
+        return RedirectResponse(f"/purchases/{purchase_id}?edit_payment_error=cheque", status_code=302)
+
+    old_label = "Payable" if purchase.status == "confirmed" else dict(PAYMENT_METHODS).get(purchase.payment_method, purchase.payment_method or "")
+    new_label = "Payable" if is_payable else dict(PAYMENT_METHODS)[new_method]
+    if old_label == new_label:
+        return RedirectResponse(f"/purchases/{purchase_id}", status_code=http_status.HTTP_302_FOUND)
+
+    # Unlike create_purchase (where a posting failure just leaves the new
+    # purchase without a journal entry — never blocks the operational side),
+    # this purchase already has a *valid* posted entry. If the re-post half
+    # of this correction fails, swallowing it the same way would commit the
+    # reversal anyway and leave the purchase with no live entry at all — so
+    # roll back everything and surface the error instead of correcting it.
+    try:
+        accounting.reverse_purchase_posting(db, purchase, reason="Payment method correction", entered_by_id=user.id)
+        accounting.post_purchase_receive(db, purchase, is_payable=is_payable, payment_method=new_method, entered_by_id=user.id)
+    except accounting.PostingError:
+        db.rollback()
+        return RedirectResponse(f"/purchases/{purchase_id}?edit_payment_error=posting", status_code=302)
+
+    if is_payable:
+        purchase.status = "confirmed"
+        purchase.payment_method = None
+        purchase.paid_at = None
+        supplier = purchase.supplier
+        days = supplier.payment_days if supplier and supplier.payment_days is not None else 30
+        base_date = purchase.created_at.date() if purchase.created_at else date.today()
+        purchase.due_date = base_date + timedelta(days=int(days))
+    else:
+        purchase.status = "paid"
+        purchase.payment_method = new_method
+        purchase.paid_at = purchase.paid_at or func.now()
+        purchase.due_date = None
+
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="purchase",
+        entity_id=purchase.id, entity_label=purchase.ref_no,
+        summary=f"Corrected payment method on {purchase.ref_no}: {old_label} → {new_label}",
+    )
+    db.commit()
+    return RedirectResponse(f"/purchases/{purchase_id}", status_code=http_status.HTTP_302_FOUND)
+
+
+@router.post("/purchases/{purchase_id:int}/edit-details")
+def edit_purchase_details(
+    purchase_id: int,
+    request: Request,
+    supplier_id: str = Form(""),
+    invoice_no: str = Form(""),
+    delivery_date: str = Form(""),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Correct the supplier / supplier invoice # / delivery date on an
+    already-saved purchase — for a typo made while encoding the delivery.
+    Doesn't touch stock or cost, so it's allowed any time the purchase isn't
+    cancelled (unlike item editing, which is much more restricted)."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    purchase = db.get(models.Purchase, purchase_id)
+    if not purchase:
+        return RedirectResponse("/purchases", status_code=302)
+
+    def _back(err=None):
+        suffix = f"?error={err}" if err else ""
+        return RedirectResponse(f"/purchases/{purchase_id}{suffix}", status_code=http_status.HTTP_302_FOUND)
+
+    if not is_staff(user):
+        return _back("Only+staff+can+edit+a+purchase.")
+    if purchase.status == "cancelled":
+        return _back("This+purchase+was+cancelled+%E2%80%94+details+can%27t+be+corrected.")
+
+    new_supplier_id = int(supplier_id) if (supplier_id or "").strip() else None
+    if not new_supplier_id or not db.get(models.Supplier, new_supplier_id):
+        return _back("Choose+a+supplier.")
+
+    new_invoice_no = (invoice_no or "").strip() or None
+    new_delivery_date = (delivery_date or "").strip() or None
+
+    old_supplier_id = purchase.supplier_id
+    old_invoice_no = purchase.invoice_no
+    old_delivery_date = purchase.delivery_date
+    if (new_supplier_id, new_invoice_no, new_delivery_date) == (old_supplier_id, old_invoice_no, old_delivery_date):
+        return _back()
+
+    purchase.supplier_id = new_supplier_id
+    purchase.invoice_no = new_invoice_no
+    purchase.delivery_date = new_delivery_date
+
+    old_supplier = db.get(models.Supplier, old_supplier_id) if old_supplier_id else None
+    new_supplier = db.get(models.Supplier, new_supplier_id)
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="purchase",
+        entity_id=purchase.id, entity_label=purchase.ref_no,
+        summary=f"Corrected details on {purchase.ref_no}",
+        changes={
+            "supplier": [old_supplier.name if old_supplier else None, new_supplier.name if new_supplier else None],
+            "invoice_no": [old_invoice_no, new_invoice_no],
+            "delivery_date": [old_delivery_date, new_delivery_date],
+        },
+    )
+    db.commit()
+    return _back()
+
+
+@router.get("/purchases/{purchase_id:int}/edit-items", response_class=HTMLResponse)
+def edit_purchase_items_form(purchase_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    purchase = db.get(models.Purchase, purchase_id)
+    if not purchase:
+        return RedirectResponse("/purchases", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse(f"/purchases/{purchase_id}?edit_items_error=denied", status_code=302)
+    block_reason = _can_edit_purchase_items(db, purchase)
+    if block_reason:
+        return RedirectResponse(f"/purchases/{purchase_id}?edit_items_error={block_reason}", status_code=302)
+
+    lines_payload = []
+    for line in purchase.lines:
+        lines_payload.append({
+            "product_id": line.product_id,
+            "name": line.product_name,
+            "unit_name": line.unit_name or "Unit",
+            "factor": float(line.unit_factor or 1),
+            "qty": float(line.qty or 0),
+            "unit_cost": float(line.unit_cost or 0),
+        })
+    return templates.TemplateResponse(
+        "purchases/edit_items.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "purchase": purchase, "lines_json": json.dumps(lines_payload)},
+    )
+
+
+@router.post("/purchases/{purchase_id:int}/edit-items")
+# TODO(accounting): this recomputes purchase.total after the original
+# purchase already posted a journal entry (see accounting.post_purchase_
+# receive) — the ledger currently does NOT get a correcting entry when items
+# are edited, so a purchase corrected here will disagree with its own journal
+# entry until this is extended to post a delta (or edits are blocked once a
+# purchase has posted). Same known gap as pos.edit_sale_items.
+async def edit_purchase_items(purchase_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    purchase = db.get(models.Purchase, purchase_id)
+    if not purchase:
+        return JSONResponse({"ok": False, "error": "Purchase not found."}, status_code=404)
+    if not is_staff(user):
+        return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS["denied"]}, status_code=403)
+    block_reason = _can_edit_purchase_items(db, purchase)
+    if block_reason:
+        return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS[block_reason]}, status_code=400)
+
+    data = await request.json()
+    new_lines = data.get("lines") or []
+    if not new_lines:
+        return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS["empty"]}, status_code=400)
+
+    old_total = purchase.total
+    old_line_count = len(purchase.lines)
+
+    # Reverse every existing line's stock/cost effect first — same mechanics
+    # as Cancel — but keep the original StockMovement rows as history, only
+    # add compensating entries. The weighted-average cost blend itself isn't
+    # unwound (same accepted simplification as Cancel): later purchases may
+    # have already blended on top of it.
+    for line in purchase.lines:
+        if not line.product_id:
+            continue
+        product = db.get(models.Product, line.product_id, with_for_update=True)
+        if not product:
+            continue
+        base_qty = Decimal(str(line.qty or 0)) * Decimal(str(line.unit_factor or 1))
+        product.stock_qty = (product.stock_qty or Decimal("0")) - base_qty
+        unit_cost = Decimal(str(line.new_cost or product.cost_price or 0))
+        db.add(models.StockMovement(
+            product_id=product.id, qty_base=-base_qty, reason="purchase-edit-reverse",
+            unit_cost=unit_cost, value=-base_qty * unit_cost,
+        ))
+    purchase.lines = []  # cascade="all, delete-orphan" removes the old rows
+
+    total = Decimal("0")
+    for ln in new_lines:
+        product = db.get(models.Product, int(ln["product_id"]), with_for_update=True) if ln.get("product_id") else None
+        if not product:
+            continue
+        qty = _dec(ln.get("qty"))
+        if qty <= 0:
+            continue
+        factor = _dec(ln.get("factor"), "1")
+        if factor <= 0:
+            factor = Decimal("1")
+        unit_cost = _dec(ln.get("unit_cost"))
+        raw_total = ln.get("line_total")
+        line_total = _money(raw_total) if raw_total not in (None, "") else _money(qty * unit_cost)
+        total += line_total
+
+        base_qty = qty * factor
+        old_cost = Decimal(str(product.cost_price or 0))
+        new_cost = old_cost
+        if unit_cost > 0:
+            new_cost = _weighted_avg_cost(product, base_qty, unit_cost / factor)
+            product.cost_price = new_cost
+        product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
+        db.add(models.StockMovement(
+            product_id=product.id, qty_base=base_qty, reason="purchase",
+            unit_cost=new_cost, value=base_qty * new_cost,
+        ))
+
+        purchase.lines.append(models.PurchaseLine(
+            product_id=product.id,
+            product_name=product.name,
+            unit_name=ln.get("unit_name"),
+            unit_factor=factor,
+            qty=qty,
+            unit_cost=_money(unit_cost),
+            line_total=line_total,
+            old_cost=old_cost.quantize(COST_DP),
+            new_cost=new_cost.quantize(COST_DP),
+        ))
+
+    if not purchase.lines:
+        db.rollback()
+        return JSONResponse({"ok": False, "error": "No valid items to save."}, status_code=400)
+
+    purchase.total = _money(total)
+
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="purchase",
+        entity_id=purchase.id, entity_label=purchase.ref_no,
+        summary=(
+            f"Corrected items on {purchase.ref_no}: {old_line_count} line(s) → "
+            f"{len(purchase.lines)}, total {old_total:g} → {purchase.total:g}"
+        ),
+        changes={"total": [str(old_total), str(purchase.total)]},
+    )
+    db.commit()
+    return {"ok": True, "purchase_id": purchase.id}
 
 
 @router.get("/purchases/{purchase_id:int}/pdf")

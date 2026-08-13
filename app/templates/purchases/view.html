@@ -21,6 +21,7 @@
 </div>
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+{% if edit_items_error %}<div class="alert">{{ edit_items_error }}</div>{% endif %}
 
 {% if purchase.txn_type == 'receive' %}
   {% if purchase.status == 'paid' %}
@@ -28,6 +29,7 @@
     <strong>Paid.</strong> Stock was added and cost updated on
     {{ purchase.confirmed_at.strftime('%b %d, %Y %I:%M %p') if purchase.confirmed_at else '' }},
     settled via {{ purchase.payment_method|replace('_',' ')|title }}.
+    {% if can_edit_payment %}<a href="#" onclick="showEditPayment(event)" style="font-size:12px;">✎ edit</a>{% endif %}
   </div>
   {% elif purchase.status == 'confirmed' %}
   <div class="quo-status-banner" style="background:#fef3c7;border-color:#fcd34d;color:#92400e;">
@@ -35,6 +37,7 @@
     Stock was added and cost updated on
     {{ purchase.confirmed_at.strftime('%b %d, %Y %I:%M %p') if purchase.confirmed_at else '' }}.
     {% if purchase.due_date %}Due {{ purchase.due_date.strftime('%b %d, %Y') }}.{% endif %}
+    {% if can_edit_payment %}<a href="#" onclick="showEditPayment(event)" style="font-size:12px;">✎ edit</a>{% endif %}
   </div>
   {% else %}
   <div class="quo-status-banner cancelled">
@@ -42,7 +45,26 @@
     Stock was reversed.
   </div>
   {% endif %}
+  {% if can_edit_payment %}
+  <form id="editPaymentForm" method="post" action="/purchases/{{ purchase.id }}/change-payment-method"
+        style="display:none;margin:8px 0 0;padding:12px 14px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:13px;max-width:420px;">
+    <label class="pos-customer">Correct payment method to
+      <select name="method">
+        {% for value, label in payment_methods %}
+        {% if value != 'cheque' %}<option value="{{ value }}" {{ 'selected' if value == purchase.payment_method }}>{{ label }}</option>{% endif %}
+        {% endfor %}
+        <option value="payable" {{ 'selected' if purchase.status == 'confirmed' }}>Payable (Unpaid)</option>
+      </select>
+    </label>
+    <p class="hint" style="margin:6px 0 0;">This reverses the original ledger entry and re-posts it under the corrected method — safe to do only because nothing has been paid against this yet.</p>
+    <div style="margin-top:10px;display:flex;gap:8px;">
+      <button type="submit" class="btn" style="padding:6px 12px;font-size:12.5px;">Save</button>
+      <button type="button" class="btn-secondary" style="padding:6px 12px;font-size:12.5px;" onclick="hideEditPayment()">Cancel</button>
+    </div>
+  </form>
+  {% endif %}
 {% endif %}
+{% if edit_payment_error %}<div class="alert" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">{{ edit_payment_error }}</div>{% endif %}
 
 {% if purchase.txn_type == 'return' and purchase.original_purchase %}
 <div class="alert" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;margin-bottom:16px;">
@@ -82,8 +104,40 @@
     <span class="muted">Supplier Invoice: <strong style="color:var(--ink,#0f172a);">{{ purchase.invoice_no or '—' }}</strong></span>
     <span class="muted">Delivered: <strong style="color:var(--ink,#0f172a);">{{ purchase.delivery_date or '—' }}</strong></span>
     {% if purchase.notes %}<span class="muted">Notes: {{ purchase.notes }}</span>{% endif %}
+    {% if can_edit_details %}
+    <a href="#" onclick="showEditDetails(event)" style="font-size:12px;">✎ edit</a>
+    {% endif %}
   </div>
+
+  {% if can_edit_details %}
+  <form id="editDetailsForm" method="post" action="/purchases/{{ purchase.id }}/edit-details"
+        style="display:none;margin-top:14px;padding:12px 14px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:13px;max-width:420px;">
+    <label class="pos-customer">Supplier
+      <select name="supplier_id">
+        {% for s in suppliers %}
+        <option value="{{ s.id }}" {{ 'selected' if s.id == purchase.supplier_id }}>{{ s.name }}{{ ' (' ~ s.code ~ ')' if s.code }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="pos-customer" style="margin-top:8px;display:block;">Supplier Invoice / DR #
+      <input type="text" name="invoice_no" value="{{ purchase.invoice_no or '' }}">
+    </label>
+    <label class="pos-customer" style="margin-top:8px;display:block;">Delivery date
+      <input type="text" name="delivery_date" value="{{ purchase.delivery_date or '' }}" placeholder="as printed on the DR">
+    </label>
+    <div style="margin-top:10px;display:flex;gap:8px;">
+      <button type="submit" class="btn" style="padding:6px 12px;font-size:12.5px;">Save</button>
+      <button type="button" class="btn-secondary" style="padding:6px 12px;font-size:12.5px;" onclick="hideEditDetails()">Cancel</button>
+    </div>
+  </form>
+  {% endif %}
 </div>
+
+{% if can_edit_items %}
+<div style="margin-bottom:8px;">
+  <a class="btn-link" href="/purchases/{{ purchase.id }}/edit-items">✎ Edit items</a>
+</div>
+{% endif %}
 
 <div id="poViewTable">
   <div class="table-wrap">
@@ -208,5 +262,18 @@
     <button class="btn-secondary" type="submit">Cancel {{ noun }}</button>
   </form>
 </div>
+{% endif %}
+
+{% if can_edit_details %}
+<script>
+function showEditDetails(e) { e.preventDefault(); document.getElementById('editDetailsForm').style.display = 'block'; }
+function hideEditDetails() { document.getElementById('editDetailsForm').style.display = 'none'; }
+</script>
+{% endif %}
+{% if can_edit_payment %}
+<script>
+function showEditPayment(e) { e.preventDefault(); document.getElementById('editPaymentForm').style.display = 'block'; }
+function hideEditPayment() { document.getElementById('editPaymentForm').style.display = 'none'; }
+</script>
 {% endif %}
 {% endblock %}

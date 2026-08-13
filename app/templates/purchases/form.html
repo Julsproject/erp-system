@@ -89,7 +89,7 @@
           {% for value, label in payment_methods %}
           <option value="{{ value }}">{{ label }}</option>
           {% endfor %}
-          <option value="payable">Payable (Unpaid)</option>
+          <option value="payable" selected>Payable (Unpaid)</option>
         </select>
       </label>
     </div>
@@ -517,5 +517,6 @@ async function createSupplier() {
 function showError(m) { const e = document.getElementById('pError'); e.textContent = m; e.style.display = 'block'; }
 
 renderLines();
+if (document.getElementById('paymentMethod')) onPaymentMethodChange();
 </script>
 {% endblock %}
