@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Inventory Costs · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Inventory Costs</h1>
+    <p class="muted">Current cost per base unit, and the most recent change — from a delivery or a manual edit</p>
+  </div>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>{{ 'Matching SKUs' if q else 'Active SKUs' }}</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ changed_count }}</span><span>With a recorded cost change</span></div>
+</div>
+
+<form class="toolbar" method="get" action="/reports/inventory-costs">
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search product name…" autofocus>
+  <button class="btn-secondary" type="submit">Search</button>
+  {% if q %}<a class="btn-link" href="/reports/inventory-costs">Clear</a>{% endif %}
+</form>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Product</th><th>Category</th><th>Base Unit</th>
+        <th class="num">Current Cost</th><th>Last Change</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      {% set p = r.product %}
+      {% set lc = r.last_change %}
+      <tr>
+        <td class="strong">{{ p.name }}</td>
+        <td>{{ r.category }}</td>
+        <td>{{ r.unit_name }}</td>
+        <td class="num">{{ p.cost_price|peso }}</td>
+        <td>
+          {% if lc %}
+            <span class="muted">{{ lc.old|peso }}</span> →
+            <strong>{{ lc.new|peso }}</strong>
+            {% if lc.new != lc.old %}
+              {% if lc.new > lc.old %}
+                <span class="warn-tag">▲ +{{ (lc.new - lc.old)|peso }}</span>
+              {% else %}
+                <span class="txn" style="background:#dcfce7;color:#15803d;">▼ {{ (lc.new - lc.old)|peso }}</span>
+              {% endif %}
+            {% endif %}
+            <div class="muted" style="font-size:12px;">{{ lc.source }} · {{ lc.ts.strftime('%b %d, %Y') }}</div>
+          {% else %}
+            <span class="muted">No recorded change</span>
+          {% endif %}
+        </td>
+        <td><button type="button" class="btn-link" onclick="showCostHistory({{ p.id }}, this)">History</button></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No products found.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn-secondary" href="/reports/inventory-costs?page={{ page - 1 }}&q={{ q }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-secondary" href="/reports/inventory-costs?page={{ page + 1 }}&q={{ q }}">Next →</a>{% endif %}
+</div>
+{% endif %}
+
+<div id="costHistOverlay" class="modal-overlay" style="display:none;" onclick="if (event.target === this) hideCostHistory();">
+  <div class="modal-box np-panel" style="max-width:560px;">
+    <h3 class="np-title" id="costHistTitle">Cost history</h3>
+    <div id="costHistList"></div>
+    <div style="margin-top:14px;text-align:right;">
+      <button type="button" class="btn-secondary" onclick="hideCostHistory()">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const chPeso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  function chEscape(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+
+  async function showCostHistory(id, btn) {
+    const name = btn.closest('tr').querySelector('.strong').textContent;
+    document.getElementById('costHistTitle').textContent = 'Cost history — ' + name;
+    const list = document.getElementById('costHistList');
+    list.innerHTML = '<p class="pos-hint">Loading…</p>';
+    document.getElementById('costHistOverlay').style.display = 'flex';
+
+    const res = await fetch('/products/' + id + '/history');
+    const data = await res.json();
+    if (!data.found || !data.cost_series || !data.cost_series.length) {
+      list.innerHTML = '<p class="pos-hint">No cost history recorded yet for this product.</p>';
+      return;
+    }
+
+    const series = data.cost_series;
+    let rows = '';
+    rows += '<div class="ch-row ch-head"><span>' + chEscape(series[0].label) + '</span><span class="strong">' + chPeso(series[0].value) + '</span></div>';
+    for (let i = 1; i < series.length; i++) {
+      const from = series[i - 1].value, to = series[i].value;
+      const up = to > from, changed = to !== from;
+      const tagClass = up ? 'warn-tag' : 'txn';
+      const tagStyle = up ? '' : 'background:#dcfce7;color:#15803d;';
+      rows += '<div class="ch-row">' +
+        '<span>' + chEscape(series[i].date) + ' — ' + chEscape(series[i].label) + '</span>' +
+        '<span>' + chPeso(from) + ' → <strong>' + chPeso(to) + '</strong>' +
+        (changed ? ' <span class="' + tagClass + '" style="' + tagStyle + '">' + (up ? '▲' : '▼') + ' ' + chPeso(Math.abs(to - from)) + '</span>' : '') +
+        '</span></div>';
+    }
+    list.innerHTML = rows;
+  }
+
+  function hideCostHistory() {
+    document.getElementById('costHistOverlay').style.display = 'none';
+  }
+</script>
+
+<style>
+  .ch-row { display:flex; justify-content:space-between; gap:16px; padding:8px 0; border-bottom:1px solid var(--border, #e5e7eb); font-size:13.5px; }
+  .ch-row.ch-head { font-weight:600; }
+  .ch-row:last-child { border-bottom:none; }
+</style>
+{% endblock %}

@@ -215,32 +215,40 @@ def list_purchases(
         query = query.filter(_local_date(models.Purchase.created_at) >= df)
     if dt:
         query = query.filter(_local_date(models.Purchase.created_at) <= dt)
-    total = query.count()
+
+    # Received/Returned/footer total all need to reflect whatever's currently
+    # filtered (status tab, search, date range) — not the whole table — so
+    # "filter this week" actually shows this week's totals. Small enough
+    # result sets (a shop's purchase history) that fetching the full filtered
+    # set into Python and slicing for the page is fine, same approach the
+    # Sales list already uses for its own filtered totals.
+    filtered_purchases = query.order_by(models.Purchase.id.desc()).all()
+    total = len(filtered_purchases)
     pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
     page = min(page, pages)
-    purchases = (
-        query.order_by(models.Purchase.id.desc())
-        .offset((page - 1) * PAGE_SIZE)
-        .limit(PAGE_SIZE)
-        .all()
-    )
+    start = (page - 1) * PAGE_SIZE
+    purchases = filtered_purchases[start:start + PAGE_SIZE]
+    received = sum((p.total or Decimal("0")) for p in filtered_purchases if p.txn_type != "return")
+    returned = sum((p.total or Decimal("0")) for p in filtered_purchases if p.txn_type == "return")
+    filtered_total = received + returned
 
     all_purchases = db.query(models.Purchase).all()
-    received = sum((p.total or Decimal("0")) for p in all_purchases if p.txn_type != "return")
-    returned = sum((p.total or Decimal("0")) for p in all_purchases if p.txn_type == "return")
     counts = {s: sum(1 for p in all_purchases if p.txn_type == "receive" and p.status == s) for s in STATUS_LABELS}
     counts["return"] = sum(1 for p in all_purchases if p.txn_type == "return")
     # STATUS_LABELS only has tabs for "paid"/"cancelled" (Payable/"confirmed"
     # receipts are surfaced on their own dedicated Payables page instead), so
     # counts.values() alone would silently undercount the "All" tab the
     # moment a Payable purchase exists. all_purchases is already the true
-    # unconditional total — use its length directly instead.
+    # unconditional total — use its length directly instead. These tab
+    # badges intentionally stay unconditional (how many exist per status),
+    # unlike received/returned/filtered_total above.
     all_count = len(all_purchases)
 
     return templates.TemplateResponse(
         "purchases/list.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "purchases": purchases, "received": received, "returned": returned,
+         "filtered_total": filtered_total,
          "status_filter": status_filter, "counts": counts, "labels": STATUS_LABELS,
          "all_count": all_count,
          "q": q, "date_from": date_from, "date_to": date_to,
@@ -617,6 +625,8 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
     db.add(purchase)
 
     total = Decimal("0")
+    new_movements = []  # ref (the PO #) isn't known until after purchase.id/ref_no
+                         # are assigned below, so these get it filled in afterward.
     for ln in lines:
         # Row-level lock — see the matching comment in pos.py's _finalize_sale.
         product = db.get(models.Product, int(ln["product_id"]), with_for_update=True) if ln.get("product_id") else None
@@ -677,19 +687,23 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
 
         if txn_type == "return":
             product.stock_qty = (product.stock_qty or Decimal("0")) - base_qty
-            db.add(models.StockMovement(
+            movement = models.StockMovement(
                 product_id=product.id, qty_base=-base_qty, reason="purchase-return",
                 unit_cost=old_cost, value=-base_qty * old_cost,
-            ))
+            )
+            db.add(movement)
+            new_movements.append(movement)
         else:
             if unit_cost > 0:
                 new_cost = _weighted_avg_cost(product, base_qty, unit_cost / factor)
                 product.cost_price = new_cost
             product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
-            db.add(models.StockMovement(
+            movement = models.StockMovement(
                 product_id=product.id, qty_base=base_qty, reason="purchase",
                 unit_cost=new_cost, value=base_qty * new_cost,
-            ))
+            )
+            db.add(movement)
+            new_movements.append(movement)
 
         purchase.lines.append(models.PurchaseLine(
             product_id=product.id,
@@ -722,6 +736,8 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
         if not taken:
             ref_no = candidate
     purchase.ref_no = ref_no or f"{prefix}-{purchase.id:06d}"
+    for movement in new_movements:
+        movement.ref = purchase.ref_no
 
     if txn_type == "receive" and payment_method == "cheque":
         raw_date = (data.get("cheque_date") or "").strip()
@@ -857,7 +873,7 @@ def cancel_purchase(purchase_id: int, request: Request, db: Session = Depends(ge
         cancel_unit_cost = Decimal(str(line.new_cost or product.cost_price or 0))
         db.add(models.StockMovement(
             product_id=product.id, qty_base=delta, reason="purchase-cancelled",
-            unit_cost=cancel_unit_cost, value=delta * cancel_unit_cost,
+            unit_cost=cancel_unit_cost, value=delta * cancel_unit_cost, ref=purchase.ref_no,
         ))
 
     purchase.status = "cancelled"
@@ -1173,7 +1189,7 @@ async def edit_purchase_items(purchase_id: int, request: Request, db: Session = 
         unit_cost = Decimal(str(line.new_cost or product.cost_price or 0))
         db.add(models.StockMovement(
             product_id=product.id, qty_base=-base_qty, reason="purchase-edit-reverse",
-            unit_cost=unit_cost, value=-base_qty * unit_cost,
+            unit_cost=unit_cost, value=-base_qty * unit_cost, ref=purchase.ref_no,
         ))
     purchase.lines = []  # cascade="all, delete-orphan" removes the old rows
 
@@ -1202,7 +1218,7 @@ async def edit_purchase_items(purchase_id: int, request: Request, db: Session = 
         product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
         db.add(models.StockMovement(
             product_id=product.id, qty_base=base_qty, reason="purchase",
-            unit_cost=new_cost, value=base_qty * new_cost,
+            unit_cost=new_cost, value=base_qty * new_cost, ref=purchase.ref_no,
         ))
 
         purchase.lines.append(models.PurchaseLine(

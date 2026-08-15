@@ -88,6 +88,13 @@ def _money(value) -> Decimal:
     return _dec(value).quantize(CENTS, rounding=ROUND_HALF_UP)
 
 
+def _display_invoice(sale: models.Sale) -> str:
+    """Receipt-type-prefixed invoice # (e.g. "DRB51380", not "51380") — same
+    format shown on the printed receipt, used as the Stock Card's reference
+    for every sale-driven StockMovement so it reads like the paperwork."""
+    return f"{sale.receipt_type}{sale.invoice_no}" if sale.receipt_type else sale.invoice_no
+
+
 def _deduct_stock(product: models.Product, base_qty: Decimal):
     """Reduce on-hand by base_qty, taking from Actual Beginning Stock first,
     then Stocks Qty. If beginning stock is already at or below 0 (e.g. from
@@ -368,7 +375,7 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
         sale_unit_cost = Decimal(str(product.cost_price or 0))
         db.add(models.StockMovement(
             product_id=product.id, qty_base=-base_qty, reason="sale",
-            unit_cost=sale_unit_cost, value=-base_qty * sale_unit_cost,
+            unit_cost=sale_unit_cost, value=-base_qty * sale_unit_cost, ref=_display_invoice(sale),
         ))
 
         sale.lines.append(models.SaleLine(
@@ -1238,7 +1245,7 @@ def void_sale(
         unit_cost = Decimal(str(line.unit_cost or 0))
         db.add(models.StockMovement(
             product_id=product.id, qty_base=base_qty, reason="void",
-            ref=sale.invoice_no, unit_cost=unit_cost, value=base_qty * unit_cost,
+            ref=_display_invoice(sale), unit_cost=unit_cost, value=base_qty * unit_cost,
             note=f"Void: {reason}",
         ))
 
@@ -1603,7 +1610,7 @@ async def edit_sale_items(sale_id: int, request: Request, db: Session = Depends(
         unit_cost = Decimal(str(line.unit_cost or 0))
         db.add(models.StockMovement(
             product_id=product.id, qty_base=base_qty, reason="sale-edit-reverse",
-            ref=sale.invoice_no, unit_cost=unit_cost, value=base_qty * unit_cost,
+            ref=_display_invoice(sale), unit_cost=unit_cost, value=base_qty * unit_cost,
             note="Reversed for item correction",
         ))
     sale.lines = []  # cascade="all, delete-orphan" removes the old rows
@@ -1627,7 +1634,7 @@ async def edit_sale_items(sale_id: int, request: Request, db: Session = Depends(
         _deduct_stock(product, base_qty)
         unit_cost = Decimal(str(product.cost_price or 0))
         db.add(models.StockMovement(
-            product_id=product.id, qty_base=-base_qty, reason="sale", ref=sale.invoice_no,
+            product_id=product.id, qty_base=-base_qty, reason="sale", ref=_display_invoice(sale),
             unit_cost=unit_cost, value=-base_qty * unit_cost, note="Corrected item",
         ))
         sale.lines.append(models.SaleLine(

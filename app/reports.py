@@ -4,6 +4,7 @@ Valuation. The hub also points at the exportable lists other modules
 already have (Sales, Expenses, Purchases, Cheques).
 """
 import io
+import json
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -16,7 +17,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from . import models, settings_store
+from . import models, pricing, settings_store
 from .database import get_db
 from .deps import get_current_user, is_staff
 from .products import low_stock_expr
@@ -244,6 +245,107 @@ def _valuation_rows(db: Session):
             "retail_value": retail_val,
         })
     return rows
+
+
+INV_COST_PAGE_SIZE = 50
+
+
+def _cost_change_lookup(db: Session):
+    """Latest confirmed-delivery cost change and latest manual cost_price
+    edit, per product_id, across the whole catalog (not just one page) —
+    same two sources the Dashboard's per-item history chart uses."""
+    latest_purchase = {}
+    purchase_rows = (
+        db.query(models.PurchaseLine, models.Purchase)
+        .join(models.Purchase, models.PurchaseLine.purchase_id == models.Purchase.id)
+        .filter(
+            models.Purchase.txn_type == "receive",
+            models.Purchase.status.in_(("confirmed", "paid")),
+            models.Purchase.confirmed_at.isnot(None),
+        )
+        .order_by(models.Purchase.confirmed_at)
+        .all()
+    )
+    for line, purchase in purchase_rows:
+        latest_purchase[line.product_id] = {
+            "ts": purchase.confirmed_at,
+            "old": Decimal(str(line.old_cost or 0)),
+            "new": Decimal(str(line.new_cost or 0)),
+            "source": f"Delivery {purchase.ref_no}",
+        }
+
+    latest_audit = {}
+    audit_rows = (
+        db.query(models.AuditLog)
+        .filter(models.AuditLog.entity_type == "product", models.AuditLog.action.in_(("create", "update")))
+        .order_by(models.AuditLog.created_at)
+        .all()
+    )
+    for row in audit_rows:
+        if not row.changes:
+            continue
+        try:
+            changes = json.loads(row.changes)
+        except ValueError:
+            continue
+        if "cost_price" not in changes:
+            continue
+        try:
+            old, new = changes["cost_price"]
+        except (TypeError, ValueError):
+            continue
+        latest_audit[row.entity_id] = {
+            "ts": row.created_at,
+            "old": Decimal(str(old)) if old not in (None, "") else Decimal("0"),
+            "new": Decimal(str(new)) if new not in (None, "") else Decimal("0"),
+            "source": "Manual edit",
+        }
+    return latest_purchase, latest_audit
+
+
+def _last_change_for(product_id, latest_purchase, latest_audit):
+    candidates = [c for c in (latest_purchase.get(product_id), latest_audit.get(product_id)) if c]
+    return max(candidates, key=lambda c: c["ts"]) if candidates else None
+
+
+def _cost_rows(db: Session, q: str = "", page: int = 1, page_size: int = INV_COST_PAGE_SIZE):
+    """Per-product current cost plus its most recent cost change, one page
+    at a time. Returns (rows, total, pages, page, changed_count) — changed_count
+    is the count across the WHOLE filtered set, not just the current page."""
+    query = db.query(models.Product).filter(models.Product.is_active.is_(True))
+    if q:
+        query = query.filter(models.Product.name.ilike(f"%{q}%"))
+
+    total = query.count()
+    pages = max((total + page_size - 1) // page_size, 1)
+    page = min(max(page, 1), pages)
+
+    products = (
+        query.order_by(models.Product.name)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    latest_purchase, latest_audit = _cost_change_lookup(db)
+
+    rows = []
+    for p in products:
+        last_change = _last_change_for(p.id, latest_purchase, latest_audit)
+        rows.append({
+            "product": p,
+            "category": p.category.name if p.category else "Uncategorized",
+            "unit_name": p.unit_type.name if p.unit_type else "unit",
+            "last_change": last_change,
+        })
+
+    filtered_ids = [pid for (pid,) in query.with_entities(models.Product.id).all()]
+    changed_count = sum(
+        1 for pid in filtered_ids
+        if (lc := _last_change_for(pid, latest_purchase, latest_audit)) and lc["new"] != lc["old"]
+    )
+
+    return rows, total, pages, page, changed_count
 
 
 def _sales_by_product(db: Session, period_start: date, period_end: date):
@@ -791,6 +893,196 @@ def export_inventory_valuation(db: Session = Depends(get_db), user=Depends(get_c
         content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="inventory_valuation_{_today().isoformat()}.xlsx"'},
+    )
+
+
+@router.get("/reports/inventory-costs", response_class=HTMLResponse)
+def inventory_costs(
+    request: Request, q: str = "", page: int = 1,
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    rows, total, pages, page, changed_count = _cost_rows(db, q, page)
+
+    return templates.TemplateResponse(
+        "reports/inventory_costs.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "rows": rows, "changed_count": changed_count, "q": q,
+            "page": page, "pages": pages, "total": total,
+        },
+    )
+
+
+INV_PRICING_PAGE_SIZE = 50
+
+
+def _pricing_rows_for(p: models.Product) -> dict:
+    """One product's base pricing plus a row per unit in its conversion
+    ladder — each unit carries its own cost (base cost x factor_to_base),
+    Fixed price, markup %, margin % and a "true margin" sanity check (the
+    Selling Price tab's own math, see pricing.true_margin), since a unit's
+    price can be hand-typed and drift from what its stored markup/margin %
+    would actually produce."""
+    cost = Decimal(str(p.cost_price or 0))
+    selling = Decimal(str(p.selling_price or 0))
+    units = []
+    for u in p.units:
+        factor = Decimal(str(u.factor_to_base or 0))
+        unit_cost = cost * factor
+        unit_price = Decimal(str(u.price or 0))
+        units.append({
+            "name": u.name,
+            "factor": factor,
+            "cost": unit_cost,
+            "price": unit_price,
+            "markup_pct": Decimal(str(u.markup_pct or 0)),
+            "margin_pct": Decimal(str(u.margin_pct or 0)),
+            "true_margin": pricing.true_margin(unit_price, unit_cost),
+        })
+    return {
+        "product": p,
+        "category": p.category.name if p.category else "Uncategorized",
+        "base_unit_name": p.unit_type.name if p.unit_type else "unit",
+        "cost": cost,
+        "price": selling,
+        "markup_pct": Decimal(str(p.markup_pct or 0)),
+        "margin_pct": Decimal(str(p.margin_pct or 0)),
+        "true_margin": pricing.true_margin(selling, cost),
+        "units": units,
+    }
+
+
+def _pricing_query(db: Session, q: str = "", category_id: int = 0, shelf_id: int = 0):
+    query = db.query(models.Product).filter(models.Product.is_active.is_(True))
+    if q:
+        query = query.filter(models.Product.name.ilike(f"%{q}%"))
+    if category_id:
+        query = query.filter(models.Product.category_id == category_id)
+    if shelf_id:
+        query = query.filter(models.Product.shelf_id == shelf_id)
+    return query
+
+
+def _pricing_rows(
+    db: Session, q: str = "", category_id: int = 0, shelf_id: int = 0,
+    page: int = 1, page_size: int = INV_PRICING_PAGE_SIZE,
+):
+    query = _pricing_query(db, q, category_id, shelf_id)
+
+    total = query.count()
+    pages = max((total + page_size - 1) // page_size, 1)
+    page = min(max(page, 1), pages)
+
+    products = (
+        query.order_by(models.Product.name)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    rows = [_pricing_rows_for(p) for p in products]
+    return rows, total, pages, page
+
+
+@router.get("/reports/inventory-pricing", response_class=HTMLResponse)
+def inventory_pricing(
+    request: Request, q: str = "", category_id: int = 0, shelf_id: int = 0, page: int = 1,
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    rows, total, pages, page = _pricing_rows(db, q, category_id, shelf_id, page)
+
+    # Quick-filter pills: only categories/shelves actually in use, with a live
+    # count each against the current search (not the pill's own filter), so
+    # switching pills reflects what's really there — same idea as Inventory's.
+    base_for_counts = db.query(models.Product).filter(models.Product.is_active.is_(True))
+    if q:
+        base_for_counts = base_for_counts.filter(models.Product.name.ilike(f"%{q}%"))
+    cat_counts = dict(
+        base_for_counts.filter(models.Product.category_id.isnot(None))
+        .with_entities(models.Product.category_id, func.count(models.Product.id))
+        .group_by(models.Product.category_id)
+        .all()
+    )
+    categories = (
+        db.query(models.Category).filter(models.Category.id.in_(cat_counts.keys())).order_by(models.Category.name).all()
+    ) if cat_counts else []
+    shelf_counts = dict(
+        base_for_counts.filter(models.Product.shelf_id.isnot(None))
+        .with_entities(models.Product.shelf_id, func.count(models.Product.id))
+        .group_by(models.Product.shelf_id)
+        .all()
+    )
+    shelves = (
+        db.query(models.Shelf).filter(models.Shelf.id.in_(shelf_counts.keys())).order_by(models.Shelf.name).all()
+    ) if shelf_counts else []
+
+    return templates.TemplateResponse(
+        "reports/inventory_pricing.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "rows": rows, "q": q, "page": page, "pages": pages, "total": total,
+            "category_id": category_id, "categories": categories, "cat_counts": cat_counts,
+            "shelf_id": shelf_id, "shelves": shelves, "shelf_counts": shelf_counts,
+        },
+    )
+
+
+@router.get("/reports/inventory-pricing/export")
+def export_inventory_pricing(
+    q: str = "", category_id: int = 0, shelf_id: int = 0,
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    products = _pricing_query(db, q, category_id, shelf_id).order_by(models.Product.name).all()
+    rows = [_pricing_rows_for(p) for p in products]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Inventory Pricing"
+    headers = ["Product", "Category", "Unit", "Cost", "Selling Price", "Markup %", "Margin %", "True Margin %"]
+    ws.append(headers)
+    header_fill = PatternFill("solid", fgColor="1F6FEB")
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+
+    for r in rows:
+        p = r["product"]
+        ws.append([
+            p.name, r["category"], r["base_unit_name"] + " (base)",
+            float(r["cost"]), float(r["price"]), float(r["markup_pct"]), float(r["margin_pct"]), float(r["true_margin"]),
+        ])
+        for u in r["units"]:
+            ws.append([
+                p.name, r["category"], u["name"],
+                float(u["cost"]), float(u["price"]), float(u["markup_pct"]), float(u["margin_pct"]), float(u["true_margin"]),
+            ])
+
+    widths = [28, 18, 16, 12, 14, 12, 12, 14]
+    for i, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="inventory_pricing_{_today().isoformat()}.xlsx"'},
     )
 
 

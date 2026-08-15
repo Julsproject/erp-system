@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Inventory Pricing · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Inventory Pricing</h1>
+    <p class="muted">Selling price, markup and margin for every product — and for each of its unit conversions</p>
+  </div>
+  <a class="btn-secondary" href="/reports/inventory-pricing/export?q={{ q }}&category_id={{ category_id }}&shelf_id={{ shelf_id }}">⬇ Download Excel</a>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>{{ 'Matching SKUs' if (q or category_id or shelf_id) else 'Active SKUs' }}</span></div>
+</div>
+
+<form class="toolbar" method="get" action="/reports/inventory-pricing">
+  {% if category_id %}<input type="hidden" name="category_id" value="{{ category_id }}">{% endif %}
+  {% if shelf_id %}<input type="hidden" name="shelf_id" value="{{ shelf_id }}">{% endif %}
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search product name…" autofocus>
+  <button class="btn-secondary" type="submit">Search</button>
+  {% if q or category_id or shelf_id %}<a class="btn-link" href="/reports/inventory-pricing">Clear</a>{% endif %}
+</form>
+
+{% set qs_base = ('q=' ~ q ~ '&' if q) %}
+<div class="pill-filter-bar">
+  {% if categories %}
+  {% set current_cat = categories|selectattr('id', 'equalto', category_id)|map(attribute='name')|first if category_id else None %}
+  <details class="filter-drop">
+    <summary>{{ current_cat or 'All categories' }}
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 9l6 6 6-6"/></svg>
+    </summary>
+    <div class="filter-panel pills-panel">
+      <div class="cat-pills">
+        <a class="cat-pill {{ 'active' if not category_id }}" href="/reports/inventory-pricing?{{ qs_base }}{{ 'shelf_id=' ~ shelf_id ~ '&' if shelf_id }}category_id=0">All categories</a>
+        {% for c in categories %}
+        <a class="cat-pill {{ 'active' if category_id == c.id }}" href="/reports/inventory-pricing?{{ qs_base }}{{ 'shelf_id=' ~ shelf_id ~ '&' if shelf_id }}category_id={{ c.id }}">
+          {{ c.name }} <span class="cat-pill-count">{{ cat_counts.get(c.id, 0) }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+  </details>
+  {% endif %}
+
+  {% if shelves %}
+  {% set current_shelf = shelves|selectattr('id', 'equalto', shelf_id)|map(attribute='name')|first if shelf_id else None %}
+  <details class="filter-drop">
+    <summary>{{ current_shelf or 'All shelves' }}
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 9l6 6 6-6"/></svg>
+    </summary>
+    <div class="filter-panel pills-panel">
+      <div class="cat-pills">
+        <a class="cat-pill {{ 'active' if not shelf_id }}" href="/reports/inventory-pricing?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}shelf_id=0">All shelves</a>
+        {% for s in shelves %}
+        <a class="cat-pill {{ 'active' if shelf_id == s.id }}" href="/reports/inventory-pricing?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}shelf_id={{ s.id }}">
+          {{ s.name }} <span class="cat-pill-count">{{ shelf_counts.get(s.id, 0) }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+  </details>
+  {% endif %}
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Product</th><th>Category</th><th>Unit</th>
+        <th class="num">Cost</th><th class="num">Selling Price</th>
+        <th class="num">Markup %</th><th class="num">Margin %</th><th class="num">True Margin %</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      {% set p = r.product %}
+      <tr>
+        <td class="strong">
+          {% if r.units %}
+          <button type="button" class="unit-toggle" onclick="toggleUnits(this, {{ p.id }})" title="Show unit conversions for this product">▸</button>
+          {% endif %}
+          {{ p.name }}
+        </td>
+        <td>{{ r.category }}</td>
+        <td>{{ r.base_unit_name }} <span class="muted">(base)</span></td>
+        <td class="num">{{ r.cost|peso }}</td>
+        <td class="num">{{ r.price|peso if r.price else '—' }}</td>
+        <td class="num">{{ '%.1f'|format(r.markup_pct) }}%</td>
+        <td class="num">{{ '%.1f'|format(r.margin_pct) }}%</td>
+        <td class="num {{ 'owed' if r.true_margin < 0 }}">{{ '%.1f'|format(r.true_margin) }}%</td>
+      </tr>
+      {% for u in r.units %}
+      <tr class="subunit-row" data-parent-id="{{ p.id }}" style="display:none;">
+        <td class="strong">↳ {{ u.name }}</td>
+        <td class="muted">—</td>
+        <td class="muted">1 = {{ u.factor|qty }} {{ r.base_unit_name }}</td>
+        <td class="num">{{ u.cost|peso }}</td>
+        <td class="num">{{ u.price|peso if u.price else '—' }}</td>
+        <td class="num">{{ '%.1f'|format(u.markup_pct) }}%</td>
+        <td class="num">{{ '%.1f'|format(u.margin_pct) }}%</td>
+        <td class="num {{ 'owed' if u.true_margin < 0 }}">{{ '%.1f'|format(u.true_margin) }}%</td>
+      </tr>
+      {% endfor %}
+      {% else %}
+      <tr><td colspan="8" class="empty">No products found.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn-secondary" href="/reports/inventory-pricing?page={{ page - 1 }}&q={{ q }}&category_id={{ category_id }}&shelf_id={{ shelf_id }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-secondary" href="/reports/inventory-pricing?page={{ page + 1 }}&q={{ q }}&category_id={{ category_id }}&shelf_id={{ shelf_id }}">Next →</a>{% endif %}
+</div>
+{% endif %}
+
+<script>
+function toggleUnits(btn, productId) {
+  const open = btn.classList.toggle('open');
+  btn.textContent = open ? '▾' : '▸';
+  document.querySelectorAll('.subunit-row[data-parent-id="' + productId + '"]').forEach(row => {
+    row.style.display = open ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}

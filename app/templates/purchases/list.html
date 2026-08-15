@@ -80,6 +80,15 @@
       <tr><td colspan="7" class="empty">No purchases {{ 'match that filter' if (status_filter or q or date_from or date_to) else 'yet' }}.</td></tr>
       {% endfor %}
     </tbody>
+    {% if purchases %}
+    <tfoot>
+      <tr style="background:var(--surface-2);">
+        <td colspan="4" class="strong">Total{{ ' (this filter)' if (status_filter or q or date_from or date_to) }}</td>
+        <td class="num strong">{{ filtered_total|peso }}</td>
+        <td colspan="2"></td>
+      </tr>
+    </tfoot>
+    {% endif %}
   </table>
 </div>
 

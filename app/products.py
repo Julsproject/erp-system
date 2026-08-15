@@ -16,7 +16,7 @@ from barcode.writer import SVGWriter
 import openpyxl
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
-from fastapi import APIRouter, Depends, File, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -302,6 +302,8 @@ def list_products(
     deleted: int = 0,
     delete_blocked: int = 0,
     delete_blocked_name: str = "",
+    merged: str = "",
+    merge_error: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -425,6 +427,8 @@ def list_products(
             "deleted": deleted,
             "delete_blocked": delete_blocked,
             "delete_blocked_name": delete_blocked_name,
+            "merged": merged,
+            "merge_error": merge_error,
             "category_id": category_id,
             "categories": categories,
             "cat_counts": cat_counts,
@@ -929,6 +933,88 @@ def delete_product(product_id: int, request: Request, db: Session = Depends(get_
     return RedirectResponse("/products?deleted=1", status_code=status.HTTP_302_FOUND)
 
 
+@router.get("/products/merge/search")
+def merge_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Product picker for the Merge Duplicates modal — same fuzzy name match
+    as the Inventory list search, just a small JSON payload for a dropdown."""
+    if not user or not is_staff(user):
+        return JSONResponse({"products": []}, status_code=401)
+    q = (q or "").strip()
+    if not q:
+        return {"products": []}
+    products = (
+        db.query(models.Product)
+        .filter(models.Product.is_active.is_(True), models.Product.name.ilike(f"%{q}%"))
+        .order_by(models.Product.name)
+        .limit(20)
+        .all()
+    )
+    return {
+        "products": [
+            {
+                "id": p.id, "name": p.name,
+                "category": p.category.name if p.category else "Uncategorized",
+                "unit_name": p.unit_type.name if p.unit_type else "unit",
+                "cost_price": float(p.cost_price or 0),
+                "total_qty": float(p.total_qty or 0),
+                "barcode": p.barcode or "",
+            }
+            for p in products
+        ]
+    }
+
+
+# Every historical table a merge needs to re-point from the duplicate onto
+# the surviving product, so past sales/purchases/adjustments keep reading
+# correctly under the product that's left. Same set _product_has_history
+# checks, since those are exactly the tables where losing the link would
+# erase real activity.
+_MERGE_HISTORY_TABLES = [
+    models.SaleLine, models.QuotationLine, models.PurchaseLine,
+    models.StockMovement, models.StockCountLine, models.MonthEndRolloverLine,
+]
+
+
+@router.post("/products/merge")
+def merge_products(
+    request: Request, keep_id: int = Form(...), merge_id: int = Form(...),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    if keep_id == merge_id:
+        return RedirectResponse("/products?merge_error=Pick+two+different+products", status_code=status.HTTP_302_FOUND)
+
+    keep = db.get(models.Product, keep_id)
+    dup = db.get(models.Product, merge_id)
+    if not keep or not dup or not keep.is_active or not dup.is_active:
+        return RedirectResponse("/products?merge_error=Product+not+found", status_code=status.HTTP_302_FOUND)
+
+    keep.beginning_stock = (keep.beginning_stock or 0) + (dup.beginning_stock or 0)
+    keep.stock_qty = (keep.stock_qty or 0) + (dup.stock_qty or 0)
+
+    if not keep.barcode and dup.barcode:
+        keep.barcode = dup.barcode
+        dup.barcode = None
+
+    for model in _MERGE_HISTORY_TABLES:
+        db.query(model).filter(model.product_id == merge_id).update(
+            {model.product_id: keep_id}, synchronize_session=False
+        )
+    db.query(models.ProductUnit).filter(models.ProductUnit.product_id == merge_id).delete(synchronize_session=False)
+
+    dup.is_active = False
+    audit.record(
+        db, user=user, request=request, action="merge", entity_type="product",
+        entity_id=keep.id, entity_label=keep.name,
+        summary=f"Merged “{dup.name}” (#{dup.id}) into “{keep.name}” (#{keep.id}) — stock, sales, purchase and stock-count history moved over; “{dup.name}” archived",
+    )
+    db.commit()
+    return RedirectResponse(f"/products?merged={keep.name}", status_code=status.HTTP_302_FOUND)
+
+
 @router.get("/products/archived", response_class=HTMLResponse)
 def list_archived_products(
     request: Request, q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user),
@@ -1037,16 +1123,34 @@ async def bulk_price_apply(request: Request, db: Session = Depends(get_db), user
             skipped += 1
             continue
         before = _product_snapshot(p)
+
+        # For the three Fixed-Price modes, the row's own editable field wins
+        # when present — same trust level as a normal single-product price
+        # edit (an admin explicitly typed this number), so it overrides the
+        # uniform mode/value calculation for that one product only.
+        override = None
+        if mode in ("pct", "amount", "cost_pct"):
+            raw_override = (form.get(f"new_price_{p.id}") or "").strip()
+            if raw_override:
+                try:
+                    override = max(Decimal(raw_override), Decimal("0")).quantize(CENTS, rounding=ROUND_HALF_UP)
+                except InvalidOperation:
+                    override = None
+
         if mode == "pct":
-            new_price = (Decimal(str(p.selling_price or 0)) * (1 + value / 100)).quantize(CENTS, rounding=ROUND_HALF_UP)
+            new_price = override if override is not None else (
+                Decimal(str(p.selling_price or 0)) * (1 + value / 100)
+            ).quantize(CENTS, rounding=ROUND_HALF_UP)
             p.selling_price = max(new_price, Decimal("0"))
         elif mode == "amount":
-            new_price = (Decimal(str(p.selling_price or 0)) + value).quantize(CENTS, rounding=ROUND_HALF_UP)
+            new_price = override if override is not None else (
+                Decimal(str(p.selling_price or 0)) + value
+            ).quantize(CENTS, rounding=ROUND_HALF_UP)
             p.selling_price = max(new_price, Decimal("0"))
         elif mode == "cost_pct":
             # Same math as Markup, but writes straight into Fixed Price —
             # for the common case of seeding a never-set Fixed Price in bulk.
-            new_price = pricing.markup_price(p.cost_price, value)
+            new_price = override if override is not None else pricing.markup_price(p.cost_price, value)
             p.selling_price = max(new_price, Decimal("0"))
         elif mode == "markup":
             p.markup_pct = value
