@@ -285,18 +285,23 @@ PURCHASE_PAY_FUNCTION_KEYS = {
 
 def post_purchase_receive(db: Session, purchase: models.Purchase, *, is_payable: bool, payment_method: str = None, entered_by_id: int = None):
     """Called from purchases.py's create_purchase for a receive. Dr Inventory
-    always; Cr Accounts Payable if left unpaid, otherwise Cr whichever money
-    account the payment method maps to (a cheque here is treated the same
-    way the operational Purchase record already treats it — settled at
-    receive time, not deferred like a Sales cheque is via receivable)."""
+    (net of VAT) plus an Input VAT line if vat_amount > 0; Cr Accounts
+    Payable if left unpaid, otherwise Cr whichever money account the payment
+    method maps to (a cheque here is treated the same way the operational
+    Purchase record already treats it — settled at receive time, not
+    deferred like a Sales cheque is via receivable)."""
     total = Decimal(str(purchase.total or 0))
     if total <= 0:
         return None
+    vat = Decimal(str(purchase.vat_amount or 0))
+    net = total - vat
     credit_key = "AP" if is_payable else PURCHASE_PAY_FUNCTION_KEYS.get(payment_method, "PURCHASE_PAY_OTHER")
     lines = [
-        {"function_key": "INVENTORY_MERCHANDISE", "amount": total, "side": "debit"},
-        {"function_key": credit_key, "amount": total, "side": "credit", "memo": payment_method or "payable"},
+        {"function_key": "INVENTORY_MERCHANDISE", "amount": net, "side": "debit"},
     ]
+    if vat > 0:
+        lines.append({"function_key": "INPUT_VAT", "amount": vat, "side": "debit"})
+    lines.append({"function_key": credit_key, "amount": total, "side": "credit", "memo": payment_method or "payable"})
     txn_date = purchase.created_at.date() if purchase.created_at else _today()
     return post_journal(
         db, txn_date=txn_date, source_type="purchase", source_id=purchase.id,

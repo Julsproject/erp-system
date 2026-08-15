@@ -20,14 +20,17 @@
   </label>
 
   <label>Amount
-    <input name="amount" type="number" step="0.01" min="0.01" required
-           value="{{ expense.amount if expense else '' }}">
+    <input name="amount" id="amount" type="number" step="0.01" min="0.01" required
+           value="{{ expense.amount if expense else '' }}" oninput="recomputeVat()">
   </label>
 
-  <label>VAT <span class="muted">(₱, optional — already included in Amount above)</span>
-    <input name="vat_amount" type="number" step="0.01" min="0"
-           value="{{ expense.vat_amount if expense and expense.vat_amount else '' }}" placeholder="0.00">
+  <label style="display:flex;align-items:center;gap:6px;">
+    <input type="checkbox" id="vatOn" style="width:auto;"
+           {{ 'checked' if expense and expense.vat_amount else '' }} onchange="recomputeVat()">
+    VAT (12%) · included in Amount above
+    <span class="muted" id="vatPreview"></span>
   </label>
+  <input type="hidden" name="vat_amount" id="vatAmount" value="{{ expense.vat_amount if expense and expense.vat_amount else '' }}">
 
   <label>Date
     <input name="expense_date" type="date" required
@@ -98,5 +101,15 @@ function togglePaidFrom() {
   document.getElementById('paidFromWrap').style.display = PAID_FROM_METHODS.includes(method) ? '' : 'none';
 }
 togglePaidFrom();
+
+const VAT_DIV = 1.12, VAT_RATE = 0.12;
+function recomputeVat() {
+  const amount = Number(document.getElementById('amount').value) || 0;
+  const on = document.getElementById('vatOn').checked;
+  const vat = on ? Math.round(amount * VAT_RATE / VAT_DIV * 100) / 100 : 0;
+  document.getElementById('vatAmount').value = on ? vat.toFixed(2) : '';
+  document.getElementById('vatPreview').textContent = on ? ('₱' + vat.toFixed(2) + ' VAT · net ' + (amount - vat).toFixed(2)) : '';
+}
+recomputeVat();
 </script>
 {% endblock %}

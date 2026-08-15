@@ -179,6 +179,18 @@
         {% endfor %}
       </tbody>
       <tfoot>
+        {% if purchase.vat_amount and purchase.vat_amount != 0 %}
+        <tr>
+          <td colspan="4" class="num">Net of VAT</td>
+          <td class="num">{{ purchase.net_amount|peso }}</td>
+          <td></td>
+        </tr>
+        <tr>
+          <td colspan="4" class="num">VAT (12%) · included</td>
+          <td class="num">{{ purchase.vat_amount|peso }}</td>
+          <td></td>
+        </tr>
+        {% endif %}
         <tr>
           <td colspan="4" class="num strong">Total</td>
           <td class="num strong">{{ purchase.total|peso }}</td>

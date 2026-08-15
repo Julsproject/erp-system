@@ -125,7 +125,15 @@
     <button type="button" class="btn-link" style="margin-top:8px;" onclick="addBlankRow(true)">+ Add row</button>
     {% endif %}
 
+    {% if not return_against_po %}
+    <label class="pos-vat-toggle" style="display:flex;align-items:center;gap:6px;margin:10px 0;">
+      <input type="checkbox" id="vatOn" onchange="recompute()"> VAT (12%) · included
+    </label>
+    {% endif %}
+
     <div class="totals">
+      <div class="totals-row" id="rNetVat" style="display:none;"><span>Net of VAT</span><span id="tNetVat">₱0.00</span></div>
+      <div class="totals-row" id="rVat" style="display:none;"><span>VAT (12%)</span><span id="tVat">₱0.00</span></div>
       <div class="totals-row grand"><span>Total</span><span id="tTotal">₱0.00</span></div>
     </div>
 
@@ -393,6 +401,7 @@ function clearAll() {
   document.getElementById('invoiceNo').value = '';
   document.getElementById('deliveryDate').value = '';
   document.getElementById('notes').value = '';
+  if (document.getElementById('vatOn')) document.getElementById('vatOn').checked = false;
   renderLines();
 }
 
@@ -409,11 +418,23 @@ function activeLines() {
   return receiveLines.filter(l => (l.name || '').trim() && Number(l.qty) > 0);
 }
 
+const VAT_DIV = 1.12, VAT_RATE = 0.12;
+
 function recompute() {
   const lines = activeLines();
   let total = 0;
   lines.forEach(l => total += lineTotal(l));
   document.getElementById('tTotal').textContent = peso(total);
+
+  const vatOn = document.getElementById('vatOn');
+  const vatApplied = vatOn && vatOn.checked;
+  const vat = vatApplied ? total * VAT_RATE / VAT_DIV : 0;
+  document.getElementById('rNetVat').style.display = vatApplied ? 'flex' : 'none';
+  document.getElementById('rVat').style.display = vatApplied ? 'flex' : 'none';
+  if (vatApplied) {
+    document.getElementById('tNetVat').textContent = peso(total - vat);
+    document.getElementById('tVat').textContent = peso(vat);
+  }
 
   const supplier = document.getElementById('supplierId').value;
   let ok = lines.length > 0 && !!supplier, warn = '';
@@ -443,6 +464,7 @@ async function savePurchase() {
     delivery_date: document.getElementById('deliveryDate').value,
     txn_date: document.getElementById('deliveryDate').value,
     notes: document.getElementById('notes').value,
+    vat_applied: !!(document.getElementById('vatOn') && document.getElementById('vatOn').checked),
     original_purchase_id: returnAgainstId,
     payment_method: document.getElementById('paymentMethod') ? document.getElementById('paymentMethod').value : null,
     bank: document.getElementById('chequeBank') ? document.getElementById('chequeBank').value : '',

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from . import accounting, audit, models, pricing, settings_store
 from .database import get_db
 from .deps import get_current_user, is_staff
-from .pos import _resolve_txn_datetime
+from .pos import _resolve_txn_datetime, _vat_of
 from .products import _get_or_create_category, _get_or_create_unit_type
 from .templating import templates
 
@@ -707,6 +707,9 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
         return JSONResponse({"ok": False, "error": "No valid items to save."}, status_code=400)
 
     purchase.total = _money(total)
+    vat_applied = txn_type == "receive" and bool(data.get("vat_applied"))
+    purchase.vat_amount = _vat_of(purchase.total) if vat_applied else Decimal("0")
+    purchase.net_amount = purchase.total - purchase.vat_amount
     db.flush()
     prefix = "PRET" if txn_type == "return" else "PO"
     # A receive keyed to the supplier's own invoice/DR # is easier to match
@@ -1219,6 +1222,9 @@ async def edit_purchase_items(purchase_id: int, request: Request, db: Session = 
         return JSONResponse({"ok": False, "error": "No valid items to save."}, status_code=400)
 
     purchase.total = _money(total)
+    vat_applied = bool(data.get("vat_applied")) if "vat_applied" in data else bool(purchase.vat_amount)
+    purchase.vat_amount = _vat_of(purchase.total) if vat_applied else Decimal("0")
+    purchase.net_amount = purchase.total - purchase.vat_amount
 
     audit.record(
         db, user=user, request=request, action="update", entity_type="purchase",
@@ -1292,6 +1298,9 @@ def purchase_pdf(purchase_id: int, db: Session = Depends(get_db), user=Depends(g
             f"{ln.unit_cost:,.2f}",
             f"{ln.line_total:,.2f}",
         ])
+    if purchase.vat_amount and purchase.vat_amount != 0:
+        table_data.append(["", "", "", "Net of VAT", f"{purchase.net_amount:,.2f}"])
+        table_data.append(["", "", "", "VAT (12%) · included", f"{purchase.vat_amount:,.2f}"])
     table_data.append(["", "", "", "Total", f"{purchase.total:,.2f}"])
 
     table = Table(table_data, colWidths=[170, 80, 60, 90, 90], repeatRows=1)

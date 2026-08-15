@@ -704,6 +704,11 @@ class Purchase(Base):
     delivery_date = Column(String(20))     # as printed on the DR
     notes = Column(String(255))
     total = Column(Numeric(12, 2), nullable=False, server_default="0")
+    # VAT is INCLUSIVE, same convention as Sale — total already contains it.
+    # Both 0 unless the supplier invoice is VAT-registered and the box is
+    # ticked on the form; net_amount = total - vat_amount either way.
+    vat_amount = Column(Numeric(12, 2), nullable=False, server_default="0")
+    net_amount = Column(Numeric(12, 2), nullable=False, server_default="0")
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
