@@ -582,6 +582,11 @@ class ReceivableSettlement(Base):
     bank = Column(String(60))          # for cheque
     cheque_no = Column(String(40))     # for cheque
     cheque_date = Column(String(20))   # for cheque (kept as text for now)
+    ref_no = Column(String(60), nullable=True)  # GCash/bank-transfer/other reference (non-cheque methods)
+    # The exact journal entry this settlement posted, when it did — lets an
+    # accidental payment be undone by reversing this specific entry instead of
+    # an ambiguous source_type/source_id lookup (a sale can have >1 settlement).
+    journal_entry_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=True)
     # Set only when method is "credit_note" — the return/exchange sale whose
     # value was applied here instead of paid in cash, so a customer's
     # statement can point at exactly which transaction did it.

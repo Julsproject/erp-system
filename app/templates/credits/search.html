@@ -3,10 +3,11 @@
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">Credits</h1>
+  <a class="btn-secondary" href="/credits/references">📋 Payment References</a>
 </div>
 
 <form class="toolbar" method="get" action="/credits">
-  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search customer name…" autofocus>
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search customer name or payment reference #…" autofocus>
   <button class="btn-secondary" type="submit">Search</button>
   {% if q %}<a class="btn-link" href="/credits">Clear</a>{% endif %}
 </form>
@@ -19,7 +20,18 @@
     <tbody>
       {% for c in customers %}
       <tr>
-        <td class="strong">{{ c.name }}</td>
+        <td class="strong">
+          {{ c.name }}
+          {% set matches = ref_matches.get(c.id) %}
+          {% if matches %}
+          <div class="muted" style="font-size:12px;font-weight:400;margin-top:2px;">
+            {% for m in matches %}
+            ✓ Ref# {{ m.cheque_no if m.method == 'cheque' else m.ref_no }} — Invoice {{ m.sale.invoice_no }}, {{ m.amount|peso }} paid {{ m.created_at.strftime('%b %d, %Y') if m.created_at else '' }}
+            {%- if not loop.last %}<br>{% endif %}
+            {% endfor %}
+          </div>
+          {% endif %}
+        </td>
         <td>{{ c.tin or '—' }}</td>
         <td>{{ c.address or '—' }}</td>
         <td class="num {{ 'owed' if outstanding.get(c.id, 0) > 0 }}">{{ outstanding.get(c.id, 0)|peso }}</td>

@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Pay Full · {{ customer.name }} · {{ app_name }}{% endblock %}
+{% block title %}Pay Selected · {{ customer.name }} · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1 class="page-title">Pay Full — {{ customer.name }}</h1>
+  <h1 class="page-title">Pay Selected — {{ customer.name }}</h1>
   <a class="btn-link" href="/credits/{{ customer.id }}">← Back to statement</a>
 </div>
 
@@ -20,8 +20,6 @@
         <td>{{ sale.created_at.strftime('%b %d, %Y') if sale.created_at else '' }}</td>
         <td class="num owed">{{ outstanding|peso }}</td>
       </tr>
-      {% else %}
-      <tr><td colspan="3" class="empty">Nothing outstanding — already paid in full.</td></tr>
       {% endfor %}
     </tbody>
     <tfoot>
@@ -30,8 +28,10 @@
   </table>
 </div>
 
-{% if owed %}
-<form class="card form" method="post" action="/credits/{{ customer.id }}/pay-full" style="margin-top:16px;max-width:560px;" id="payFullForm">
+<form class="card form" method="post" action="/credits/{{ customer.id }}/pay-selected" style="margin-top:16px;max-width:560px;" id="paySelectedForm">
+  {% for sale, outstanding in owed %}
+  <input type="hidden" name="sale_ids" value="{{ sale.id }}">
+  {% endfor %}
   <label>Method
     <select name="method" id="method" onchange="toggleCheque()">
       {% for value, label in methods %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
@@ -53,11 +53,10 @@
   </div>
 
   <div class="form-actions full">
-    <button class="btn" type="submit" onclick="return confirm('Mark all {{ owed|length }} invoice(s) totaling {{ total|peso }} as paid in full?');">Pay Full — {{ total|peso }}</button>
+    <button class="btn" type="submit" onclick="return confirm('Mark {{ owed|length }} invoice(s) totaling {{ total|peso }} as paid?');">Pay {{ owed|length }} Invoice{{ '' if owed|length == 1 else 's' }} — {{ total|peso }}</button>
     <a class="btn-secondary" href="/credits/{{ customer.id }}">Cancel</a>
   </div>
 </form>
-{% endif %}
 
 <script>
   function toggleCheque() {

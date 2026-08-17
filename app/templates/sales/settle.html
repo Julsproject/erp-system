@@ -16,6 +16,7 @@
 </div>
 
 <form class="card form" method="post" action="/sales/receivables/{{ sale.id }}/pay" style="margin-top:16px;" id="settleForm">
+  <input type="hidden" name="from_page" value="{{ from_page }}">
   <label>Method
     <select name="method" id="method" onchange="toggleCheque()">
       {% for value, label in methods %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
@@ -24,6 +25,9 @@
   <label>Amount (₱)
     <input name="amount" type="number" step="0.01" min="0" value="{{ '%.2f'|format(outstanding) }}" autofocus>
     <small class="hint">Max is the outstanding credit ({{ outstanding|peso }}).</small>
+  </label>
+  <label id="refNoField">Reference # <span class="muted">(optional)</span>
+    <input name="ref_no" type="text" placeholder="Reference No.">
   </label>
 
   <div id="chequeFields" class="full" style="display:none;">
@@ -45,8 +49,9 @@
 
 <script>
   function toggleCheque() {
-    document.getElementById('chequeFields').style.display =
-      document.getElementById('method').value === 'cheque' ? 'block' : 'none';
+    const isCheque = document.getElementById('method').value === 'cheque';
+    document.getElementById('chequeFields').style.display = isCheque ? 'block' : 'none';
+    document.getElementById('refNoField').style.display = isCheque ? 'none' : 'flex';
   }
   toggleCheque();
 </script>

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Payment References · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Payment References</h1>
+    <p class="muted">Every credit payment recorded with a reference or cheque # — newest first</p>
+  </div>
+  <a class="btn-secondary" href="/credits">← Back to Credits</a>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>{{ 'Matching payments' if q else 'Payments with a reference #' }}</span></div>
+</div>
+
+<form class="toolbar" method="get" action="/credits/references">
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search reference #, cheque #, invoice #, or customer…" autofocus>
+  <button class="btn-secondary" type="submit">Search</button>
+  {% if q %}<a class="btn-link" href="/credits/references">Clear</a>{% endif %}
+</form>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Date</th><th>Customer</th><th>Invoice #</th><th>Method</th><th>Reference #</th><th class="num">Amount</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for st in settlements %}
+      <tr>
+        <td style="white-space:nowrap;">{{ st.created_at.strftime('%b %d, %Y') if st.created_at else '' }}</td>
+        <td class="strong">{{ st.sale.customer_name or 'Walk-in' }}</td>
+        <td>{{ st.sale.invoice_no }}</td>
+        <td>{{ st.method|replace('_',' ')|title }}</td>
+        <td class="strong">{{ st.cheque_no if st.method == 'cheque' else st.ref_no }}</td>
+        <td class="num">{{ st.amount|peso }}</td>
+        <td class="row-actions">
+          {% if st.sale.customer_id %}<a class="btn-link" href="/credits/{{ st.sale.customer_id }}">View statement</a>{% endif %}
+          {% if undoable.get(st.id) %}
+          <form method="post" action="/credits/settlements/{{ st.id }}/undo" onsubmit="return confirm('Undo this {{ st.amount|peso }} payment on Invoice {{ st.sale.invoice_no }}? The invoice goes back to outstanding.');" style="display:inline;">
+            <button type="submit" class="btn-link danger">Undo</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No payments {{ 'match that search' if q else 'with a reference # on file yet' }}.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn-secondary" href="/credits/references?page={{ page - 1 }}&q={{ q }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-secondary" href="/credits/references?page={{ page + 1 }}&q={{ q }}">Next →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -276,6 +276,20 @@ def post_receivable_settlement(db: Session, sale: models.Sale, *, amount: Decima
     )
 
 
+def reverse_receivable_settlement(db: Session, settlement: models.ReceivableSettlement, *, reason: str = None, entered_by_id: int = None):
+    """Undoes one accidental payment — reverses the specific journal entry
+    this settlement posted (via journal_entry_id, not source_type/source_id,
+    since a sale can have several settlements and that pair alone can't tell
+    them apart). No-op if this settlement never posted one (credit_note
+    settlements don't; older rows predating this link don't either)."""
+    if not settlement.journal_entry_id:
+        return None
+    entry = db.get(models.JournalEntry, settlement.journal_entry_id)
+    if not entry or entry.status != "posted":
+        return None
+    return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id)
+
+
 PURCHASE_PAY_FUNCTION_KEYS = {
     "cash": "PURCHASE_PAY_CASH", "gcash": "PURCHASE_PAY_GCASH",
     "maya": "PURCHASE_PAY_MAYA", "other_ewallet": "PURCHASE_PAY_OTHER_EWALLET",

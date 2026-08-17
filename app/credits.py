@@ -3,14 +3,14 @@ import io
 from datetime import date
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import accounting, models, settings_store
+from . import accounting, audit, models, settings_store
 from .database import get_db
-from .deps import get_current_user
+from .deps import get_current_user, is_staff
 from .sales import SETTLE_METHODS
 from .templating import templates
 
@@ -50,7 +50,23 @@ def credits_search(
         .distinct()
     )
     if q:
-        query = query.filter(models.Customer.name.ilike(f"%{q}%"))
+        # Matches by customer name OR by a payment reference/cheque # recorded
+        # against one of their credit sales — so a receipt in hand with just
+        # a GCash/bank ref # on it is enough to find which customer (and
+        # invoice) it was applied to, paid off or not.
+        ref_customer_ids = (
+            db.query(models.Sale.customer_id)
+            .join(models.ReceivableSettlement, models.ReceivableSettlement.sale_id == models.Sale.id)
+            .filter(
+                or_(
+                    models.ReceivableSettlement.ref_no.ilike(f"%{q}%"),
+                    models.ReceivableSettlement.cheque_no.ilike(f"%{q}%"),
+                )
+            )
+        )
+        query = query.filter(
+            or_(models.Customer.name.ilike(f"%{q}%"), models.Customer.id.in_(ref_customer_ids))
+        )
     total = query.count()
     pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
     page = min(page, pages)
@@ -61,23 +77,96 @@ def credits_search(
         .all()
     )
 
-    # outstanding per listed customer
+    # outstanding per listed customer, plus (only when searching) which of
+    # their settlements actually matched the reference # typed in — shown so
+    # a name-only match isn't confused with a ref-number hit.
     outstanding = {}
+    ref_matches = {}
     for c in customers:
         sales = db.query(models.Sale).filter(models.Sale.customer_id == c.id, models.Sale.receivable_amount > 0).all()
         settled = _settled_for(db, [s.id for s in sales])
         bal = sum(((s.receivable_amount or 0) - settled.get(s.id, 0) for s in sales), Decimal("0"))
         outstanding[c.id] = bal
+        if q:
+            matches = (
+                db.query(models.ReceivableSettlement)
+                .filter(
+                    models.ReceivableSettlement.sale_id.in_([s.id for s in sales]),
+                    or_(
+                        models.ReceivableSettlement.ref_no.ilike(f"%{q}%"),
+                        models.ReceivableSettlement.cheque_no.ilike(f"%{q}%"),
+                    ),
+                )
+                .all()
+            )
+            if matches:
+                ref_matches[c.id] = matches
 
     return templates.TemplateResponse(
         "credits/search.html",
         {"request": request, "app_name": request.app.title, "user": user, "customers": customers,
-         "outstanding": outstanding, "q": q, "page": page, "pages": pages},
+         "outstanding": outstanding, "ref_matches": ref_matches, "q": q, "page": page, "pages": pages},
+    )
+
+
+@router.get("/credits/references", response_class=HTMLResponse)
+def credit_references(
+    request: Request, q: str = "", page: int = 1,
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    """Every credit payment that has a reference # (or cheque #) on file,
+    newest first — a straight list to scan or search, for when you're
+    holding a receipt and want to confirm which customer/invoice it paid
+    without knowing the customer's name."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    q = (q or "").strip()
+    page = max(page, 1)
+
+    has_ref = or_(
+        func.coalesce(models.ReceivableSettlement.ref_no, "") != "",
+        func.coalesce(models.ReceivableSettlement.cheque_no, "") != "",
+    )
+    query = (
+        db.query(models.ReceivableSettlement)
+        .join(models.Sale, models.ReceivableSettlement.sale_id == models.Sale.id)
+        .outerjoin(models.Customer, models.Sale.customer_id == models.Customer.id)
+        .filter(has_ref)
+    )
+    if q:
+        query = query.filter(
+            or_(
+                models.ReceivableSettlement.ref_no.ilike(f"%{q}%"),
+                models.ReceivableSettlement.cheque_no.ilike(f"%{q}%"),
+                models.Sale.invoice_no.ilike(f"%{q}%"),
+                models.Customer.name.ilike(f"%{q}%"),
+            )
+        )
+    total = query.count()
+    pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+    page = min(page, pages)
+    settlements = (
+        query.order_by(models.ReceivableSettlement.created_at.desc())
+        .offset((page - 1) * PAGE_SIZE)
+        .limit(PAGE_SIZE)
+        .all()
+    )
+
+    undoable = {st.id: (is_staff(user) and _settlement_is_undoable(db, st)) for st in settlements}
+
+    return templates.TemplateResponse(
+        "credits/references.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "settlements": settlements, "q": q, "page": page, "pages": pages, "total": total,
+         "undoable": undoable},
     )
 
 
 @router.get("/credits/{customer_id:int}", response_class=HTMLResponse)
-def credit_statement(customer_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def credit_statement(
+    customer_id: int, request: Request, undone: int = 0, undo_error: int = 0,
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     customer = db.get(models.Customer, customer_id)
@@ -145,12 +234,15 @@ def credit_statement(customer_id: int, request: Request, db: Session = Depends(g
                 items.append({"name": ln.product_name, "qty": abs(ln.qty or 0), "unit": ln.unit_name})
         returned_items[st.id] = items
 
+    undoable = {st.id: (is_staff(user) and _settlement_is_undoable(db, st)) for st in settlements}
+
     return templates.TemplateResponse(
         "credits/statement.html",
         {
             "request": request, "app_name": request.app.title, "user": user,
             "customer": customer, "rows": rows, "settlements": settlements, "returned_items": returned_items,
             "orig_total": orig_total, "paid_total": paid_total, "out_total": out_total,
+            "undoable": undoable, "undone": undone, "undo_error": undo_error,
         },
     )
 
@@ -278,6 +370,50 @@ def pay_full_form(customer_id: int, request: Request, db: Session = Depends(get_
     )
 
 
+def _apply_batch_payment(db: Session, user, customer, targets, method: str, ref_no, form) -> str | None:
+    """Settles every (sale, outstanding) pair in `targets` in full — shared by
+    Pay Full (all outstanding invoices) and Pay Selected (just the checked
+    ones). Cheque opens ONE PDC for the combined total, with one
+    PdcApplication row per invoice it's covering — a physical cheque is one
+    piece of paper, not one per invoice. Returns an error string, or None on
+    success (caller still has to commit)."""
+    cheque_date = None
+    if method == "cheque":
+        raw_date = (form.get("cheque_date") or "").strip()
+        try:
+            cheque_date = date.fromisoformat(raw_date)
+        except ValueError:
+            return "Enter a valid cheque date (the date printed on the cheque)."
+
+    if method == "cheque":
+        total = sum((o for _, o in targets), Decimal("0"))
+        pdc = models.PostDatedCheque(
+            direction="received", amount=total,
+            bank=(form.get("bank") or "").strip() or None,
+            cheque_no=(form.get("cheque_no") or "").strip() or None,
+            cheque_date=cheque_date,
+            customer_id=customer.id,
+            created_by=user.id,
+        )
+        db.add(pdc)
+        db.flush()
+        for sale, outstanding in targets:
+            db.add(models.PdcApplication(pdc_id=pdc.id, sale_id=sale.id, amount=outstanding))
+    else:
+        for sale, outstanding in targets:
+            settlement = models.ReceivableSettlement(
+                sale_id=sale.id, method=method, amount=outstanding, ref_no=ref_no, cashier_id=user.id,
+            )
+            db.add(settlement)
+            try:
+                entry = accounting.post_receivable_settlement(db, sale, amount=outstanding, method=method, entered_by_id=user.id)
+                if entry:
+                    settlement.journal_entry_id = entry.id
+            except accounting.PostingError:
+                pass
+    return None
+
+
 @router.post("/credits/{customer_id:int}/pay-full")
 async def pay_full_submit(customer_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
@@ -290,8 +426,13 @@ async def pay_full_submit(customer_id: int, request: Request, db: Session = Depe
 
     form = await request.form()
     method = (form.get("method") or "cash").strip().lower()
+    ref_no = (form.get("ref_no") or "").strip() or None
 
-    def rerender(error):
+    if not owed:
+        return RedirectResponse(f"/credits/{customer_id}", status_code=status.HTTP_302_FOUND)
+
+    error = _apply_batch_payment(db, user, customer, owed, method, ref_no, form)
+    if error:
         return templates.TemplateResponse(
             "credits/pay_full.html",
             {
@@ -299,44 +440,113 @@ async def pay_full_submit(customer_id: int, request: Request, db: Session = Depe
                 "customer": customer, "owed": owed, "total": total, "methods": SETTLE_METHODS, "error": error,
             },
         )
-
-    if not owed:
-        return RedirectResponse(f"/credits/{customer_id}", status_code=status.HTTP_302_FOUND)
-
-    cheque_date = None
-    if method == "cheque":
-        raw_date = (form.get("cheque_date") or "").strip()
-        try:
-            cheque_date = date.fromisoformat(raw_date)
-        except ValueError:
-            return rerender("Enter a valid cheque date (the date printed on the cheque).")
-
-    # Pays every outstanding invoice off in full, oldest first — this is
-    # "clear the whole balance," not a partial amount, so there's nothing to
-    # split or leave short. Cheque opens ONE PDC for the whole total, with
-    # one PdcApplication row per invoice it's covering — a physical cheque
-    # is one piece of paper, not one per invoice.
-    if method == "cheque":
-        pdc = models.PostDatedCheque(
-            direction="received", amount=total,
-            bank=(form.get("bank") or "").strip() or None,
-            cheque_no=(form.get("cheque_no") or "").strip() or None,
-            cheque_date=cheque_date,
-            customer_id=customer.id,
-            created_by=user.id,
-        )
-        db.add(pdc)
-        db.flush()
-        for sale, outstanding in owed:
-            db.add(models.PdcApplication(pdc_id=pdc.id, sale_id=sale.id, amount=outstanding))
-    else:
-        for sale, outstanding in owed:
-            db.add(models.ReceivableSettlement(
-                sale_id=sale.id, method=method, amount=outstanding, cashier_id=user.id,
-            ))
-            try:
-                accounting.post_receivable_settlement(db, sale, amount=outstanding, method=method, entered_by_id=user.id)
-            except accounting.PostingError:
-                pass
     db.commit()
     return RedirectResponse(f"/credits/{customer_id}", status_code=status.HTTP_302_FOUND)
+
+
+@router.get("/credits/{customer_id:int}/pay-selected", response_class=HTMLResponse)
+def pay_selected_form(
+    customer_id: int, request: Request, sale_ids: list[int] = Query(default=[]),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    customer = db.get(models.Customer, customer_id)
+    if not customer:
+        return RedirectResponse("/credits", status_code=302)
+    ids = set(sale_ids)
+    owed = [(s, o) for s, o in _outstanding_sales(db, customer_id) if s.id in ids]
+    if not owed:
+        return RedirectResponse(f"/credits/{customer_id}", status_code=status.HTTP_302_FOUND)
+    total = sum((o for _, o in owed), Decimal("0"))
+    return templates.TemplateResponse(
+        "credits/pay_selected.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "customer": customer, "owed": owed, "total": total, "methods": SETTLE_METHODS, "error": None,
+        },
+    )
+
+
+@router.post("/credits/{customer_id:int}/pay-selected")
+async def pay_selected_submit(customer_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    customer = db.get(models.Customer, customer_id)
+    if not customer:
+        return RedirectResponse("/credits", status_code=302)
+
+    form = await request.form()
+    ids = {int(i) for i in form.getlist("sale_ids") if i.isdigit()}
+    owed = [(s, o) for s, o in _outstanding_sales(db, customer_id) if s.id in ids]
+    if not owed:
+        return RedirectResponse(f"/credits/{customer_id}", status_code=status.HTTP_302_FOUND)
+    total = sum((o for _, o in owed), Decimal("0"))
+
+    method = (form.get("method") or "cash").strip().lower()
+    ref_no = (form.get("ref_no") or "").strip() or None
+
+    error = _apply_batch_payment(db, user, customer, owed, method, ref_no, form)
+    if error:
+        return templates.TemplateResponse(
+            "credits/pay_selected.html",
+            {
+                "request": request, "app_name": request.app.title, "user": user,
+                "customer": customer, "owed": owed, "total": total, "methods": SETTLE_METHODS, "error": error,
+            },
+        )
+    db.commit()
+    return RedirectResponse(f"/credits/{customer_id}", status_code=status.HTTP_302_FOUND)
+
+
+def _settlement_is_undoable(db: Session, settlement: models.ReceivableSettlement) -> bool:
+    """Scoped narrow on purpose — this is for "oops, clicked the wrong
+    invoice/amount," not a general delete tool:
+      - credit_note settlements are a return/exchange applied as payment;
+        undoing one would desync it from that transaction.
+      - cheque settlements only exist because a PDC cleared — undoing one
+        here wouldn't touch the cheque's own status, so it'd desync too.
+        Reopen/void the cheque from the Cheques register instead.
+      - a settlement a Delivery or PDC points back to (settlement_id) is
+        load-bearing for that other record; same desync risk.
+    Everything else — a plain Collect Payment / Pay Full / Pay Selected
+    entry — is fair game."""
+    if settlement.method in ("cheque", "credit_note"):
+        return False
+    if db.query(models.PostDatedCheque.id).filter(models.PostDatedCheque.settlement_id == settlement.id).first():
+        return False
+    if db.query(models.Delivery.id).filter(models.Delivery.settlement_id == settlement.id).first():
+        return False
+    return True
+
+
+@router.post("/credits/settlements/{settlement_id:int}/undo")
+def undo_settlement(settlement_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    settlement = db.get(models.ReceivableSettlement, settlement_id)
+    if not settlement:
+        return RedirectResponse("/credits", status_code=302)
+
+    sale = settlement.sale
+    customer_id = sale.customer_id if sale else None
+    back_url = f"/credits/{customer_id}" if customer_id else "/credits"
+
+    if not _settlement_is_undoable(db, settlement):
+        return RedirectResponse(f"{back_url}?undo_error=1", status_code=status.HTTP_302_FOUND)
+
+    amount, method = settlement.amount, settlement.method
+    invoice_no = sale.invoice_no if sale else "?"
+    accounting.reverse_receivable_settlement(
+        db, settlement, reason=f"Payment undone on {invoice_no}", entered_by_id=user.id,
+    )
+    audit.record(
+        db, user=user, request=request, action="delete", entity_type="receivable_settlement",
+        entity_id=settlement.id, entity_label=invoice_no,
+        summary=f"Undid a {method} payment of {amount} on {invoice_no} — recorded by mistake",
+    )
+    db.delete(settlement)
+    db.commit()
+    return RedirectResponse(f"{back_url}?undone=1", status_code=status.HTTP_302_FOUND)

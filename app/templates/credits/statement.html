@@ -19,6 +19,7 @@
     th { text-align:left; color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.04em; padding:8px 10px; border-bottom:1px solid var(--line); }
     td { padding:9px 10px; border-bottom:1px solid var(--line); }
     .num { text-align:right; font-variant-numeric:tabular-nums; }
+    .mut { color:var(--muted); }
     tfoot td { font-weight:700; border-top:2px solid var(--ink); border-bottom:none; }
     .owed { color:var(--warn); font-weight:700; }
     .s-balance { text-align:right; font-size:16px; margin-top:8px; }
@@ -30,7 +31,11 @@
     .btn { padding:10px 18px; border-radius:10px; border:none; cursor:pointer; font-size:14px; font-weight:600; text-decoration:none; }
     .btn.print { background:#4f46e5; color:#fff; }
     .btn.back { background:#fff; color:#334155; border:1px solid var(--line); }
-    @media print { body { background:#fff; } .sheet { box-shadow:none; border:none; margin:0; max-width:none; } .actions, .no-print { display:none; } @page { margin:12mm; } }
+    .btn[disabled] { opacity:.45; cursor:not-allowed; }
+    .batch-bar { max-width:720px; margin:0 auto 14px; display:flex; align-items:center; justify-content:flex-end; gap:14px; }
+    .batch-bar .info { font-size:13px; color:var(--muted); }
+    .batch-bar .info b { color:var(--ink); }
+    @media print { body { background:#fff; } .sheet { box-shadow:none; border:none; margin:0; max-width:none; } .actions, .no-print, .batch-bar { display:none; } @page { margin:12mm; } }
   </style>
 </head>
 <body>
@@ -50,11 +55,17 @@
 
     <table>
       <thead>
-        <tr><th>Invoice #</th><th>Date</th><th class="num">Sale Total</th><th class="num">Credit</th><th class="num">Paid</th><th class="num">Outstanding</th><th class="no-print"></th></tr>
+        <tr>
+          <th class="no-print"><input type="checkbox" id="selectAllChk" onchange="toggleAllChk(this)" title="Select all outstanding"></th>
+          <th>Invoice #</th><th>Date</th><th class="num">Sale Total</th><th class="num">Credit</th><th class="num">Paid</th><th class="num">Outstanding</th><th class="no-print"></th>
+        </tr>
       </thead>
       <tbody>
         {% for r in rows %}
         <tr>
+          <td class="no-print">
+            {% if r.outstanding > 0 %}<input type="checkbox" class="payChk" value="{{ r.sale.id }}" onchange="updateBatchBar()">{% endif %}
+          </td>
           <td>
             {{ r.sale.invoice_no }}
             {% if r.sold_items %}
@@ -67,15 +78,16 @@
           <td class="num">{{ r.sale.total|peso }}</td>
           <td class="num">{{ r.orig|peso }}</td>
           <td class="num">{{ r.paid|peso }}</td>
-          <td class="num {{ 'owed' if r.outstanding > 0 }}">{{ r.outstanding|peso }}</td>
-          <td class="no-print">{% if r.outstanding > 0 %}<a class="pay-link" href="/sales/receivables/{{ r.sale.id }}/pay">Collect payment</a>{% endif %}</td>
+          <td class="num {{ 'owed' if r.outstanding > 0 }}" data-outstanding="{{ r.outstanding }}">{{ r.outstanding|peso }}</td>
+          <td class="no-print">{% if r.outstanding > 0 %}<a class="pay-link" href="/sales/receivables/{{ r.sale.id }}/pay?from_page=credits">Collect payment</a>{% endif %}</td>
         </tr>
         {% else %}
-        <tr><td colspan="7" style="text-align:center;color:var(--muted);padding:24px;">No credit transactions.</td></tr>
+        <tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px;">No credit transactions.</td></tr>
         {% endfor %}
       </tbody>
       <tfoot>
         <tr>
+          <td class="no-print"></td>
           <td colspan="3">Totals</td>
           <td class="num">{{ orig_total|peso }}</td>
           <td class="num">{{ paid_total|peso }}</td>
@@ -85,13 +97,21 @@
       </tfoot>
     </table>
 
+    <div class="batch-bar no-print" id="batchBar" style="display:none;">
+      <span class="info"><b id="batchCount">0</b> selected · Total: <b id="batchTotal">₱0.00</b></span>
+      <button type="button" class="btn back" id="batchPayBtn" onclick="goPaySelected()">Pay Selected</button>
+    </div>
+
     <div class="s-balance">Outstanding balance: <b class="owed">{{ out_total|peso }}</b></div>
+
+    {% if undone %}<div class="alert no-print" style="background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;padding:10px 14px;border-radius:8px;margin-bottom:12px;">Payment undone — the invoice is outstanding again.</div>{% endif %}
+    {% if undo_error %}<div class="alert no-print" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:10px 14px;border-radius:8px;margin-bottom:12px;">That payment can't be undone here — it's tied to a cheque or delivery record. Use the Cheques register or the delivery instead.</div>{% endif %}
 
     {% if settlements %}
     <div class="s-title" style="margin:26px 0 8px;">Payments &amp; Returns Applied</div>
     <table>
       <thead>
-        <tr><th>Date</th><th>Invoice #</th><th>Description</th><th class="num">Amount</th></tr>
+        <tr><th>Date</th><th>Invoice #</th><th>Description</th><th>Reference #</th><th class="num">Amount</th><th class="no-print"></th></tr>
       </thead>
       <tbody>
         {% for st in settlements %}
@@ -111,7 +131,15 @@
               Payment via {{ st.method|replace('_',' ')|title }}
             {% endif %}
           </td>
+          <td class="mut">{{ st.cheque_no if st.method == 'cheque' else (st.ref_no or '—') }}</td>
           <td class="num">{{ st.amount|peso }}</td>
+          <td class="no-print">
+            {% if undoable.get(st.id) %}
+            <form method="post" action="/credits/settlements/{{ st.id }}/undo" onsubmit="return confirm('Undo this {{ st.amount|peso }} payment on Invoice {{ st.sale.invoice_no }}? The invoice goes back to outstanding.');" style="display:inline;">
+              <button type="submit" class="pay-link" style="background:none;border:none;cursor:pointer;color:#b91c1c;">Undo</button>
+            </form>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -127,5 +155,34 @@
     <button class="btn print" onclick="window.print()">🖨 Print</button>
     <a class="btn back" href="/credits/{{ customer.id }}/pdf">⬇ Download PDF</a>
   </div>
+
+  <script>
+    function peso(n) { return '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
+
+    function toggleAllChk(master) {
+      document.querySelectorAll('.payChk').forEach(c => { c.checked = master.checked; });
+      updateBatchBar();
+    }
+
+    function updateBatchBar() {
+      const checked = Array.from(document.querySelectorAll('.payChk:checked'));
+      const bar = document.getElementById('batchBar');
+      if (!checked.length) { bar.style.display = 'none'; return; }
+      bar.style.display = 'flex';
+      let total = 0;
+      checked.forEach(c => {
+        const cell = c.closest('tr').querySelector('[data-outstanding]');
+        total += parseFloat(cell.dataset.outstanding) || 0;
+      });
+      document.getElementById('batchCount').textContent = checked.length;
+      document.getElementById('batchTotal').textContent = peso(total);
+    }
+
+    function goPaySelected() {
+      const ids = Array.from(document.querySelectorAll('.payChk:checked')).map(c => 'sale_ids=' + c.value);
+      if (!ids.length) return;
+      window.location.href = '/credits/{{ customer.id }}/pay-selected?' + ids.join('&');
+    }
+  </script>
 </body>
 </html>

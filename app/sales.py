@@ -64,10 +64,16 @@ def _sold_amount(sale) -> Decimal:
     return sale.total or Decimal("0")
 
 
-def _back_url(user, sale=None) -> str:
-    """Where "back"/"cancel" should go — admins return to the receivables
-    list; cashiers (who can't see that list) go to the customer's credit
-    statement instead, since that's how they got here."""
+def _back_url(user, sale=None, from_page: str = "") -> str:
+    """Where "back"/"cancel"/post-submit should go. `from_page` (carried
+    through the page's own query string / hidden field) wins when set — it's
+    how we actually know whether this collect-payment page was opened from
+    the Credits statement or from Sales > Receivables, instead of guessing
+    from role. Falls back to the old role-based guess (admins ->
+    receivables list; cashiers, who can't see that list, -> the customer's
+    credit statement) only when nothing was passed."""
+    if from_page == "credits" and sale and sale.customer_id:
+        return f"/credits/{sale.customer_id}"
     if is_staff(user):
         return "/sales/receivables"
     if sale and sale.customer_id:
@@ -395,7 +401,7 @@ def receivables(
 
 
 @router.get("/sales/receivables/{sale_id:int}/pay", response_class=HTMLResponse)
-def settle_form(sale_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def settle_form(sale_id: int, request: Request, from_page: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     sale = db.get(models.Sale, sale_id)
@@ -408,7 +414,7 @@ def settle_form(sale_id: int, request: Request, db: Session = Depends(get_db), u
         {
             "request": request, "app_name": request.app.title, "user": user,
             "sale": sale, "outstanding": outstanding, "methods": SETTLE_METHODS, "error": None,
-            "back_url": _back_url(user, sale),
+            "back_url": _back_url(user, sale, from_page), "from_page": from_page,
         },
     )
 
@@ -426,13 +432,15 @@ async def settle_pay(sale_id: int, request: Request, db: Session = Depends(get_d
     form = await request.form()
     method = (form.get("method") or "cash").strip().lower()
     amount = _dec(form.get("amount"))
+    ref_no = (form.get("ref_no") or "").strip() or None
+    from_page = (form.get("from_page") or "").strip()
 
     def rerender(error):
         return templates.TemplateResponse(
             "sales/settle.html",
             {"request": request, "app_name": request.app.title, "user": user,
              "sale": sale, "outstanding": outstanding, "methods": SETTLE_METHODS, "error": error,
-             "back_url": _back_url(user, sale)},
+             "back_url": _back_url(user, sale, from_page), "from_page": from_page},
         )
 
     if amount <= 0:
@@ -462,13 +470,16 @@ async def settle_pay(sale_id: int, request: Request, db: Session = Depends(get_d
         db.commit()
         return RedirectResponse(f"/pdc/{pdc.id}", status_code=status.HTTP_302_FOUND)
 
-    db.add(models.ReceivableSettlement(
-        sale_id=sale.id, method=method, amount=amount,
+    settlement = models.ReceivableSettlement(
+        sale_id=sale.id, method=method, amount=amount, ref_no=ref_no,
         cashier_id=user.id,
-    ))
+    )
+    db.add(settlement)
     try:
-        accounting.post_receivable_settlement(db, sale, amount=amount, method=method, entered_by_id=user.id)
+        entry = accounting.post_receivable_settlement(db, sale, amount=amount, method=method, entered_by_id=user.id)
+        if entry:
+            settlement.journal_entry_id = entry.id
     except accounting.PostingError:
         pass
     db.commit()
-    return RedirectResponse(_back_url(user, sale), status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(_back_url(user, sale, from_page), status_code=status.HTTP_302_FOUND)
