@@ -51,6 +51,23 @@
     .btn.print { background:var(--brand); color:#fff; }
     .btn.back { background:#fff; color:#334155; border:1px solid var(--line); }
 
+    /* This page is standalone (it doesn't extend base.html, so styles.css and
+       its responsive rules never reach it). On a phone the four KPI cards
+       squeeze to ~90px each and push the sheet wider than the screen, so
+       they get their own breakpoints here. */
+    @media screen and (max-width: 640px) {
+      .sheet { margin:14px 10px; padding:20px 16px; border-radius:10px; }
+      .w-head { flex-wrap:wrap; }
+      .w-grid { grid-template-columns:1fr 1fr; }
+      .w-card .value { font-size:18px; }
+      .w-controls input, .w-controls button, .w-controls a.btn-week { font-size:16px; min-height:42px; }
+      .actions { margin:0 10px 30px; }
+      .btn { font-size:16px; min-height:42px; display:inline-flex; align-items:center; }
+      table { font-size:12.5px; }
+      th, td { padding:6px 0; }
+    }
+    @media screen and (max-width: 400px) { .w-grid { grid-template-columns:1fr; } }
+
     @media print {
       body { background:#fff; }
       .sheet { box-shadow:none; border:none; margin:0; max-width:none; }

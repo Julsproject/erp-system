@@ -35,6 +35,19 @@
     .batch-bar { max-width:720px; margin:0 auto 14px; display:flex; align-items:center; justify-content:flex-end; gap:14px; }
     .batch-bar .info { font-size:13px; color:var(--muted); }
     .batch-bar .info b { color:var(--ink); }
+    /* Standalone page — styles.css and its responsive rules don't reach it.
+       On a phone the 36px side padding plus an unwrapped invoice table push
+       this ~250px past the screen edge, so the table gets its own scroll box
+       rather than dragging the whole page sideways. */
+    @media screen and (max-width: 640px) {
+      .sheet { margin:14px 10px; padding:20px 16px; border-radius:10px; }
+      .s-head { flex-wrap:wrap; gap:10px; }
+      table { display:block; overflow-x:auto; -webkit-overflow-scrolling:touch; white-space:nowrap; }
+      .actions, .batch-bar { margin-left:10px; margin-right:10px; flex-wrap:wrap; }
+      .btn { font-size:16px; min-height:42px; display:inline-flex; align-items:center; }
+      input, select { font-size:16px; }
+    }
+
     @media print { body { background:#fff; } .sheet { box-shadow:none; border:none; margin:0; max-width:none; } .actions, .no-print, .batch-bar { display:none; } @page { margin:12mm; } }
   </style>
 </head>
