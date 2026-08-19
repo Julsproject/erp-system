@@ -276,6 +276,16 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 ## Role permissions
 
-- **Cashier** — POS, own Activity, Credits/Customers lookup; everything else redirects to POS.
-- **Manager** — everything a Cashier can do, plus Inventory, Purchasing, Sales/Reports, Stock Count, Shelves, Finance (Expenses/Banking/Accounting reports), Void a Sale (if enabled in Settings).
-- **Admin** — everything a Manager can do, plus **Users**, **Backup**, and **Stock Card** — the three areas that stay admin-exclusive.
+Three concentric rings — every admin is also staff, every staff member is also floor staff. Enforced at the route level (`app/deps.py`), not just by hiding menu items.
+
+- **Cashier** — counter work only: POS, Inventory (**view** only — stock, shelf, and selling price), receiving a delivery via **New Purchase**, **Stock Count**, browsing **Shelves**, their own Activity, and changing their own password.
+- **Manager** — everything above, plus Dashboard, Notifications, Sales history & voids, Suppliers / Purchase history / Payables, Credits, Expenses, Banking, Cheques, Reports, Cancelled Receipts, and full catalogue editing (add/edit/archive/import).
+- **Admin** — everything above, plus the **Accounting ledger** (journal entries, Chart of Accounts, Balance Sheet, VAT), **Activity Log**, **Encoders**, **Users**, **Backup**, **Stock Card**, and the business/receipt **Settings**.
+
+The manager/admin line is deliberate: a manager runs the shop day to day, but the ledger, the audit trail and who-can-log-in belong to the owner.
+
+---
+
+## Known gaps and deferred work
+
+See **[BACKLOG.md](BACKLOG.md)** — what's intentionally unfinished and why, including the Cash Drawer module (built but unlinked until the shop runs live), the manual step between bank-transfer sales and the Banking register, and the security/backup items worth doing before wider rollout.
