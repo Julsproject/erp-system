@@ -4,13 +4,27 @@
 <div class="page-head">
   <div>
     <h1 class="page-title">{{ 'Activity — ' ~ (viewing.full_name or viewing.username) if viewing else 'My Activity' }}</h1>
-    <p class="muted">{{ day.strftime('%A, %b %d, %Y') }}</p>
+    <p class="muted">
+      {% if is_range %}{{ day.strftime('%b %d') }} – {{ end.strftime('%b %d, %Y') }}
+      {% else %}{{ day.strftime('%A, %b %d, %Y') }}{% endif %}
+    </p>
   </div>
-  <form method="get" class="toolbar" style="margin:0;">
-    <input class="search" type="date" name="day" value="{{ day.isoformat() }}" onchange="this.form.submit()" style="max-width:170px;">
-    {% if viewing %}<a class="btn-secondary" href="/activity/all?day={{ day.isoformat() }}">← All cashiers</a>{% endif %}
-  </form>
+  <div class="head-actions">
+    {% if viewing %}<a class="btn-secondary" href="/activity/all?date_from={{ day.isoformat() }}&date_to={{ end.isoformat() }}">← All cashiers</a>{% endif %}
+    <a class="btn-secondary" href="/activity/export.xlsx?date_from={{ day.isoformat() }}&date_to={{ end.isoformat() }}{{ '&user_id=' ~ viewing.id if viewing }}">⬇ Export Excel</a>
+  </div>
 </div>
+
+<form class="toolbar" method="get" action="{{ '/activity/user/' ~ viewing.id if viewing else '/activity' }}">
+  <label style="margin:0;font-size:12.5px;color:var(--muted);">From
+    <input class="search" type="date" name="date_from" value="{{ day.isoformat() }}" style="display:block;margin-top:4px;max-width:170px;">
+  </label>
+  <label style="margin:0;font-size:12.5px;color:var(--muted);">To
+    <input class="search" type="date" name="date_to" value="{{ end.isoformat() }}" style="display:block;margin-top:4px;max-width:170px;">
+  </label>
+  <button class="btn-secondary" type="submit" style="margin-top:14px;">Show</button>
+  <a class="btn-link" href="{{ '/activity/user/' ~ viewing.id if viewing else '/activity' }}" style="margin-top:14px;">Today</a>
+</form>
 
 <div class="kpi-row">
   <div class="kpi"><span class="kpi-label">Transactions</span><span class="kpi-value">{{ summary.count }}</span></div>
@@ -35,13 +49,14 @@
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Invoice</th><th>Type</th><th>Time</th><th>Customer</th><th>Payment</th><th class="num">Total</th><th></th></tr>
+      <tr><th>Invoice</th><th>Type</th>{% if is_range %}<th>Date</th>{% endif %}<th>Time</th><th>Customer</th><th>Payment</th><th class="num">Total</th><th></th></tr>
     </thead>
     <tbody>
       {% for s in summary.sales %}
       <tr>
         <td class="strong">{{ s.invoice_no }}</td>
         <td><span class="txn txn-{{ s.txn_type }}">{{ s.txn_type|capitalize }}</span></td>
+        {% if is_range %}<td>{{ s.created_at.strftime('%b %d') if s.created_at else '' }}</td>{% endif %}
         <td>{{ s.created_at.strftime('%I:%M %p') if s.created_at else '' }}</td>
         <td>{{ s.customer_name or 'Walk-in' }}</td>
         <td>{{ s.payment_method or '—' }}</td>
@@ -49,7 +64,7 @@
         <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales">Receipt</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="empty">No transactions processed on this day.</td></tr>
+      <tr><td colspan="{{ 8 if is_range else 7 }}" class="empty">No transactions processed in this period.</td></tr>
       {% endfor %}
     </tbody>
   </table>

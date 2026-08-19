@@ -404,6 +404,8 @@ def receivables(
 def settle_form(sale_id: int, request: Request, from_page: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
     sale = db.get(models.Sale, sale_id)
     if not sale:
         return RedirectResponse(_back_url(user), status_code=302)
@@ -423,6 +425,8 @@ def settle_form(sale_id: int, request: Request, from_page: str = "", db: Session
 async def settle_pay(sale_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
     sale = db.get(models.Sale, sale_id)
     if not sale:
         return RedirectResponse(_back_url(user), status_code=302)

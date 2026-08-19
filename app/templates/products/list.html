@@ -11,14 +11,18 @@
     </p>
   </div>
   <div class="head-actions">
-    <a class="btn-secondary" href="/products/export.xlsx?q={{ q }}&category_id={{ category_id }}&subcategory_id={{ subcategory_id }}&shelf_id={{ shelf_id }}&alert={{ 1 if alert else 0 }}">⬇ Export Excel</a>
+    {# A cashier reads this page — what's in stock, where it sits, what it
+       sells for. Everything that changes the catalogue is manager+. #}
     {% if is_admin_user %}
+    <a class="btn-secondary" href="/products/export.xlsx?q={{ q }}&category_id={{ category_id }}&subcategory_id={{ subcategory_id }}&shelf_id={{ shelf_id }}&alert={{ 1 if alert else 0 }}">⬇ Export Excel</a>
     <button type="button" class="btn-secondary" onclick="openMerge()">⇄ Merge Duplicates</button>
-    {% endif %}
     <a class="btn-secondary" href="/products/archived">🗄 Archived</a>
+    {% endif %}
     <a class="btn-secondary" href="/shelves">🗂 Shelves</a>
+    {% if is_admin_user %}
     <a class="btn-secondary" href="/products/import">⬆ Import Excel</a>
     <a class="btn" href="/products/new">+ Add product</a>
+    {% endif %}
   </div>
 </div>
 
@@ -149,7 +153,7 @@
         <th>Unit Type</th>
         <th>Shelf</th>
         <th class="num">Cost of Sales</th>
-        {% if is_admin_user %}<th class="num">Selling Price</th>{% endif %}
+        <th class="num">Selling Price</th>
         <th class="num">Actual Beginning</th>
         <th class="num">Stocks Qty</th>
         <th class="num">Total Qty</th>
@@ -184,17 +188,15 @@
           {% if p.cost_price and p.cost_price > 0 %}{{ p.cost_price|peso }}
           {% else %}<span class="muted">not set</span>{% endif %}
         </td>
-        {% if is_admin_user %}
         <td class="num">
           {% if p.selling_price and p.selling_price > 0 %}{{ p.selling_price|peso }}
           {% else %}<span class="muted">not set</span>{% endif %}
         </td>
-        {% endif %}
         <td class="num">{{ p.beginning_stock|whole_qty }}</td>
         <td class="num">{{ p.stock_qty|whole_qty }}</td>
         <td class="num strong">{{ p.total_qty|whole_qty }}</td>
         <td class="row-actions">
-          <a class="btn-link" href="/products/{{ p.id }}/edit">Edit</a>
+          {% if is_admin_user %}<a class="btn-link" href="/products/{{ p.id }}/edit">Edit</a>{% endif %}
           {% if (user.role or '')|lower == 'admin' %}
           <a class="btn-link" href="/products/{{ p.id }}/stock-card">Stock card</a>
           {% endif %}
@@ -232,12 +234,10 @@
           {% if u.cost_as_this_unit %}{{ u.cost_as_this_unit|peso }}
           {% else %}<span class="muted">—</span>{% endif %}
         </td>
-        {% if is_admin_user %}
         <td class="num">
           {% if u.price and u.price > 0 %}{{ u.price|peso }}
           {% else %}<span class="muted">not set</span>{% endif %}
         </td>
-        {% endif %}
         <td class="num">{% if eq %}{{ eq.beginning|qty }}{% else %}<span class="muted">—</span>{% endif %}</td>
         <td class="num">{% if eq %}{{ eq.stock|qty }}{% else %}<span class="muted">—</span>{% endif %}</td>
         <td class="num strong">{% if eq %}{{ eq.total|qty }}{% else %}<span class="muted">—</span>{% endif %}</td>

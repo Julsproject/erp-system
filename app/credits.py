@@ -41,6 +41,8 @@ def credits_search(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
     q = (q or "").strip()
     page = max(page, 1)
     query = (
@@ -120,6 +122,8 @@ def credit_references(
     without knowing the customer's name."""
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
     q = (q or "").strip()
     page = max(page, 1)
 
@@ -169,6 +173,8 @@ def credit_statement(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
     customer = db.get(models.Customer, customer_id)
     if not customer:
         return RedirectResponse("/credits", status_code=302)
@@ -254,6 +260,8 @@ def credit_statement_pdf(customer_id: int, db: Session = Depends(get_db), user=D
     on-screen statement, just as a file instead of print-to-PDF."""
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
     customer = db.get(models.Customer, customer_id)
     if not customer:
         return RedirectResponse("/credits", status_code=302)
@@ -356,6 +364,8 @@ def _outstanding_sales(db: Session, customer_id: int):
 def pay_full_form(customer_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
     customer = db.get(models.Customer, customer_id)
     if not customer:
         return RedirectResponse("/credits", status_code=302)
@@ -418,6 +428,8 @@ def _apply_batch_payment(db: Session, user, customer, targets, method: str, ref_
 async def pay_full_submit(customer_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
     customer = db.get(models.Customer, customer_id)
     if not customer:
         return RedirectResponse("/credits", status_code=302)
@@ -451,6 +463,8 @@ def pay_selected_form(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
     customer = db.get(models.Customer, customer_id)
     if not customer:
         return RedirectResponse("/credits", status_code=302)
@@ -472,6 +486,8 @@ def pay_selected_form(
 async def pay_selected_submit(customer_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
     customer = db.get(models.Customer, customer_id)
     if not customer:
         return RedirectResponse("/credits", status_code=302)

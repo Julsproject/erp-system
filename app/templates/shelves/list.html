@@ -10,7 +10,9 @@
 </div>
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+{% set can_edit = (user.role or '')|lower in ('admin', 'manager') %}
 
+{% if can_edit %}
 <div class="card" style="max-width:420px; margin-bottom:18px;">
   <h2 style="margin:0 0 12px; font-size:16px;">Add a shelf</h2>
   <form class="form" method="post" action="/shelves" style="grid-template-columns:1fr;">
@@ -22,6 +24,7 @@
     </div>
   </form>
 </div>
+{% endif %}
 
 <div class="table-wrap">
   <table class="grid">

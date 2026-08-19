@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from . import audit, models
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_floor_staff
 from .products import ADJUSTMENT_REASON_LABELS, ADJUSTMENT_REASONS, _parse_upload
 from .templating import templates
 
@@ -276,7 +276,7 @@ def _uncounted_negatives(db: Session, count: models.StockCount):
 def stock_count_list(request: Request, page: int = 1, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
     page = max(page, 1)
     open_count = db.query(models.StockCount).filter(models.StockCount.status == "open").first()
@@ -296,7 +296,7 @@ def stock_count_list(request: Request, page: int = 1, db: Session = Depends(get_
 def stock_count_start(db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
     existing = db.query(models.StockCount).filter(models.StockCount.status == "open").first()
     if existing:
@@ -313,7 +313,7 @@ def stock_count_start(db: Session = Depends(get_db), user=Depends(get_current_us
 def stock_count_view(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
     count = db.get(models.StockCount, count_id)
     if not count:
@@ -339,7 +339,7 @@ def stock_count_view(count_id: int, request: Request, db: Session = Depends(get_
 
 @router.post("/stock-count/{count_id:int}/scan")
 async def stock_count_scan(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    if not user or not is_staff(user):
+    if not user or not is_floor_staff(user):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     count = db.get(models.StockCount, count_id)
     if not count or count.status != "open":
@@ -387,7 +387,7 @@ async def stock_count_add_shelf(count_id: int, request: Request, db: Session = D
     0, same as a freshly-scanned line) — lets a count be worked shelf by
     shelf instead of hunting the alphabetical product list. Shelves are
     assigned ahead of time (product form or bulk import), not from here."""
-    if not user or not is_staff(user):
+    if not user or not is_floor_staff(user):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     count = db.get(models.StockCount, count_id)
     if not count or count.status != "open":
@@ -432,12 +432,59 @@ async def stock_count_add_shelf(count_id: int, request: Request, db: Session = D
     return {"ok": True, "added": added, "lines": [_line_dict(l) for l in line_rows]}
 
 
+@router.post("/stock-count/{count_id:int}/assign-shelf")
+async def stock_count_assign_shelf(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Put every counted product that has no shelf yet onto one shelf.
+
+    The same idea the count-sheet import already offers, but available while
+    counting on screen — you're standing at the shelf, you pull in what's
+    already assigned to it, you scan the few strays that were never mapped,
+    and this is what puts those strays on the map. Like the import, it only
+    fills blanks: a product already assigned to another shelf is left alone,
+    so this can never quietly move stock somewhere it isn't."""
+    if not user or not is_floor_staff(user):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    count = db.get(models.StockCount, count_id)
+    if not count or count.status != "open":
+        return JSONResponse({"ok": False, "error": "This count isn't open anymore."}, status_code=400)
+
+    data = await request.json()
+    try:
+        shelf_id = int(data.get("shelf_id") or 0)
+    except (TypeError, ValueError):
+        shelf_id = 0
+    if not shelf_id:
+        return JSONResponse({"ok": False, "error": "Pick a shelf."}, status_code=400)
+    shelf = db.get(models.Shelf, shelf_id)
+    if not shelf:
+        return JSONResponse({"ok": False, "error": "That shelf no longer exists."}, status_code=404)
+
+    assigned = []
+    for line in count.lines:
+        product = line.product
+        if product and product.shelf_id is None:
+            product.shelf = shelf
+            assigned.append(line)
+    db.commit()
+
+    line_rows = (
+        db.query(models.StockCountLine)
+        .filter(models.StockCountLine.stock_count_id == count.id)
+        .order_by(models.StockCountLine.product_name)
+        .all()
+    )
+    return {
+        "ok": True, "assigned": len(assigned), "shelf": shelf.name,
+        "lines": [_line_dict(l) for l in line_rows],
+    }
+
+
 @router.post("/stock-count/{count_id:int}/add-negatives")
 def stock_count_add_negatives(count_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Pull every still-negative uncounted product into this count in one go,
     so the shop can go count exactly those instead of hunting them down from
     the warning list by hand."""
-    if not user or not is_staff(user):
+    if not user or not is_floor_staff(user):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     count = db.get(models.StockCount, count_id)
     if not count or count.status != "open":
@@ -456,7 +503,7 @@ def stock_count_add_negatives(count_id: int, db: Session = Depends(get_db), user
 def stock_count_import_form(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
     count = db.get(models.StockCount, count_id)
     if not count or count.status != "open":
@@ -476,7 +523,7 @@ async def stock_count_import_upload(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
     count = db.get(models.StockCount, count_id)
     if not count or count.status != "open":
@@ -519,7 +566,7 @@ async def stock_count_import_upload(
 def stock_count_import_template(count_id: int, shelf_id: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
     count = db.get(models.StockCount, count_id)
     if not count:
@@ -600,7 +647,7 @@ def stock_count_search(count_id: int, q: str = "", db: Session = Depends(get_db)
     """Live typeahead as the scan box is typed into by hand (a barcode
     scanner still just types-and-Enters, unaffected by this) — same
     matching rules as an actual scan, via _find_products."""
-    if not user or not is_staff(user):
+    if not user or not is_floor_staff(user):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     matches = _find_products(db, q)
     return {"products": [{"id": p.id, "name": p.name} for p in matches]}
@@ -608,7 +655,7 @@ def stock_count_search(count_id: int, q: str = "", db: Session = Depends(get_db)
 
 @router.post("/stock-count/{count_id:int}/line/{line_id:int}/set")
 async def stock_count_set_line(count_id: int, line_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    if not user or not is_staff(user):
+    if not user or not is_floor_staff(user):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     count = db.get(models.StockCount, count_id)
     if not count or count.status != "open":
@@ -635,7 +682,7 @@ async def stock_count_set_line_units(count_id: int, line_id: int, request: Reque
     """Per-unit count entry — e.g. '2 FORWARD, 3 Elf, 1 Elf 1/2 physically on
     the shelf' — resolved into the one counted_qty (base units) everything
     else reads, so this is purely a friendlier way to arrive at that number."""
-    if not user or not is_staff(user):
+    if not user or not is_floor_staff(user):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     count = db.get(models.StockCount, count_id)
     if not count or count.status != "open":
@@ -681,7 +728,7 @@ def stock_count_complete(count_id: int, request: Request, reason: str = Form("co
                           db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
     count = db.get(models.StockCount, count_id)
     if not count or count.status != "open":
@@ -720,7 +767,7 @@ def stock_count_complete(count_id: int, request: Request, reason: str = Form("co
 def stock_count_cancel(count_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
     count = db.get(models.StockCount, count_id)
     if count and count.status == "open":

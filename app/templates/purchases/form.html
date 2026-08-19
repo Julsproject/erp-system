@@ -3,18 +3,26 @@
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">{{ 'Return to Supplier' if return_against_po else 'New Purchase' }}</h1>
+  {# Purchase history is manager+, so a cashier gets no back-link at all
+     rather than one that bounces them to POS. #}
+  {% if return_against_po or (user.role or '')|lower in ('admin', 'manager') %}
   <a class="btn-link" href="{{ '/purchases/' ~ return_against_po.id if return_against_po else '/purchases' }}">
     ← Back to {{ 'delivery' if return_against_po else 'purchase history' }}
   </a>
+  {% endif %}
 </div>
 
 {% if not return_against_po %}
 <div class="tabs">
   <a class="tab active" href="/purchases/new">New Purchase</a>
+  {# A cashier can raise a delivery but not browse history, payables or
+     suppliers — showing those tabs would just bounce them to POS. #}
+  {% if (user.role or '')|lower in ('admin', 'manager') %}
   <a class="tab" href="/purchases">Purchase History</a>
   <a class="tab" href="/purchases/payables">Payables</a>
   <a class="tab" href="/purchases/payables/aging">AP Aging</a>
   <a class="tab" href="/suppliers">Suppliers</a>
+  {% endif %}
 </div>
 {% endif %}
 

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_floor_staff, is_staff
 from .products import _get_or_create_shelf
 from .templating import templates
 
@@ -25,7 +25,7 @@ def shelves_list(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     counts = dict(
@@ -58,7 +58,7 @@ def create_shelf(request: Request, name: str = Form(...), db: Session = Depends(
 def shelf_detail(shelf_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
     shelf = db.get(models.Shelf, shelf_id)
     if not shelf:

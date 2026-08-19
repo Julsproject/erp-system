@@ -540,6 +540,8 @@ def _render_form(request, db, user, product=None, error=None):
 def new_product(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
     return _render_form(request, db, product=None, user=user)
 
 
@@ -547,6 +549,8 @@ def new_product(request: Request, db: Session = Depends(get_db), user=Depends(ge
 def edit_product(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
     product = db.get(models.Product, product_id)
     if not product:
         return RedirectResponse("/products", status_code=302)
@@ -690,6 +694,8 @@ def _resolve_unit_chain(rows: list) -> dict:
 async def create_product(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
     form = await request.form()
     if not (form.get("name") or "").strip():
         return _render_form(request, db, user, product=None, error="Product name is required.")
@@ -713,6 +719,8 @@ async def create_product(request: Request, db: Session = Depends(get_db), user=D
 async def update_product(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
     product = db.get(models.Product, product_id)
     if not product:
         return RedirectResponse("/products", status_code=302)
@@ -870,6 +878,8 @@ async def update_pricing(product_id: int, request: Request, db: Session = Depend
 def archive_product(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
     product = db.get(models.Product, product_id)
     if product:
         product.is_active = False
@@ -912,6 +922,8 @@ def delete_product(product_id: int, request: Request, db: Session = Depends(get_
     doesn't touch its history."""
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
     product = db.get(models.Product, product_id)
     if not product:
         return RedirectResponse("/products", status_code=status.HTTP_302_FOUND)
@@ -1021,6 +1033,8 @@ def list_archived_products(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
     q = (q or "").strip()
     query = db.query(models.Product).filter(models.Product.is_active.is_(False))
     if q:
@@ -1038,6 +1052,8 @@ def list_archived_products(
 def restore_product(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
     product = db.get(models.Product, product_id)
     if product:
         product.is_active = True
@@ -1638,6 +1654,8 @@ def _run_import(db: Session, user, request, filename: str, classified, skip_line
 def import_form(request: Request, user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
     return templates.TemplateResponse(
         "products/import.html",
         {"request": request, "app_name": request.app.title, "user": user, "result": None},
@@ -1653,6 +1671,8 @@ async def import_upload(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
 
     contents = await file.read()
     rows, error = _parse_upload(file.filename, contents)
@@ -1697,6 +1717,8 @@ async def import_upload(
 async def import_confirm(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
 
     form = await request.form()
     filename = form.get("filename") or "import"
@@ -1726,6 +1748,8 @@ async def import_confirm(request: Request, db: Session = Depends(get_db), user=D
 def download_template(user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -1836,6 +1860,8 @@ def _run_unit_import(db: Session, user, request, filename: str, groups):
 def import_units_form(request: Request, user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
     return templates.TemplateResponse(
         "products/import_units.html",
         {"request": request, "app_name": request.app.title, "user": user, "result": None},
@@ -1851,6 +1877,8 @@ async def import_units_upload(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
 
     contents = await file.read()
     rows, error = _parse_upload(
@@ -1876,6 +1904,8 @@ async def import_units_upload(
 def download_units_template(user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
 
     wb = openpyxl.Workbook()
     ws = wb.active

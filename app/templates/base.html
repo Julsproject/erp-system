@@ -222,14 +222,19 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 4h16v4H4z"/><path d="M4 8v12h16V8"/><path d="M9 12h6"/><path d="M9 16h6"/></svg>
         <span>Sales</span>
       </a>
+      {% endif %}
+      {# Receiving stock and counting it are counter work, so a cashier gets
+         both. The label differs because a cashier can only raise a delivery,
+         not browse suppliers, payables or past purchase orders. #}
       <a class="nav-item {{ 'active' if path.startswith('/suppliers') or path.startswith('/purchases') }}" href="/purchases/new">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 9h13v8H3z"/><path d="M16 12h3.5l1.5 3v2h-5"/><circle cx="7" cy="18" r="1.6"/><circle cx="17.5" cy="18" r="1.6"/></svg>
-        <span>Suppliers</span>
+        <span>{{ 'Suppliers' if is_staff else 'New Purchase' }}</span>
       </a>
       <a class="nav-item {{ 'active' if path.startswith('/stock-count') }}" href="/stock-count">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
         <span>Stock Count</span>
       </a>
+      {% if is_staff %}
       <details class="nav-group" {{ 'open' if finance_active }}>
         <summary class="nav-item nav-group-summary {{ 'active' if finance_active }}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 21h18M4 21V10M20 21V10M2 10l10-6 10 6M8 21v-6M16 21v-6"/></svg>
@@ -244,19 +249,30 @@
           </a>
           <a class="nav-item nav-sub {{ 'active' if path.startswith('/expenses') }}" href="/expenses"><span>Expenses</span></a>
           <a class="nav-item nav-sub {{ 'active' if path.startswith('/banking') }}" href="/banking"><span>Cash &amp; Banking</span></a>
-          <a class="nav-item nav-sub {{ 'active' if path.startswith('/reports') }}" href="/reports"><span>Accounting</span></a>
+          {# "Reports", not "Accounting" — an admin sees both this and the
+             double-entry ledger under Admin, and two menu entries with the
+             same name pointing at different pages is a coin flip. #}
+          <a class="nav-item nav-sub {{ 'active' if path.startswith('/reports') }}" href="/reports"><span>Reports</span></a>
         </div>
       </details>
       {% endif %}
+      {% if is_staff %}
       <a class="nav-item {{ 'active' if path.startswith('/credits') }}" href="/credits">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2.5" y="5" width="19" height="14" rx="2.5"/><path d="M2.5 9.5h19"/></svg>
         <span>Credits</span>
       </a>
+      {% endif %}
       <a class="nav-item {{ 'active' if path.startswith('/activity') }}"
          href="{{ '/activity/all' if is_staff else '/activity' }}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg>
         <span>{{ 'Cashier Activity' if is_staff else 'My Activity' }}</span>
       </a>
+      {# Cash Drawer (shifts.py) is deliberately NOT linked here yet. The shop
+         is still back-entering months of past sales and purchases, so an
+         opening float and an end-of-shift count have nothing to measure.
+         The module is built and works — add a nav item pointing at
+         /shifts (staff) or /shifts/current (cashier) once the till is being
+         used live. #}
       {% if is_staff %}
       <details class="nav-group" {{ 'open' if admin_active }}>
         <summary class="nav-item nav-group-summary {{ 'active' if admin_active }}">
@@ -265,18 +281,26 @@
           <svg class="nav-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 6l6 6-6 6"/></svg>
         </summary>
         <div class="nav-subitems">
-          <a class="nav-item nav-sub {{ 'active' if path.startswith('/audit') }}" href="/audit"><span>Activity Log</span></a>
-          <a class="nav-item nav-sub {{ 'active' if path.startswith('/settings') }}" href="/settings"><span>Settings</span></a>
-          <a class="nav-item nav-sub {{ 'active' if path.startswith('/encoders') }}" href="/encoders"><span>Encoders</span></a>
+          {# Logging a spoiled receipt number is counter work a manager does,
+             so it stays with them. Everything else in here is the owner's:
+             the ledger, the audit trail, and who can log in at all. #}
           <a class="nav-item nav-sub {{ 'active' if path.startswith('/pos/cancelled-receipts') }}" href="/pos/cancelled-receipts"><span>Cancelled Receipts</span></a>
-          <a class="nav-item nav-sub {{ 'active' if path.startswith('/accounting') }}" href="/accounting/dashboard"><span>Accounting</span></a>
           {% if is_admin %}
+          <a class="nav-item nav-sub {{ 'active' if path.startswith('/accounting') }}" href="/accounting/dashboard"><span>Accounting</span></a>
+          <a class="nav-item nav-sub {{ 'active' if path.startswith('/audit') }}" href="/audit"><span>Activity Log</span></a>
+          <a class="nav-item nav-sub {{ 'active' if path.startswith('/encoders') }}" href="/encoders"><span>Encoders</span></a>
           <a class="nav-item nav-sub {{ 'active' if path.startswith('/backup') }}" href="/backup"><span>Backup</span></a>
           <a class="nav-item nav-sub {{ 'active' if path.startswith('/users') }}" href="/users"><span>Users</span></a>
           {% endif %}
         </div>
       </details>
       {% endif %}
+      {# Every role lands here — it holds "change my password". Admins also
+         get the business/receipt settings on the same page. #}
+      <a class="nav-item {{ 'active' if path.startswith('/settings') }}" href="/settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        <span>Settings</span>
+      </a>
     </nav>
     <div class="sidebar-foot">
       <button type="button" class="theme-toggle" onclick="toggleShortcuts()" title="Show keyboard shortcuts (Alt+H)">

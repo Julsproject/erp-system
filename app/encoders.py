@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_admin
 from .templating import templates
 
 router = APIRouter()
@@ -20,7 +20,7 @@ router = APIRouter()
 def encoders_list(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
 
     counts = dict(
@@ -41,7 +41,7 @@ def encoders_list(request: Request, db: Session = Depends(get_db), user=Depends(
 def create_encoder(name: str = Form(...), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     name = (name or "").strip()
     if name:
@@ -58,7 +58,7 @@ def create_encoder(name: str = Form(...), db: Session = Depends(get_db), user=De
 def rename_encoder(encoder_id: int, name: str = Form(...), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     encoder = db.get(models.Encoder, encoder_id)
     name = (name or "").strip()
@@ -76,7 +76,7 @@ def toggle_encoder(encoder_id: int, db: Session = Depends(get_db), user=Depends(
     dropdown for new sales."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     encoder = db.get(models.Encoder, encoder_id)
     if encoder:

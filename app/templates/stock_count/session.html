@@ -27,7 +27,7 @@
   <div id="scanChoices" class="pos-results" style="display:none;"></div>
   <p class="muted" id="scanMsg" style="font-size:12.5px;margin:8px 0 0;"></p>
   {% if shelves %}
-  <div style="display:flex;gap:8px;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid var(--line);">
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line);">
     <label style="margin:0;font-size:12.5px;color:var(--muted);">Or add a whole shelf at once
       <select id="shelfAddSelect" style="display:block;margin-top:4px;">
         <option value="">Pick a shelf…</option>
@@ -35,6 +35,20 @@
       </select>
     </label>
     <button type="button" class="btn-secondary" style="margin-top:14px;" onclick="addShelf()">+ Add all products on this shelf</button>
+  </div>
+  {# The other half of the same job: you pulled in the shelf's known items,
+     then scanned the strays that were never mapped. This puts those strays
+     on the shelf. Only fills blanks — never moves a product that already
+     belongs to a different shelf. #}
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;">
+    <label style="margin:0;font-size:12.5px;color:var(--muted);">Assign counted items with <strong>no shelf yet</strong> to
+      <select id="shelfAssignSelect" style="display:block;margin-top:4px;">
+        <option value="">Pick a shelf…</option>
+        {% for s in shelves %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="button" class="btn-secondary" style="margin-top:14px;" onclick="assignShelf()">🗂 Assign to shelf</button>
+    <span class="muted" id="assignMsg" style="font-size:12px;"></span>
   </div>
   {% endif %}
 </section>
@@ -356,6 +370,25 @@ async function addShelf() {
   scanMsg.textContent = data.added
     ? data.added + ' product(s) added from ' + select.options[select.selectedIndex].text + '.'
     : 'Everything on that shelf was already in this count.';
+  select.value = '';
+}
+
+async function assignShelf() {
+  const select = document.getElementById('shelfAssignSelect');
+  const msg = document.getElementById('assignMsg');
+  const shelfId = select.value;
+  if (!shelfId) { msg.textContent = 'Pick a shelf first.'; return; }
+  msg.textContent = 'Assigning…';
+  const res = await fetch('/stock-count/' + countId + '/assign-shelf', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({shelf_id: shelfId}),
+  });
+  const data = await res.json();
+  if (!data.ok) { msg.textContent = data.error || 'Could not assign.'; return; }
+  // Refresh every row so the shelf filter and the pinned data-shelf stay true.
+  data.lines.forEach(upsertRow);
+  msg.textContent = data.assigned
+    ? data.assigned + ' item(s) now on ' + data.shelf + '.'
+    : 'Every counted item already has a shelf.';
   select.value = '';
 }
 

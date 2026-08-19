@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_admin
 from .templating import templates
 
 router = APIRouter()
@@ -487,7 +487,7 @@ def reverse_bank_transaction_posting(db: Session, txn: models.BankTransaction, *
 def coa_list(request: Request, error: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     accounts = db.query(models.Account).order_by(models.Account.code).all()
     return templates.TemplateResponse(
@@ -505,7 +505,7 @@ def coa_create(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     code = (code or "").strip()
     name = (name or "").strip()
@@ -526,7 +526,7 @@ def coa_create(
 def coa_rename(account_id: int, name: str = Form(...), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     account = db.get(models.Account, account_id)
     name = (name or "").strip()
@@ -540,7 +540,7 @@ def coa_rename(account_id: int, name: str = Form(...), db: Session = Depends(get
 def coa_toggle(account_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     account = db.get(models.Account, account_id)
     if not account:
@@ -569,7 +569,7 @@ def coa_toggle(account_id: int, db: Session = Depends(get_db), user=Depends(get_
 def mappings_list(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     mappings = db.query(models.AccountMapping).order_by(models.AccountMapping.function_key).all()
     accounts = db.query(models.Account).filter(models.Account.is_active.is_(True)).order_by(models.Account.code).all()
@@ -587,7 +587,7 @@ def mappings_list(request: Request, db: Session = Depends(get_db), user=Depends(
 def expense_category_account_update(category_id: int, account_id: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     category = db.get(models.ExpenseCategory, category_id)
     if category:
@@ -600,7 +600,7 @@ def expense_category_account_update(category_id: int, account_id: str = Form("")
 def mappings_update(mapping_id: int, account_id: int = Form(...), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     mapping = db.get(models.AccountMapping, mapping_id)
     account = db.get(models.Account, account_id)
@@ -632,7 +632,7 @@ def general_ledger(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     period_start, period_end, custom = _resolve_period(days, date_from, date_to)
     accounts = db.query(models.Account).order_by(models.Account.code).all()
@@ -701,7 +701,7 @@ def trial_balance(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     period_start, period_end, custom = _resolve_period(days, date_from, date_to)
     rows, total_debit, total_credit = _trial_balance_rows(db, period_end)
@@ -719,7 +719,7 @@ def trial_balance(
 def export_trial_balance(days: int = 30, date_from: str = "", date_to: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     period_start, period_end, _ = _resolve_period(days, date_from, date_to)
     rows, total_debit, total_credit = _trial_balance_rows(db, period_end)
@@ -780,7 +780,7 @@ def cash_book(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     period_start, period_end, custom = _resolve_period(days, date_from, date_to)
     accounts = _cash_accounts(db)
@@ -919,7 +919,7 @@ def cash_flow_statement(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     period_start, period_end, custom = _resolve_period(days, date_from, date_to)
     inflows, outflows = _cash_flow_data(db, period_start, period_end)
@@ -943,7 +943,7 @@ def cash_flow_statement(
 def export_cash_flow_statement(days: int = 30, date_from: str = "", date_to: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     period_start, period_end, _ = _resolve_period(days, date_from, date_to)
     inflows, outflows = _cash_flow_data(db, period_start, period_end)
@@ -1038,7 +1038,7 @@ def balance_sheet(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     _, period_end, custom = _resolve_period(days, date_from, date_to)
 
@@ -1086,7 +1086,7 @@ def ledger_profit_loss(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     period_start, period_end, custom = _resolve_period(days, date_from, date_to)
     data = _pl_ledger_data(db, period_start, period_end)
@@ -1136,7 +1136,7 @@ def vat_report(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     period_start, period_end, custom = _resolve_period(days, date_from, date_to)
 
@@ -1257,7 +1257,7 @@ def ar_subledger(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     return _subledger(request, db, user, kind="ar", system_key="AR", party_id=party_id, days=days, date_from=date_from, date_to=date_to)
 
@@ -1269,7 +1269,7 @@ def ap_subledger(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     return _subledger(request, db, user, kind="ap", system_key="AP", party_id=party_id, days=days, date_from=date_from, date_to=date_to)
 
@@ -1288,7 +1288,7 @@ def ap_subledger(
 def journal_entries_list(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     entries = (
         db.query(models.JournalEntry)
@@ -1307,7 +1307,7 @@ def journal_entries_list(request: Request, db: Session = Depends(get_db), user=D
 def journal_entry_new(request: Request, error: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     accounts = db.query(models.Account).filter(models.Account.is_active.is_(True)).order_by(models.Account.code).all()
     return templates.TemplateResponse(
@@ -1321,7 +1321,7 @@ def journal_entry_new(request: Request, error: str = "", db: Session = Depends(g
 async def journal_entry_create(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     form = await request.form()
     txn_date = _parse_date(form.get("txn_date", "")) or _today()
@@ -1360,7 +1360,7 @@ async def journal_entry_create(request: Request, db: Session = Depends(get_db), 
 def journal_entry_post(entry_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     entry = db.get(models.JournalEntry, entry_id)
     if entry and entry.source_type == "manual":
@@ -1373,7 +1373,7 @@ def journal_entry_post(entry_id: int, db: Session = Depends(get_db), user=Depend
 def journal_entry_delete(entry_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     entry = db.get(models.JournalEntry, entry_id)
     if entry and entry.source_type == "manual":
@@ -1386,7 +1386,7 @@ def journal_entry_delete(entry_id: int, db: Session = Depends(get_db), user=Depe
 def journal_entry_reverse(entry_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     entry = db.get(models.JournalEntry, entry_id)
     if entry and entry.source_type == "manual" and entry.status == "posted":
@@ -1407,7 +1407,7 @@ def dashboard(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     period_start, period_end, custom = _resolve_period(days, date_from, date_to)
 
@@ -1460,7 +1460,7 @@ def reconcile_sales(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     period_start, period_end, custom = _resolve_period(days, date_from, date_to)
 

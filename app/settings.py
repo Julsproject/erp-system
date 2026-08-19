@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from . import audit, settings_store
 from .auth import hash_password, verify_password
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_admin, is_floor_staff
 from .templating import templates
 
 router = APIRouter()
@@ -43,7 +43,7 @@ def _render(request, db, user, saved="", error="", pw_error="", pw_saved=False):
 def settings_page(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
     return _render(request, db, user)
 
@@ -52,7 +52,7 @@ def settings_page(request: Request, db: Session = Depends(get_db), user=Depends(
 async def save_settings(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
 
     form = await request.form()
@@ -104,7 +104,9 @@ async def save_settings(request: Request, db: Session = Depends(get_db), user=De
 async def change_password(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    # Changing your OWN password is personal, not administrative — every
+    # role can do it. Only the business-wide settings above are admin-only.
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     form = await request.form()

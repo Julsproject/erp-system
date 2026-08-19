@@ -14,13 +14,37 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
     return db.query(models.User).filter_by(id=user_id, is_active=True).first()
 
 
+# Three roles, three gates. Read them as concentric rings — every admin is
+# also staff, every staff member is also floor staff:
+#
+#   is_floor_staff  cashier + manager + admin — counter work. Ringing up a
+#                   sale, receiving a delivery, counting stock, looking up
+#                   what's in stock and what it sells for.
+#   is_staff        manager + admin — running the store. Sales history and
+#                   voids, suppliers and payables, expenses, banking,
+#                   cheques, the management reports, editing the catalogue.
+#   is_admin        admin only — owning the books and the system. The
+#                   accounting ledger, settings, encoders, the audit trail,
+#                   user accounts, backups, stock cards.
+#
+# The line between staff and admin is deliberate: a manager runs the shop
+# day to day, but the ledger, the audit trail and who-can-log-in belong to
+# the owner. A manager who can post journal entries isn't a manager.
 def is_admin(user) -> bool:
-    """True admin only — the two areas that stay admin-exclusive (Users,
-    Backup) check this directly instead of is_staff."""
+    """Admin only — the books and the system itself."""
     return user is not None and (user.role or "").lower() == "admin"
 
 
 def is_staff(user) -> bool:
-    """Admin or Manager — the general "not just a cashier" gate used by
-    every admin-only route except Users and Backup, which stay is_admin."""
+    """Admin or Manager — everything involved in running the store."""
     return user is not None and (user.role or "").lower() in ("admin", "manager")
+
+
+def is_floor_staff(user) -> bool:
+    """Anyone who works the counter — cashier, manager or admin.
+
+    Spelled out as a role list rather than "is anyone logged in" so that
+    adding a future read-only or delivery-driver role doesn't silently
+    hand it the till and the stock count.
+    """
+    return user is not None and (user.role or "").lower() in ("admin", "manager", "cashier")

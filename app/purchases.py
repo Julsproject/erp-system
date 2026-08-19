@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from . import accounting, audit, models, pricing, settings_store
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_floor_staff, is_staff
 from .pos import _resolve_txn_datetime, _vat_of
 from .products import _get_or_create_category, _get_or_create_unit_type
 from .templating import templates
@@ -157,7 +157,7 @@ def purchase_search(q: str = "", db: Session = Depends(get_db), user=Depends(get
     """Product lookup for the purchase form (includes current cost/selling price)."""
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     q = (q or "").strip()
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
@@ -173,7 +173,7 @@ def purchase_product(product_id: int, db: Session = Depends(get_db), user=Depend
     unit switching on a line that predates opening the editor."""
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     p = db.get(models.Product, product_id)
     if not p or not p.is_active:
@@ -434,7 +434,7 @@ def new_purchase(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     # Returns are started FROM a specific received delivery (its "Return to
@@ -508,7 +508,7 @@ async def quick_product(request: Request, db: Session = Depends(get_db), user=De
     """Create a product that isn't in inventory yet, straight from the purchase form."""
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
 
     data = await request.json()
@@ -553,7 +553,7 @@ async def quick_product(request: Request, db: Session = Depends(get_db), user=De
 async def create_purchase(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
 
     data = await request.json()
@@ -902,7 +902,7 @@ def view_purchase(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
     purchase = db.get(models.Purchase, purchase_id)
     if not purchase:
@@ -1261,7 +1261,7 @@ def purchase_pdf(purchase_id: int, db: Session = Depends(get_db), user=Depends(g
     received/returned, and the total. Matches the on-screen PO view."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
     purchase = db.get(models.Purchase, purchase_id)
     if not purchase:
