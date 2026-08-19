@@ -12,5 +12,13 @@ venv/
 # Local database backups
 backups/
 
+# Loose dumps and restore logs left behind by a manual backup/restore
+# (see RESTORE.md) — machine-specific, and a dump is real business data
+# that has no business being pushed to a git remote.
+*.sql
+error.txt
+errors.txt
+restore_errors.txt
+
 # Uploaded expense receipts/invoices
 uploads/
