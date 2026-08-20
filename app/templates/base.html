@@ -59,7 +59,9 @@
     {% set is_admin = (user.role or '')|lower == 'admin' %}
     {% set is_staff = (user.role or '')|lower in ('admin', 'manager') %}
     {% set finance_active = path.startswith('/pdc') or path.startswith('/expenses') or path.startswith('/banking') or path.startswith('/reports') %}
-    {% set admin_active = path.startswith('/backup') or path.startswith('/users') or path.startswith('/settings') or path.startswith('/audit') %}
+    {# Settings is its own nav-item, not an Admin submenu row — it must not
+       auto-open (or highlight as active) the Admin dropdown when visited. #}
+    {% set admin_active = path.startswith('/backup') or path.startswith('/users') or path.startswith('/audit') %}
     {% set notif_unread = notif_unread_count() if is_staff else 0 %}
     <div class="global-search-wrap" style="position:relative;padding:0 14px 10px;">
       <input id="globalSearch" class="search" type="search" placeholder="Go to… (e.g. New Purchase, POS)" autocomplete="off" style="width:100%;box-sizing:border-box;">

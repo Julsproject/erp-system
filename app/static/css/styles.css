@@ -98,7 +98,7 @@ h1, h2, h3 { letter-spacing: -0.01em; }
   html[data-sidebar="collapsed"] .sidebar:hover .nav-label { display: block; }
   html[data-sidebar="collapsed"] .sidebar:hover .nav-item span { display: inline; }
   html[data-sidebar="collapsed"] .sidebar:hover .nav-chev { display: inline-block; }
-  html[data-sidebar="collapsed"] .sidebar:hover .nav-subitems { display: flex; }
+  html[data-sidebar="collapsed"] .sidebar:hover .nav-group[open] > .nav-subitems { display: flex; }
   html[data-sidebar="collapsed"] .sidebar:hover .who-name,
   html[data-sidebar="collapsed"] .sidebar:hover .who-role { display: block; }
   html[data-sidebar="collapsed"] .sidebar:hover #themeLabel { display: inline; }
@@ -150,7 +150,13 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 .nav-group-summary { justify-content: flex-start; }
 .nav-chev { width: 13px !important; height: 13px !important; margin-left: auto; opacity: .55; transition: transform .18s var(--ease); }
 .nav-group[open] > .nav-group-summary .nav-chev { transform: rotate(90deg); }
-.nav-subitems { display: flex; flex-direction: column; gap: 1px; margin: 1px 0 2px; }
+/* Shown only while its <details> is open. Relying on the browser's native
+   "hide everything but summary while closed" behavior isn't reliable once a
+   class here sets its own `display` — that display wins the fight and the
+   closed group keeps taking up real layout space, silently pushing every nav
+   item below it (Settings included) down into whatever sits after the menu. */
+.nav-subitems { display: none; flex-direction: column; gap: 1px; margin: 1px 0 2px; }
+.nav-group[open] > .nav-subitems { display: flex; }
 .nav-sub { padding-left: 34px; font-size: 12.5px; }
 
 .sidebar-foot { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--line); flex: none; }
