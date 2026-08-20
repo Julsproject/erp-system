@@ -8,7 +8,7 @@ operation has nothing real to measure yet.
 Revisit this list once the backtracking is finished and the shop is running
 on the system in real time.
 
-Last reviewed: 2026-08-19
+Last reviewed: 2026-08-20
 
 ---
 
@@ -44,6 +44,18 @@ opening a drawer, which makes the variance meaningless.
 **Decide when enabling 1.1:** either enforce it (redirect `/pos` to
 `/shifts/open` when the user has no open shift) or correct the docstring.
 Don't leave the two disagreeing.
+
+### 1.3 Dashboard "Cash Position" card — built, deferred by request
+**Status:** built and working, then deliberately pulled back out (2026-08-20)
+until 1.1 is actually in use. Same reason as 1.1: it would report cash
+sitting in drawers that nobody is opening yet.
+
+It combined two existing sources into one figure: cash in every currently
+open `CashierShift` (opening float + `shifts.expected_cash_for`) plus every
+active `BankAccount` balance (`banking._balances_for` /
+`banking._account_balance`). Both helpers already exist and are reusable —
+re-adding this is mostly re-wiring `app/dashboard.py` and
+`app/templates/dashboard.html`, not rebuilding logic. Revisit alongside 1.1.
 
 ---
 

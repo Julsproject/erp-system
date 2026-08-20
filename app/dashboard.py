@@ -17,6 +17,7 @@ from .backup import latest_backup
 from .database import get_db
 from .deps import get_current_user, is_staff
 from .products import low_stock_expr
+from .purchases import _purchase_outstanding, _settled_for_purchases
 from .templating import templates
 
 router = APIRouter()
@@ -24,7 +25,39 @@ router = APIRouter()
 MANILA = ZoneInfo("Asia/Manila")
 DUE_SOON_DAYS = 15
 BACKUP_STALE_DAYS = 2   # warn when the newest backup is older than this
+MAX_TREND_LABELS = 8    # cap on x-axis date labels shown under the sales trend
 ZERO = Decimal("0")
+
+# Aging buckets shared by receivables and payables on the dashboard. Coarser
+# than the dedicated /purchases/payables/aging page (which splits out to
+# 90+ days) — this is a rollup meant to be read in a glance, not a statement.
+AGING_BUCKETS = ["current", "1_30", "31_60", "over_60"]
+AGING_LABELS = {"current": "Current", "1_30": "1–30 days", "31_60": "31–60 days", "over_60": "60+ days"}
+
+
+def _aging_bucket(due_date, today: date) -> str:
+    if not due_date or due_date >= today:
+        return "current"
+    overdue_days = (today - due_date).days
+    if overdue_days <= 30:
+        return "1_30"
+    if overdue_days <= 60:
+        return "31_60"
+    return "over_60"
+
+
+def _aging_rows(bucket_totals: dict, total: Decimal):
+    """Bucket totals -> display rows (label, amount, share of the bar), in
+    bucket order, so the template just loops without doing arithmetic."""
+    return [
+        {
+            "label": AGING_LABELS[b],
+            "amount": bucket_totals[b],
+            "pct": float(bucket_totals[b] / total * 100) if total > 0 else 0.0,
+            "overdue": b != "current",
+        }
+        for b in AGING_BUCKETS
+    ]
 
 
 def _today() -> date:
@@ -180,8 +213,10 @@ def dashboard(
 
     # ---- sales trend (one bar per day, zero-filled) ----------------------
     # Bars stay daily at any range length (so hovering still shows the exact
-    # day), but labels are thinned to ~12 max — otherwise 90 crammed labels
-    # overlap into an unreadable smear.
+    # day), but labels are thinned to at most MAX_TREND_LABELS — otherwise a
+    # 30- or 90-day range crams enough date text under the bars that adjacent
+    # labels visually run into each other (each bar column is only as wide as
+    # 1/days of the card, and label text ignores that width once it's dense).
     rows = (
         db.query(
             _local_date(models.Sale.created_at).label("d"),
@@ -195,7 +230,7 @@ def dashboard(
         .all()
     )
     by_day = {r[0]: Decimal(str(r[1] or 0)) for r in rows}
-    label_stride = max(1, days // 12)
+    label_stride = max(1, -(-days // MAX_TREND_LABELS))  # ceil(days / MAX_TREND_LABELS)
     # The last day always gets a label (so the chart reads up to "today"), but
     # if the stride would also label the day right before it, that pair
     # collides into unreadable overlapping text — drop the stride one so only
@@ -305,12 +340,14 @@ def dashboard(
     )
     due_soon, overdue = [], []
     credit_total = ZERO
+    ar_aging = {b: ZERO for b in AGING_BUCKETS}
     horizon = today + timedelta(days=DUE_SOON_DAYS)
     for sale, paid in credit_rows:
         outstanding = Decimal(str(sale.receivable_amount or 0)) - Decimal(str(paid or 0))
         if outstanding <= 0:
             continue
         credit_total += outstanding
+        ar_aging[_aging_bucket(sale.due_date, today)] += outstanding
         if not sale.due_date:
             continue
         entry = {"sale": sale, "outstanding": outstanding, "days": (sale.due_date - today).days}
@@ -321,21 +358,28 @@ def dashboard(
 
     # ---- payables (what we owe suppliers) ---------------------------------
     # A 'confirmed' receive-type purchase IS the payable — goods/cost already
-    # moved, payment hasn't. No partial-settlement ledger here (unlike
-    # receivables), so outstanding = the purchase total.
-    payables_total = Decimal(str(
-        db.query(func.coalesce(func.sum(models.Purchase.total), 0))
+    # moved, payment hasn't (fully). Outstanding nets out PurchaseSettlement
+    # the same way receivables net out ReceivableSettlement above, via the
+    # helpers /purchases/payables/aging already uses — a purchase paid down
+    # partway shouldn't still count at its full original total here.
+    open_purchases = (
+        db.query(models.Purchase)
         .filter(models.Purchase.txn_type == "receive", models.Purchase.status == "confirmed")
-        .scalar() or 0
-    ))
-    payables_overdue = (
-        db.query(func.count(models.Purchase.id))
-        .filter(
-            models.Purchase.txn_type == "receive", models.Purchase.status == "confirmed",
-            models.Purchase.due_date.isnot(None), models.Purchase.due_date < today,
-        )
-        .scalar()
-    ) or 0
+        .all()
+    )
+    purchase_settled = _settled_for_purchases(db, [p.id for p in open_purchases])
+    payables_total = ZERO
+    payables_overdue = 0
+    ap_aging = {b: ZERO for b in AGING_BUCKETS}
+    for p in open_purchases:
+        outstanding = _purchase_outstanding(p, purchase_settled)
+        if outstanding <= 0:
+            continue
+        payables_total += outstanding
+        bucket = _aging_bucket(p.due_date, today)
+        ap_aging[bucket] += outstanding
+        if bucket != "current":
+            payables_overdue += 1
 
     # ---- product performance --------------------------------------------
     perf = (
@@ -414,6 +458,8 @@ def dashboard(
             "pdc_alert_count": pdc_alert_count,
             "credit_total": credit_total, "due_soon": due_soon, "overdue": overdue,
             "payables_total": payables_total, "payables_overdue": payables_overdue,
+            "ar_aging_rows": _aging_rows(ar_aging, credit_total),
+            "ap_aging_rows": _aging_rows(ap_aging, payables_total),
             "top_revenue": top_revenue, "recent_purchases": recent_purchases, "dead_stock": dead_stock,
             "recent": recent, "backup": backup_info, "backup_stale_days": BACKUP_STALE_DAYS,
         },

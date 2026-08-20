@@ -480,6 +480,10 @@ table.grid tr:last-child td { border-bottom: none; }
 }
 
 /* ---- Dashboard --------------------------------------------------------- */
+.section-label {
+  margin: 0 0 10px; font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--faint);
+}
 .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 18px; }
 .kpi {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
@@ -527,6 +531,14 @@ table.grid tr:last-child td { border-bottom: none; }
 .legend-val { font-weight: 700; font-variant-numeric: tabular-nums; }
 .legend-pct { color: var(--muted); font-size: 11.5px; min-width: 32px; text-align: right; }
 
+/* ---- Dashboard: AR/AP aging bars ------------------------------------------ */
+.aging-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.aging-label { width: 80px; flex: none; font-size: 12.5px; color: var(--muted); font-weight: 600; }
+.aging-bar-track { flex: 1; height: 8px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+.aging-bar-fill { height: 100%; background: var(--brand); border-radius: 999px; }
+.aging-bar-fill.overdue { background: var(--danger); }
+.aging-amt { width: 92px; flex: none; text-align: right; font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
 /* ---- Dashboard: per-item Cost & Price Tracking ---------------------------- */
 .track-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
 .track-legend { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
@@ -543,6 +555,14 @@ table.grid tr:last-child td { border-bottom: none; }
 .track-pt { stroke: var(--surface); stroke-width: 1.5; }
 .track-pt.cost { fill: #ef4444; }
 .track-pt.price { fill: #16a34a; }
+
+/* Shown instead of the line chart when a product has no recorded history —
+   one point can't draw a slope, so this is a plain side-by-side comparison
+   rather than a chart with a single dot floating in empty space. */
+.track-snapshot { display: flex; gap: 32px; flex-wrap: wrap; padding: 14px 2px 4px; }
+.track-stat { display: flex; flex-direction: column; gap: 5px; }
+.track-stat-label { display: flex; align-items: center; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.track-stat-value { font-size: 26px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 
 /* needs attention */
 .attention { padding: 18px 20px; margin-bottom: 18px; }

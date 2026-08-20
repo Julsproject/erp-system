@@ -53,6 +53,14 @@
   </div>
 </div>
 
+<!-- ============ QUICK ACTIONS ============ -->
+<div class="head-actions no-print" style="margin-bottom:18px;">
+  <a class="btn" href="/pos">+ New Sale</a>
+  <a class="btn-secondary" href="/expenses/new">+ Log Expense</a>
+  <a class="btn-secondary" href="/credits">₱ Collect Payment</a>
+  <a class="btn-secondary" href="/purchases/new">+ Receive Delivery</a>
+</div>
+
 <div class="print-only-heading" style="display:none;">
   <h1>{{ business_info().business_name or app_name }} — Dashboard</h1>
   <p>{{ period_start.strftime('%b %d, %Y') if period_start else '' }} – {{ period_end.strftime('%b %d, %Y') if period_end else '' }} · Generated {{ today.strftime('%b %d, %Y %I:%M %p') }}</p>
@@ -80,7 +88,8 @@
 </a>
 {% endif %}
 
-<!-- ============ KPI TILES ============ -->
+<!-- ============ SALES & PROFIT ============ -->
+<h2 class="section-label">Sales &amp; Profit</h2>
 <div class="kpi-row">
   <div class="kpi">
     <span class="kpi-label">Sales Today</span>
@@ -109,17 +118,22 @@
     {{ delta_badge(compare.expenses, good_up=false) }}
     <span class="kpi-sub"><a href="/expenses">View expenses →</a></span>
   </div>
+</div>
+
+<!-- ============ FINANCIAL POSITION ============ -->
+<h2 class="section-label">Financial Position</h2>
+<div class="kpi-row">
   <div class="kpi">
     <span class="kpi-label">Inventory Value</span>
     <span class="kpi-value">{{ inventory.cost|peso }}</span>
     <span class="kpi-sub">{{ inventory.skus }} items · {{ inventory.retail|peso }} at retail</span>
   </div>
   <div class="kpi {{ 'kpi-warn' if credit_total > 0 }}">
-    <span class="kpi-label">Outstanding Credits</span>
+    <span class="kpi-label">Outstanding Receivables</span>
     <span class="kpi-value">{{ credit_total|peso }}</span>
     <span class="kpi-sub">
       {% if overdue %}<strong class="danger-text">{{ overdue|length }} overdue</strong> · {% endif %}
-      {{ due_soon|length }} due within {{ 15 }} days
+      {{ due_soon|length }} due within 15 days
     </span>
   </div>
   <div class="kpi {{ 'kpi-warn' if payables_total > 0 }}">
@@ -189,6 +203,45 @@
   </section>
 </div>
 
+<!-- ============ AR / AP AGING ============ -->
+<div class="chart-row">
+  <section class="card chart-card">
+    <h3 class="card-title">Receivables aging <span class="muted">· {{ credit_total|peso }} total</span></h3>
+    {% if credit_total > 0 %}
+    <div>
+      {% for row in ar_aging_rows %}
+      <div class="aging-row">
+        <span class="aging-label">{{ row.label }}</span>
+        <div class="aging-bar-track"><div class="aging-bar-fill {{ 'overdue' if row.overdue }}" style="width:{{ '%.1f'|format(row.pct) }}%;"></div></div>
+        <span class="aging-amt">{{ row.amount|peso }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="muted" style="font-size:12px;margin:10px 0 0;"><a href="/sales/receivables">View receivables →</a></p>
+    {% else %}
+    <p class="pos-hint">Nothing owed to the shop right now.</p>
+    {% endif %}
+  </section>
+
+  <section class="card chart-card">
+    <h3 class="card-title">Payables aging <span class="muted">· {{ payables_total|peso }} total</span></h3>
+    {% if payables_total > 0 %}
+    <div>
+      {% for row in ap_aging_rows %}
+      <div class="aging-row">
+        <span class="aging-label">{{ row.label }}</span>
+        <div class="aging-bar-track"><div class="aging-bar-fill {{ 'overdue' if row.overdue }}" style="width:{{ '%.1f'|format(row.pct) }}%;"></div></div>
+        <span class="aging-amt">{{ row.amount|peso }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="muted" style="font-size:12px;margin:10px 0 0;"><a href="/purchases/payables/aging">View payables →</a></p>
+    {% else %}
+    <p class="pos-hint">Nothing owed to suppliers right now.</p>
+    {% endif %}
+  </section>
+</div>
+
 <!-- ============ PER-ITEM COST & PRICE TRACKING ============ -->
 <section class="card chart-card" style="margin-bottom:18px;">
   <h3 class="card-title">Cost &amp; Price Tracking</h3>
@@ -201,11 +254,25 @@
   <div id="trackChartBox" style="display:none;margin-top:16px;">
     <div class="track-head">
       <h4 id="trackProductName" style="margin:0;font-size:15px;"></h4>
-      <div class="track-legend">
+      <div class="track-legend" id="trackLegend">
         <span class="track-dot cost"></span> Cost <span class="track-dot price"></span> Selling price
       </div>
     </div>
     <div id="trackChartSvg"></div>
+    <div id="trackSnapshot" class="track-snapshot" style="display:none;">
+      <div class="track-stat">
+        <span class="track-stat-label"><span class="track-dot cost"></span>Cost</span>
+        <span class="track-stat-value" id="trackSnapCost"></span>
+      </div>
+      <div class="track-stat">
+        <span class="track-stat-label"><span class="track-dot price"></span>Selling price</span>
+        <span class="track-stat-value" id="trackSnapPrice"></span>
+      </div>
+      <div class="track-stat">
+        <span class="track-stat-label">Margin</span>
+        <span class="track-stat-value" id="trackSnapMargin"></span>
+      </div>
+    </div>
     <p class="muted" id="trackNote" style="font-size:12px;margin-top:8px;"></p>
   </div>
 </section>
@@ -223,16 +290,6 @@
     <a class="attn {{ 'warn' if low_stock else 'ok' }}" href="/products">
       <span class="attn-num">{{ low_stock|length }}</span>
       <span class="attn-label">Low stock</span>
-    </a>
-
-    <a class="attn {{ 'bad' if overdue else 'ok' }}" href="/sales/receivables">
-      <span class="attn-num">{{ overdue|length }}</span>
-      <span class="attn-label">Overdue credits</span>
-    </a>
-
-    <a class="attn {{ 'warn' if due_soon else 'ok' }}" href="/sales/receivables">
-      <span class="attn-num">{{ due_soon|length }}</span>
-      <span class="attn-label">Due within 15 days</span>
     </a>
 
     <a class="attn {{ 'bad' if price_alerts else 'ok' }}" href="/products/pricing?review=1">
@@ -257,7 +314,8 @@
   </div>
 
   {% if overdue or due_soon %}
-  <div class="table-wrap" style="margin-top:16px;">
+  <h4 style="margin:18px 0 8px;font-size:13px;color:var(--muted);">Credit collections due soon or overdue</h4>
+  <div class="table-wrap">
     <table class="grid">
       <thead><tr><th>Invoice</th><th>Customer</th><th>Due</th><th>Status</th><th class="num">Outstanding</th><th></th></tr></thead>
       <tbody>
@@ -400,6 +458,10 @@
   /* ===== Cost & Price Tracking ===== */
   let trackTimer = null;
   const trackPeso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  // Whole pesos for axis gridlines — the exact cents don't matter for "where
+  // does this line sit," and four decimal-heavy labels stacked vertically is
+  // the more crowded of the two chart edges.
+  const trackPesoRounded = n => '₱' + Math.round(Number(n) || 0).toLocaleString('en-PH');
   function trackEscape(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
 
   document.getElementById('trackSearch').addEventListener('input', () => {
@@ -431,15 +493,38 @@
     if (!data.found) { document.getElementById('trackChartBox').style.display = 'none'; return; }
     document.getElementById('trackChartBox').style.display = 'block';
     document.getElementById('trackProductName').textContent = data.product.name;
-    trackRenderChart(data.cost_series, data.price_series);
 
-    const totalPoints = data.cost_series.length + data.price_series.length;
+    const costSeries = data.cost_series, priceSeries = data.price_series;
+    // A line needs at least two distinct points in time to draw a slope —
+    // with only one, every point collapses onto the same x position (a
+    // lonely dot floating in the middle of a mostly-empty axis grid, which
+    // reads as broken rather than "no history yet"). Most freshly-added
+    // products have exactly this: one cost point and one price point, both
+    // dated today, because nothing has changed since they were created.
+    const distinctTs = new Set(costSeries.map(p => p.ts).concat(priceSeries.map(p => p.ts))).size;
     const note = document.getElementById('trackNote');
-    if (totalPoints <= 2) {
-      note.textContent = 'Not much history yet — points appear here as this product\'s cost or price changes (from receiving stock or editing it), so the trend builds up over time.';
+    if (distinctTs < 2) {
+      document.getElementById('trackChartSvg').style.display = 'none';
+      document.getElementById('trackLegend').style.display = 'none';
+      trackRenderSnapshot(data.product);
+      note.textContent = 'No cost or price changes recorded yet — a trend line appears here once this product is restocked (its cost may move) or its price is edited.';
     } else {
+      document.getElementById('trackSnapshot').style.display = 'none';
+      document.getElementById('trackLegend').style.display = 'flex';
+      document.getElementById('trackChartSvg').style.display = 'block';
+      trackRenderChart(costSeries, priceSeries);
       note.textContent = 'Cost points come from confirmed deliveries and manual edits; price points come from the Activity Log — both end at today\'s live value.';
     }
+  }
+
+  function trackRenderSnapshot(product) {
+    document.getElementById('trackSnapCost').textContent = trackPeso(product.cost_price);
+    document.getElementById('trackSnapPrice').textContent = trackPeso(product.selling_price);
+    const margin = product.selling_price > 0
+      ? ((product.selling_price - product.cost_price) / product.selling_price * 100)
+      : null;
+    document.getElementById('trackSnapMargin').textContent = margin === null ? '—' : margin.toFixed(1) + '%';
+    document.getElementById('trackSnapshot').style.display = 'flex';
   }
 
   function trackRenderChart(costSeries, priceSeries) {
@@ -476,7 +561,7 @@
       const v = minV + (maxV - minV) * (i / 4);
       const y = yFor(v);
       grid += '<line x1="' + padL + '" y1="' + y.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + y.toFixed(1) + '" class="track-grid"/>';
-      grid += '<text x="' + (padL - 8) + '" y="' + (y + 4).toFixed(1) + '" class="track-axis-label" text-anchor="end">' + trackPeso(v) + '</text>';
+      grid += '<text x="' + (padL - 8) + '" y="' + (y + 4).toFixed(1) + '" class="track-axis-label" text-anchor="end">' + trackPesoRounded(v) + '</text>';
     }
     // X-axis: first and last date only, to avoid crowding.
     const allPoints = costSeries.concat(priceSeries);
