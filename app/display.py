@@ -40,7 +40,10 @@ ZERO = Decimal("0")
 
 RECENT_LIMIT = 8
 TOP_LIMIT = 6
-ATTENTION_LIMIT = 10
+# Safety cap on the combined out-of-stock + low-stock list shown in "Needs
+# restocking" — the panel itself paginates 5 at a time, this just bounds how
+# much a genuinely bad day (or a bad default low-stock %) could render.
+RESTOCK_LIMIT = 60
 
 
 def _now():
@@ -115,12 +118,14 @@ def store_display(
     )[:TOP_LIMIT]
 
     # ---- what the floor should act on -------------------------------------
+    # Unlimited here (the KPI tiles count these), capped only in the combined
+    # list below — otherwise a shop with more than ATTENTION_LIMIT items low
+    # would show a KPI number bigger than the list it's counting.
     qty_expr = models.Product.beginning_stock + models.Product.stock_qty
     out_of_stock = (
         db.query(models.Product)
         .filter(models.Product.is_active.is_(True), qty_expr <= 0)
         .order_by(models.Product.name)
-        .limit(ATTENTION_LIMIT)
         .all()
     )
     low_stock = (
@@ -130,9 +135,14 @@ def store_display(
             low_stock_expr(settings_store.default_low_stock_pct()),
         )
         .order_by(models.Product.name)
-        .limit(ATTENTION_LIMIT)
         .all()
     )
+    # Out-of-stock first (more urgent), then low-stock — same priority order
+    # the panel already rendered in, just unified into one paginated list.
+    restock_rows = (
+        [{"product": p, "kind": "out"} for p in out_of_stock]
+        + [{"product": p, "kind": "low"} for p in low_stock]
+    )[:RESTOCK_LIMIT]
 
     return templates.TemplateResponse(
         "display.html",
@@ -149,6 +159,7 @@ def store_display(
             "top_movers": top_movers,
             "out_of_stock": out_of_stock,
             "low_stock": low_stock,
+            "restock_rows": restock_rows,
             "is_preview": is_staff(user),
         },
     )

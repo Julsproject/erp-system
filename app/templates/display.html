@@ -90,6 +90,7 @@
     .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
     .name { font-weight:600; }
     .time { color:var(--muted); font-size:15.5px; white-space:nowrap; }
+    .invoice { color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
     .empty { color:var(--muted); padding:20px 6px; font-size:17px; text-align:center; }
 
     /* ---- moving today: rank + proportional bar ---- */
@@ -116,6 +117,15 @@
     .alert-qty { font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; }
     .alert-qty.out { color:var(--bad); }
     .alert-qty.low { color:var(--warn); }
+
+    .pager { display:flex; align-items:center; justify-content:center; gap:16px; margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+    .pager-btn {
+      width:32px; height:32px; border-radius:9px; border:1px solid var(--line); background:var(--panel);
+      color:var(--ink); font-size:19px; line-height:1; cursor:pointer; transition:border-color .15s, color .15s;
+    }
+    .pager-btn:hover:not(:disabled) { border-color:var(--brand); color:var(--brand-2); }
+    .pager-btn:disabled { opacity:.3; cursor:default; }
+    .pager-info { font-size:13px; color:var(--muted); font-variant-numeric:tabular-nums; min-width:44px; text-align:center; }
 
     /* ---- transactions ---- */
     .chip { display:inline-block; padding:3px 11px; border-radius:999px; font-size:13.5px; font-weight:700; }
@@ -226,23 +236,29 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l9.5 16.5H2.5L12 3.5z"/><path d="M12 10v4.5"/></svg>
         Needs restocking
       </h2>
-      {% if out_of_stock or low_stock %}
-      <div>
-        {% for p in out_of_stock %}
-        <div class="alert-row out">
+      {% if restock_rows %}
+      <div id="restockList">
+        {% for row in restock_rows %}
+        <div class="alert-row {{ row.kind }}" data-page="{{ loop.index0 // 5 }}">
+          {% if row.kind == 'out' %}
           <svg class="alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l9-4 9 4-9 4-9-4z"/><path d="M3 8v9l9 4 9-4V8"/></svg>
-          <span class="alert-name">{{ p.name }}</span>
+          <span class="alert-name">{{ row.product.name }}</span>
           <span class="alert-qty out">OUT</span>
-        </div>
-        {% endfor %}
-        {% for p in low_stock %}
-        <div class="alert-row low">
+          {% else %}
           <svg class="alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l9.5 16.5H2.5L12 3.5z"/><path d="M12 10v4.5"/></svg>
-          <span class="alert-name">{{ p.name }}</span>
-          <span class="alert-qty low">{{ p.total_qty|whole_qty }} left</span>
+          <span class="alert-name">{{ row.product.name }}</span>
+          <span class="alert-qty low">{{ row.product.total_qty|whole_qty }} left</span>
+          {% endif %}
         </div>
         {% endfor %}
       </div>
+      {% if restock_rows|length > 5 %}
+      <div class="pager">
+        <button type="button" class="pager-btn" id="restockPrev" onclick="restockPage(-1)">‹</button>
+        <span class="pager-info" id="restockInfo"></span>
+        <button type="button" class="pager-btn" id="restockNext" onclick="restockPage(1)">›</button>
+      </div>
+      {% endif %}
       {% else %}
       <p class="empty">Everything is in stock.</p>
       {% endif %}
@@ -258,6 +274,7 @@
       {% for s in recent %}
       <tr class="{{ 'txn-new' if loop.first }}">
         <td class="time">{{ s.created_at.strftime('%I:%M %p') if s.created_at else '' }}</td>
+        <td class="invoice">{{ s.invoice_no or '—' }}</td>
         <td><span class="chip {{ s.txn_type }}">{{ 'Sale' if s.txn_type == 'sale' else ('Return' if s.txn_type == 'refund' else 'Exchange') }}</span></td>
         <td class="name">{{ s.customer_name or 'Walk-in' }}</td>
         {% if show_money %}<td class="num">{{ s.total|peso }}</td>{% endif %}
@@ -293,6 +310,42 @@
       document.getElementById('clock').textContent =
         h + ':' + (m < 10 ? '0' : '') + m + ' ' + ampm;
     }, 1000);
+
+    // Needs restocking: 5 rows a page. Buttons for a tablet someone can tap;
+    // auto-advances on its own too, since a wall-mounted TV has nobody to
+    // tap them — it just cycles through every low/out-of-stock item over
+    // the course of the 30-second refresh window instead of showing only
+    // the first 5 forever.
+    (function () {
+      var rows = document.querySelectorAll('#restockList .alert-row');
+      if (!rows.length) return;
+      var pageCount = Math.max.apply(null, [].map.call(rows, function (r) { return +r.dataset.page; })) + 1;
+      var current = 0;
+      var prevBtn = document.getElementById('restockPrev');
+      var nextBtn = document.getElementById('restockNext');
+      var info = document.getElementById('restockInfo');
+
+      function render() {
+        for (var i = 0; i < rows.length; i++) {
+          rows[i].style.display = (+rows[i].dataset.page === current) ? 'flex' : 'none';
+        }
+        if (info) info.textContent = (current + 1) + ' / ' + pageCount;
+        if (prevBtn) prevBtn.disabled = current === 0;
+        if (nextBtn) nextBtn.disabled = current === pageCount - 1;
+      }
+      window.restockPage = function (dir) {
+        current = Math.max(0, Math.min(pageCount - 1, current + dir));
+        render();
+      };
+      render();
+
+      if (pageCount > 1) {
+        setInterval(function () {
+          current = (current + 1) % pageCount;
+          render();
+        }, 5000);
+      }
+    })();
   </script>
 </body>
 </html>
