@@ -8,134 +8,255 @@
   <meta http-equiv="refresh" content="30">
   <style>
     :root {
-      --bg:#0b0f14; --panel:#151b23; --line:#232c38;
-      --ink:#e9f0f7; --muted:#8b98a8;
-      --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --brand:#6366f1;
+      --bg-1:#0a0e14; --bg-2:#111827;
+      --panel:#151c28; --panel-2:#1a2333; --line:#26313f;
+      --ink:#eef2f8; --muted:#8b98ac; --faint:#5b6b82;
+      --ok:#22c55e; --ok-tint:rgba(34,197,94,.14);
+      --warn:#f59e0b; --warn-tint:rgba(245,158,11,.14);
+      --bad:#ef4444; --bad-tint:rgba(239,68,68,.14);
+      --brand:#6366f1; --brand-2:#818cf8;
+      --logo-blue:#4a90d9; --logo-gray:#7a8699;
     }
     * { box-sizing:border-box; }
     body {
-      margin:0; background:var(--bg); color:var(--ink);
+      margin:0; color:var(--ink);
+      background:
+        radial-gradient(1100px 520px at 12% -8%, rgba(99,102,241,.10), transparent 60%),
+        radial-gradient(900px 480px at 100% 0%, rgba(74,144,217,.08), transparent 55%),
+        linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 340px);
       font-family:"Segoe UI",system-ui,sans-serif;
       /* Sized to be read from across the shop, not from a desk. */
-      font-size:18px; padding:22px 26px;
+      font-size:18px; padding:24px 28px 30px;
     }
-    .top { display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:18px; }
-    .store { font-size:30px; font-weight:800; letter-spacing:-.02em; }
-    .clock { font-size:20px; color:var(--muted); font-variant-numeric:tabular-nums; }
-    .clock b { color:var(--ink); }
 
-    .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin-bottom:20px; }
-    .kpi { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
-    .kpi .label { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:700; }
-    .kpi .value { font-size:40px; font-weight:800; margin-top:6px; line-height:1.1; font-variant-numeric:tabular-nums; }
+    /* ---- header ---- */
+    .top { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:22px; }
+    .brand { display:flex; align-items:center; gap:12px; }
+    .brand-mark { width:38px; height:38px; flex:none; }
+    .store { font-size:28px; font-weight:800; letter-spacing:-.02em; }
+    .top-right { display:flex; align-items:center; gap:14px; }
+    .live-badge {
+      display:inline-flex; align-items:center; gap:7px; padding:5px 12px 5px 10px;
+      background:var(--ok-tint); border:1px solid rgba(34,197,94,.3); border-radius:999px;
+      font-size:12.5px; font-weight:700; letter-spacing:.06em; color:var(--ok); text-transform:uppercase;
+    }
+    .live-dot { width:7px; height:7px; border-radius:50%; background:var(--ok); animation:pulse 1.7s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:.35; transform:scale(.72); } }
+    .clock { text-align:right; }
+    .clock .date { font-size:14px; color:var(--muted); }
+    .clock .time { font-size:22px; font-weight:700; font-variant-numeric:tabular-nums; }
+
+    /* ---- kpi row ---- */
+    .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:14px; margin-bottom:20px; }
+    .kpi {
+      position:relative; overflow:hidden;
+      background:linear-gradient(160deg, var(--panel-2), var(--panel));
+      border:1px solid var(--line); border-radius:16px; padding:18px 20px;
+      box-shadow:0 8px 20px -12px rgba(0,0,0,.5);
+    }
+    .kpi::before { content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--faint); opacity:.6; }
+    .kpi.good::before { background:var(--ok); }
+    .kpi.warn::before { background:var(--warn); }
+    .kpi.bad::before  { background:var(--bad); }
+    .kpi-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .kpi .label { font-size:13px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); font-weight:700; }
+    .kpi-icon { width:26px; height:26px; flex:none; color:var(--faint); opacity:.8; }
+    .kpi.good .kpi-icon { color:var(--ok); }
+    .kpi.warn .kpi-icon { color:var(--warn); }
+    .kpi.bad  .kpi-icon { color:var(--bad); }
+    .kpi .value { font-size:42px; font-weight:800; margin-top:8px; line-height:1.05; font-variant-numeric:tabular-nums; }
     .kpi.good .value { color:var(--ok); }
     .kpi.warn .value { color:var(--warn); }
     .kpi.bad  .value { color:var(--bad); }
 
+    /* ---- panels ---- */
     .cols { display:grid; grid-template-columns:1.25fr 1fr; gap:16px; align-items:start; }
     @media (max-width:1000px) { .cols { grid-template-columns:1fr; } }
 
-    .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
-    .panel h2 {
-      margin:0 0 12px; font-size:14px; text-transform:uppercase; letter-spacing:.07em;
-      color:var(--muted); font-weight:700;
+    .panel {
+      background:linear-gradient(160deg, var(--panel-2), var(--panel));
+      border:1px solid var(--line); border-radius:16px; padding:18px 20px;
+      box-shadow:0 8px 20px -12px rgba(0,0,0,.5);
     }
+    .panel h2 {
+      margin:0 0 14px; font-size:14px; text-transform:uppercase; letter-spacing:.08em;
+      color:var(--muted); font-weight:700; display:flex; align-items:center; gap:8px;
+    }
+    .panel h2 svg { width:16px; height:16px; opacity:.8; }
+
     table { width:100%; border-collapse:collapse; font-size:19px; }
-    td { padding:11px 6px; border-bottom:1px solid var(--line); }
+    td { padding:11px 4px; border-bottom:1px solid var(--line); }
     tr:last-child td { border-bottom:none; }
     .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
     .name { font-weight:600; }
-    .time { color:var(--muted); font-size:16px; white-space:nowrap; }
-    .empty { color:var(--muted); padding:18px 6px; font-size:17px; }
+    .time { color:var(--muted); font-size:15.5px; white-space:nowrap; }
+    .empty { color:var(--muted); padding:20px 6px; font-size:17px; text-align:center; }
 
-    .chip { display:inline-block; padding:3px 10px; border-radius:999px; font-size:14px; font-weight:700; }
-    .chip.sale { background:rgba(34,197,94,.15); color:var(--ok); }
-    .chip.refund { background:rgba(239,68,68,.15); color:var(--bad); }
-    .chip.exchange { background:rgba(99,102,241,.18); color:#a5b4fc; }
+    /* ---- moving today: rank + proportional bar ---- */
+    .mover-rank {
+      display:inline-flex; align-items:center; justify-content:center;
+      width:24px; height:24px; border-radius:50%; margin-right:10px;
+      background:var(--panel); border:1px solid var(--line); color:var(--muted);
+      font-size:12.5px; font-weight:800; flex:none;
+    }
+    tr:first-child .mover-rank { background:rgba(99,102,241,.18); border-color:rgba(99,102,241,.4); color:var(--brand-2); }
+    .mover-name-row { display:flex; align-items:center; }
+    .mover-bar-track { height:5px; border-radius:999px; background:rgba(255,255,255,.06); margin-top:7px; overflow:hidden; }
+    .mover-bar-fill { height:100%; border-radius:999px; background:linear-gradient(90deg, var(--brand), var(--brand-2)); }
 
-    .alert-name { font-weight:600; }
-    .alert-qty { font-weight:800; }
+    /* ---- needs restocking: alert list ---- */
+    .alert-row { display:flex; align-items:center; gap:12px; padding:11px 4px; border-bottom:1px solid var(--line); border-left:3px solid transparent; }
+    .alert-row:last-child { border-bottom:none; }
+    .alert-row.out { border-left-color:var(--bad); }
+    .alert-row.low { border-left-color:var(--warn); }
+    .alert-icon { width:20px; height:20px; flex:none; }
+    .alert-row.out .alert-icon { color:var(--bad); }
+    .alert-row.low .alert-icon { color:var(--warn); }
+    .alert-name { flex:1; font-weight:600; }
+    .alert-qty { font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; }
     .alert-qty.out { color:var(--bad); }
     .alert-qty.low { color:var(--warn); }
 
-    .foot { margin-top:18px; display:flex; justify-content:space-between; gap:12px; color:var(--muted); font-size:14px; flex-wrap:wrap; }
-    .foot a { color:var(--muted); text-decoration:none; border:1px solid var(--line); padding:6px 12px; border-radius:8px; }
-    .foot a:hover { color:var(--ink); }
+    /* ---- transactions ---- */
+    .chip { display:inline-block; padding:3px 11px; border-radius:999px; font-size:13.5px; font-weight:700; }
+    .chip.sale { background:var(--ok-tint); color:var(--ok); }
+    .chip.refund { background:var(--bad-tint); color:var(--bad); }
+    .chip.exchange { background:rgba(99,102,241,.16); color:var(--brand-2); }
+    @keyframes rowFlash { 0% { background:rgba(99,102,241,.22); } 100% { background:transparent; } }
+    .txn-new td { animation:rowFlash 2.4s ease-out; }
+
+    /* ---- footer ---- */
+    .foot { margin-top:20px; display:flex; justify-content:space-between; align-items:center; gap:12px; color:var(--muted); font-size:13.5px; flex-wrap:wrap; }
+    .foot-status { display:flex; align-items:center; gap:8px; }
+    .foot-dot { width:6px; height:6px; border-radius:50%; background:var(--ok); animation:pulse 1.7s ease-in-out infinite; }
+    .foot-links { display:flex; gap:8px; }
+    .foot a {
+      color:var(--muted); text-decoration:none; border:1px solid var(--line); background:var(--panel);
+      padding:7px 14px; border-radius:999px; font-weight:600; transition:color .15s,border-color .15s;
+    }
+    .foot a:hover { color:var(--ink); border-color:var(--brand); }
   </style>
 </head>
 <body>
   {% set biz = business_info() %}
   <div class="top">
-    <div class="store">{{ biz.business_name or app_name }}</div>
-    <div class="clock">
-      {{ now.strftime('%A, %b %d') }} · <b id="clock">{{ now.strftime('%I:%M %p') }}</b>
+    <div class="brand">
+      <span class="brand-mark">
+        <svg viewBox="0 0 64 64" fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8,34 L32,10 L56,34 M8,34 L8,54 M56,34 L56,46" stroke="var(--logo-blue)" stroke-width="5"/>
+          <path d="M20,27 L44,27 M44,54 L56,54" stroke="var(--logo-gray)" stroke-width="6"/>
+          <path d="M32,27 L32,50" stroke="var(--logo-gray)" stroke-width="6"/>
+        </svg>
+      </span>
+      <div class="store">{{ biz.business_name or app_name }}</div>
+    </div>
+    <div class="top-right">
+      <span class="live-badge"><span class="live-dot"></span>Live</span>
+      <div class="clock">
+        <div class="date">{{ now.strftime('%A, %b %d') }}</div>
+        <div class="time" id="clock">{{ now.strftime('%I:%M %p') }}</div>
+      </div>
     </div>
   </div>
 
   <div class="kpis">
     <div class="kpi">
-      <div class="label">Sales today</div>
+      <div class="kpi-head">
+        <span class="label">Sales today</span>
+        <svg class="kpi-icon" viewBox="0 0 24 24" fill="none"><rect x="3" y="12" width="4" height="9" rx="1" fill="currentColor" opacity=".55"/><rect x="10" y="7" width="4" height="14" rx="1" fill="currentColor" opacity=".8"/><rect x="17" y="3" width="4" height="18" rx="1" fill="currentColor"/></svg>
+      </div>
       <div class="value">{{ sales_count }}</div>
     </div>
     {% if show_money %}
     <div class="kpi good">
-      <div class="label">Takings today</div>
+      <div class="kpi-head">
+        <span class="label">Takings today</span>
+        <svg class="kpi-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="1.6"/><text x="12" y="16.3" text-anchor="middle" font-size="12" font-weight="700" fill="currentColor">₱</text></svg>
+      </div>
       <div class="value">{{ sales_total|peso }}</div>
     </div>
     {% endif %}
     <div class="kpi {{ 'bad' if out_of_stock else '' }}">
-      <div class="label">Out of stock</div>
+      <div class="kpi-head">
+        <span class="label">Out of stock</span>
+        <svg class="kpi-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l9-4 9 4-9 4-9-4z"/><path d="M3 8v9l9 4 9-4V8"/><path d="M12 12v9"/></svg>
+      </div>
       <div class="value">{{ out_of_stock|length }}</div>
     </div>
     <div class="kpi {{ 'warn' if low_stock else '' }}">
-      <div class="label">Running low</div>
+      <div class="kpi-head">
+        <span class="label">Running low</span>
+        <svg class="kpi-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l9.5 16.5H2.5L12 3.5z"/><path d="M12 10v4.5"/><circle cx="12" cy="17.3" r="0.6" fill="currentColor" stroke="none"/></svg>
+      </div>
       <div class="value">{{ low_stock|length }}</div>
     </div>
   </div>
 
   <div class="cols">
     <div class="panel">
-      <h2>Moving today</h2>
+      <h2>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>
+        Moving today
+      </h2>
+      {% if top_movers %}
+      {% set max_val = (top_movers|map(attribute='revenue' if show_money else 'qty')|list|max) %}
       <table>
         {% for m in top_movers %}
+        {% set val = m.revenue if show_money else m.qty %}
+        {% set pct = (val / max_val * 100) if max_val and max_val > 0 else 0 %}
         <tr>
-          <td class="name">{{ m.name }}</td>
-          <td class="num">{{ m.qty|qty }} sold</td>
-          {% if show_money %}<td class="num">{{ m.revenue|peso }}</td>{% endif %}
+          <td colspan="{{ 3 if show_money else 2 }}" style="padding-bottom:{{ 4 if not loop.last else 11 }}px;">
+            <div class="mover-name-row">
+              <span class="mover-rank">{{ loop.index }}</span>
+              <span class="name" style="flex:1;">{{ m.name }}</span>
+              <span class="num">{{ m.qty|qty }} sold{% if show_money %} · {{ m.revenue|peso }}{% endif %}</span>
+            </div>
+            <div class="mover-bar-track"><div class="mover-bar-fill" style="width:{{ '%.1f'|format(pct) }}%;"></div></div>
+          </td>
         </tr>
-        {% else %}
-        <tr><td class="empty">Nothing sold yet today.</td></tr>
         {% endfor %}
       </table>
+      {% else %}
+      <p class="empty">Nothing sold yet today.</p>
+      {% endif %}
     </div>
 
     <div class="panel">
-      <h2>Needs restocking</h2>
-      <table>
+      <h2>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l9.5 16.5H2.5L12 3.5z"/><path d="M12 10v4.5"/></svg>
+        Needs restocking
+      </h2>
+      {% if out_of_stock or low_stock %}
+      <div>
         {% for p in out_of_stock %}
-        <tr>
-          <td class="alert-name">{{ p.name }}</td>
-          <td class="num alert-qty out">OUT</td>
-        </tr>
+        <div class="alert-row out">
+          <svg class="alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l9-4 9 4-9 4-9-4z"/><path d="M3 8v9l9 4 9-4V8"/></svg>
+          <span class="alert-name">{{ p.name }}</span>
+          <span class="alert-qty out">OUT</span>
+        </div>
         {% endfor %}
         {% for p in low_stock %}
-        <tr>
-          <td class="alert-name">{{ p.name }}</td>
-          <td class="num alert-qty low">{{ p.total_qty|whole_qty }} left</td>
-        </tr>
+        <div class="alert-row low">
+          <svg class="alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l9.5 16.5H2.5L12 3.5z"/><path d="M12 10v4.5"/></svg>
+          <span class="alert-name">{{ p.name }}</span>
+          <span class="alert-qty low">{{ p.total_qty|whole_qty }} left</span>
+        </div>
         {% endfor %}
-        {% if not out_of_stock and not low_stock %}
-        <tr><td class="empty">Everything is in stock.</td></tr>
-        {% endif %}
-      </table>
+      </div>
+      {% else %}
+      <p class="empty">Everything is in stock.</p>
+      {% endif %}
     </div>
   </div>
 
   <div class="panel" style="margin-top:16px;">
-    <h2>Latest transactions</h2>
+    <h2>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg>
+      Latest transactions
+    </h2>
     <table>
       {% for s in recent %}
-      <tr>
+      <tr class="{{ 'txn-new' if loop.first }}">
         <td class="time">{{ s.created_at.strftime('%I:%M %p') if s.created_at else '' }}</td>
         <td><span class="chip {{ s.txn_type }}">{{ 'Sale' if s.txn_type == 'sale' else ('Return' if s.txn_type == 'refund' else 'Exchange') }}</span></td>
         <td class="name">{{ s.customer_name or 'Walk-in' }}</td>
@@ -148,8 +269,8 @@
   </div>
 
   <div class="foot">
-    <span>Updates automatically · last refreshed {{ now.strftime('%I:%M:%S %p') }}</span>
-    <span>
+    <span class="foot-status"><span class="foot-dot"></span>Updates automatically · last refreshed {{ now.strftime('%I:%M:%S %p') }}</span>
+    <span class="foot-links">
       {# Same screen, two placements: bookmark whichever suits the device. #}
       {% if show_money %}
         <a href="/display?money=0">Hide amounts</a>
@@ -157,6 +278,7 @@
         <a href="/display?money=1">Show amounts</a>
       {% endif %}
       {% if is_preview %}<a href="/">← Back to app</a>{% endif %}
+      <a href="/logout">Sign out</a>
     </span>
   </div>
 
