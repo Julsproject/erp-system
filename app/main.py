@@ -10,15 +10,15 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import (
-    accounting, activity, audit, backup, banking, credits, customers, dashboard, deliveries, encoders, expenses,
-    models, notifications, pdc, pos, products, purchases, quotations, reports, sales, shelves, shifts,
-    stock_count, suppliers, users,
+    accounting, activity, audit, backup, banking, credits, customers, dashboard, deliveries, display,
+    encoders, expenses, models, notifications, pdc, pos, products, purchases, quotations, reports, sales,
+    shelves, shifts, stock_count, suppliers, users,
 )
 from . import settings as settings_module   # app/settings.py — the Settings UI router
 from . import settings_store
 from .auth import verify_password
 from .config import settings
-from .database import get_db
+from .database import SessionLocal, get_db
 from .templating import templates
 
 app = FastAPI(title=settings.app_name)
@@ -26,8 +26,49 @@ app = FastAPI(title=settings.app_name)
 # session cookie: still logged in as long as the browser stays open (including
 # across tabs/reloads), but closing the browser entirely clears it, requiring
 # login again next time — instead of Starlette's 14-day-persistent default.
-app.add_middleware(SessionMiddleware, secret_key=settings.secret_key, max_age=None)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+
+# Where a signed-in `display` account is allowed to go. Everything else is
+# bounced back to the screen itself.
+_DISPLAY_ALLOWED = ("/display", "/static", "/logout", "/login", "/health", "/favicon.ico")
+
+
+@app.middleware("http")
+async def confine_display(request: Request, call_next):
+    """Pin the store-display account to the display screen, and make it
+    read-only.
+
+    This is enforced centrally rather than route by route on purpose. Some
+    routes carry no role gate at all — `/pos` only checks that *somebody* is
+    signed in — so a per-route approach would have handed the wall tablet a
+    working till. Doing it here means a route added next year is covered
+    without anyone having to remember, which is exactly how the last set of
+    ungated routes slipped through.
+    """
+    user_id = request.session.get("user_id")
+    if user_id:
+        db = SessionLocal()
+        try:
+            role = (db.query(models.User.role).filter(models.User.id == user_id).scalar() or "").lower()
+        finally:
+            db.close()
+        if role == "display":
+            path = request.url.path
+            if not path.startswith(_DISPLAY_ALLOWED):
+                return RedirectResponse("/display", status_code=status.HTTP_302_FOUND)
+            # Belt and braces: a screen never writes anything.
+            if request.method not in ("GET", "HEAD"):
+                return RedirectResponse("/display", status_code=status.HTTP_302_FOUND)
+    return await call_next(request)
+
+
+# Registered AFTER confine_display on purpose. Starlette runs the most
+# recently added middleware outermost, and confine_display reads
+# request.session — so the session layer has to wrap it, not sit inside it.
+# Adding this above the middleware instead fails with "SessionMiddleware must
+# be installed to access request.session".
+app.add_middleware(SessionMiddleware, secret_key=settings.secret_key, max_age=None)
 
 
 @app.on_event("startup")
@@ -62,6 +103,7 @@ app.include_router(activity.router)
 app.include_router(audit.router)
 app.include_router(users.router)
 app.include_router(settings_module.router)
+app.include_router(display.router)
 app.include_router(dashboard.router)
 
 
@@ -107,7 +149,10 @@ def login_submit(
         entity_label=user.username, summary=f"{user.username} signed in",
     )
     db.commit()
-    return RedirectResponse("/", status_code=status.HTTP_302_FOUND)
+    # The wall screen signs in once and is left running — land it on the
+    # display rather than a dashboard it isn't allowed to open.
+    landing = "/display" if (user.role or "").lower() == "display" else "/"
+    return RedirectResponse(landing, status_code=status.HTTP_302_FOUND)
 
 
 @app.get("/logout")

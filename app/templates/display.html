@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Store Display · {{ app_name }}</title>
+  <!-- Reloads itself. A wall screen has nobody to press refresh. -->
+  <meta http-equiv="refresh" content="30">
+  <style>
+    :root {
+      --bg:#0b0f14; --panel:#151b23; --line:#232c38;
+      --ink:#e9f0f7; --muted:#8b98a8;
+      --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --brand:#6366f1;
+    }
+    * { box-sizing:border-box; }
+    body {
+      margin:0; background:var(--bg); color:var(--ink);
+      font-family:"Segoe UI",system-ui,sans-serif;
+      /* Sized to be read from across the shop, not from a desk. */
+      font-size:18px; padding:22px 26px;
+    }
+    .top { display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:18px; }
+    .store { font-size:30px; font-weight:800; letter-spacing:-.02em; }
+    .clock { font-size:20px; color:var(--muted); font-variant-numeric:tabular-nums; }
+    .clock b { color:var(--ink); }
+
+    .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin-bottom:20px; }
+    .kpi { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
+    .kpi .label { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:700; }
+    .kpi .value { font-size:40px; font-weight:800; margin-top:6px; line-height:1.1; font-variant-numeric:tabular-nums; }
+    .kpi.good .value { color:var(--ok); }
+    .kpi.warn .value { color:var(--warn); }
+    .kpi.bad  .value { color:var(--bad); }
+
+    .cols { display:grid; grid-template-columns:1.25fr 1fr; gap:16px; align-items:start; }
+    @media (max-width:1000px) { .cols { grid-template-columns:1fr; } }
+
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
+    .panel h2 {
+      margin:0 0 12px; font-size:14px; text-transform:uppercase; letter-spacing:.07em;
+      color:var(--muted); font-weight:700;
+    }
+    table { width:100%; border-collapse:collapse; font-size:19px; }
+    td { padding:11px 6px; border-bottom:1px solid var(--line); }
+    tr:last-child td { border-bottom:none; }
+    .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .name { font-weight:600; }
+    .time { color:var(--muted); font-size:16px; white-space:nowrap; }
+    .empty { color:var(--muted); padding:18px 6px; font-size:17px; }
+
+    .chip { display:inline-block; padding:3px 10px; border-radius:999px; font-size:14px; font-weight:700; }
+    .chip.sale { background:rgba(34,197,94,.15); color:var(--ok); }
+    .chip.refund { background:rgba(239,68,68,.15); color:var(--bad); }
+    .chip.exchange { background:rgba(99,102,241,.18); color:#a5b4fc; }
+
+    .alert-name { font-weight:600; }
+    .alert-qty { font-weight:800; }
+    .alert-qty.out { color:var(--bad); }
+    .alert-qty.low { color:var(--warn); }
+
+    .foot { margin-top:18px; display:flex; justify-content:space-between; gap:12px; color:var(--muted); font-size:14px; flex-wrap:wrap; }
+    .foot a { color:var(--muted); text-decoration:none; border:1px solid var(--line); padding:6px 12px; border-radius:8px; }
+    .foot a:hover { color:var(--ink); }
+  </style>
+</head>
+<body>
+  {% set biz = business_info() %}
+  <div class="top">
+    <div class="store">{{ biz.business_name or app_name }}</div>
+    <div class="clock">
+      {{ now.strftime('%A, %b %d') }} · <b id="clock">{{ now.strftime('%I:%M %p') }}</b>
+    </div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi">
+      <div class="label">Sales today</div>
+      <div class="value">{{ sales_count }}</div>
+    </div>
+    {% if show_money %}
+    <div class="kpi good">
+      <div class="label">Takings today</div>
+      <div class="value">{{ sales_total|peso }}</div>
+    </div>
+    {% endif %}
+    <div class="kpi {{ 'bad' if out_of_stock else '' }}">
+      <div class="label">Out of stock</div>
+      <div class="value">{{ out_of_stock|length }}</div>
+    </div>
+    <div class="kpi {{ 'warn' if low_stock else '' }}">
+      <div class="label">Running low</div>
+      <div class="value">{{ low_stock|length }}</div>
+    </div>
+  </div>
+
+  <div class="cols">
+    <div class="panel">
+      <h2>Moving today</h2>
+      <table>
+        {% for m in top_movers %}
+        <tr>
+          <td class="name">{{ m.name }}</td>
+          <td class="num">{{ m.qty|qty }} sold</td>
+          {% if show_money %}<td class="num">{{ m.revenue|peso }}</td>{% endif %}
+        </tr>
+        {% else %}
+        <tr><td class="empty">Nothing sold yet today.</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2>Needs restocking</h2>
+      <table>
+        {% for p in out_of_stock %}
+        <tr>
+          <td class="alert-name">{{ p.name }}</td>
+          <td class="num alert-qty out">OUT</td>
+        </tr>
+        {% endfor %}
+        {% for p in low_stock %}
+        <tr>
+          <td class="alert-name">{{ p.name }}</td>
+          <td class="num alert-qty low">{{ p.total_qty|whole_qty }} left</td>
+        </tr>
+        {% endfor %}
+        {% if not out_of_stock and not low_stock %}
+        <tr><td class="empty">Everything is in stock.</td></tr>
+        {% endif %}
+      </table>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:16px;">
+    <h2>Latest transactions</h2>
+    <table>
+      {% for s in recent %}
+      <tr>
+        <td class="time">{{ s.created_at.strftime('%I:%M %p') if s.created_at else '' }}</td>
+        <td><span class="chip {{ s.txn_type }}">{{ 'Sale' if s.txn_type == 'sale' else ('Return' if s.txn_type == 'refund' else 'Exchange') }}</span></td>
+        <td class="name">{{ s.customer_name or 'Walk-in' }}</td>
+        {% if show_money %}<td class="num">{{ s.total|peso }}</td>{% endif %}
+      </tr>
+      {% else %}
+      <tr><td class="empty">No transactions yet today.</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <div class="foot">
+    <span>Updates automatically · last refreshed {{ now.strftime('%I:%M:%S %p') }}</span>
+    <span>
+      {# Same screen, two placements: bookmark whichever suits the device. #}
+      {% if show_money %}
+        <a href="/display?money=0">Hide amounts</a>
+      {% else %}
+        <a href="/display?money=1">Show amounts</a>
+      {% endif %}
+      {% if is_preview %}<a href="/">← Back to app</a>{% endif %}
+    </span>
+  </div>
+
+  <script>
+    // The meta refresh handles the data; this just keeps the clock honest
+    // in between, so the screen never looks frozen.
+    setInterval(function () {
+      var d = new Date();
+      var h = d.getHours(), m = d.getMinutes();
+      var ampm = h >= 12 ? 'PM' : 'AM';
+      h = h % 12; if (h === 0) h = 12;
+      document.getElementById('clock').textContent =
+        h + ':' + (m < 10 ? '0' : '') + m + ' ' + ampm;
+    }, 1000);
+  </script>
+</body>
+</html>

@@ -45,6 +45,18 @@ def is_floor_staff(user) -> bool:
 
     Spelled out as a role list rather than "is anyone logged in" so that
     adding a future read-only or delivery-driver role doesn't silently
-    hand it the till and the stock count.
+    hand it the till and the stock count. `display` is deliberately absent.
     """
     return user is not None and (user.role or "").lower() in ("admin", "manager", "cashier")
+
+
+def is_display(user) -> bool:
+    """The store's wall screen — not a person.
+
+    A `display` account exists so a tablet or TV can be signed in once and
+    left running. It sits outside the three rings above: it fails every one
+    of them, so it can't reach any normal page, and `main.confine_display`
+    pins it to /display. That containment is the point — if someone picks
+    up the tablet, there is nothing else to browse to.
+    """
+    return user is not None and (user.role or "").lower() == "display"

@@ -12,7 +12,14 @@ from .templating import templates
 
 router = APIRouter()
 
-ROLES = [("cashier", "Cashier"), ("manager", "Manager"), ("admin", "Admin")]
+ROLES = [
+    ("cashier", "Cashier"),
+    ("manager", "Manager"),
+    ("admin", "Admin"),
+    # Not a person — the account a wall screen signs in as. Confined to
+    # /display and blocked from everything else (see main.confine_display).
+    ("display", "Store Display (screen only)"),
+]
 
 
 @router.get("/users", response_class=HTMLResponse)
