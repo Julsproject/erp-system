@@ -256,12 +256,14 @@ def reverse_sale_posting(db: Session, sale: models.Sale, *, reason: str, entered
     return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id)
 
 
-def post_receivable_settlement(db: Session, sale: models.Sale, *, amount: Decimal, method: str, entered_by_id: int = None):
+def post_receivable_settlement(db: Session, sale: models.Sale, *, amount: Decimal, method: str, entered_by_id: int = None, txn_date=None):
     """Called from sales.py's settle_pay and credits.py's pay_full_submit —
     a customer paying down what they owe on a credit sale. Dr the mapped
     money account, Cr Accounts Receivable. The cheque branch in both
     callers defers to a PDC and posts nothing yet, same as everywhere else
-    a cheque appears in this app."""
+    a cheque appears in this app. `txn_date` lets a backdated payment (cash
+    actually collected yesterday, encoded today) post to the day it was
+    really collected instead of today; defaults to today when not given."""
     fkey = SALE_FUNCTION_KEYS.get(method)
     if not fkey:
         return None  # unrecognized method — nothing sane to post
@@ -270,7 +272,7 @@ def post_receivable_settlement(db: Session, sale: models.Sale, *, amount: Decima
         {"function_key": "AR", "amount": amount, "side": "credit"},
     ]
     return post_journal(
-        db, txn_date=_today(), source_type="sale_settlement", source_id=sale.id,
+        db, txn_date=txn_date or _today(), source_type="sale_settlement", source_id=sale.id,
         description=f"Payment on {sale.invoice_no}", reference_no=sale.invoice_no,
         lines=lines, entered_by_id=entered_by_id,
     )

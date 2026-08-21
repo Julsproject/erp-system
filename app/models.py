@@ -372,7 +372,12 @@ class Sale(Base):
     __tablename__ = "sales"
 
     id = Column(Integer, primary_key=True)
-    invoice_no = Column(String(20), unique=True, index=True)
+    # Unique per BOOKLET, not globally — DRS 255 and DRB 255 are two different
+    # physical receipts. That pairing is enforced by a unique index the ORM
+    # can't express (it keys on COALESCE(receipt_type,'') so NULL booklets
+    # still can't repeat a number) — see migration 0057; the index here is
+    # plain lookup speed.
+    invoice_no = Column(String(20), index=True)
     # Which physical receipt booklet this invoice # was written on (DRS, DRB,
     # SI, ...) — the shop keeps a separate numbered sequence per booklet, so
     # this is what "next invoice #" is computed against (see pos.py's

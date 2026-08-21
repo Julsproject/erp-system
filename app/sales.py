@@ -1,14 +1,15 @@
 """Sales history (fully-paid) and receivables (credit) with settlement."""
 import io
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import func, or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
 from . import accounting, models
@@ -18,9 +19,31 @@ from .templating import templates
 
 router = APIRouter()
 
+MANILA = ZoneInfo("Asia/Manila")
 SETTLE_METHODS = [("cash", "Cash"), ("gcash", "GCash"), ("maya", "Maya"), ("other_ewallet", "Other E-Wallet"), ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque")]
 PAGE_SIZE = 15
 TYPE_LABELS = {"sale": "Sale", "refund": "Return", "exchange": "Sale x Exchange"}
+
+
+def _resolve_settlement_datetime(payment_date: str):
+    """Turn an optional 'YYYY-MM-DD' payment date into a timezone-aware
+    Manila timestamp for a backdated payment — e.g. cash actually collected
+    yesterday but only entered into the system today. Blank/invalid -> None,
+    which lets the DB stamp the live 'now' as usual. Combined with the
+    current wall-clock time so several payments backdated to the same day
+    still keep their encoding order. Same pattern as POS's own
+    _resolve_txn_datetime for backdated sales."""
+    raw = (payment_date or "").strip()
+    if not raw:
+        return None, None
+    try:
+        d = date.fromisoformat(raw)
+    except ValueError:
+        return None, "Enter a valid payment date."
+    now = datetime.now(MANILA)
+    if d > now.date():
+        return None, "Payment date can't be in the future."
+    return now.replace(year=d.year, month=d.month, day=d.day), None
 
 
 def _parse_date(s: str):
@@ -81,27 +104,35 @@ def _back_url(user, sale=None, from_page: str = "") -> str:
     return "/credits"
 
 
-def _filtered_sales_query(db: Session, q: str, type_filter: str, date_from, date_to, receipt_type: str = ""):
-    """Fully-paid sales, filtered by search text / type / date / booklet.
+def _filtered_sales_query(db: Session, q: str, type_filter: str, date_from, date_to, receipt_type: str = "", search_all: bool = False):
+    """Sales filtered by search text / type / date / booklet.
+
+    Scoped to fully-paid, non-voided sales by default — that's what the Cash
+    Sales tab means. `search_all` drops both of those conditions so a single
+    search can find an invoice without knowing up front whether it was paid,
+    still on credit, or voided; otherwise that means checking three tabs in
+    turn just to locate one receipt.
+
     Filtering (not just fetch-then-check) happens at the SQL level so
     pagination counts and the Excel export both see the same accurate
     result set."""
-    settled_sub = (
-        db.query(
-            models.ReceivableSettlement.sale_id.label("sid"),
-            func.coalesce(func.sum(models.ReceivableSettlement.amount), 0).label("paid"),
+    query = db.query(models.Sale)
+    if not search_all:
+        settled_sub = (
+            db.query(
+                models.ReceivableSettlement.sale_id.label("sid"),
+                func.coalesce(func.sum(models.ReceivableSettlement.amount), 0).label("paid"),
+            )
+            .group_by(models.ReceivableSettlement.sale_id)
+            .subquery()
         )
-        .group_by(models.ReceivableSettlement.sale_id)
-        .subquery()
-    )
-    query = (
-        db.query(models.Sale)
-        .outerjoin(settled_sub, settled_sub.c.sid == models.Sale.id)
-        .filter(
-            models.Sale.receivable_amount <= func.coalesce(settled_sub.c.paid, 0),
-            models.Sale.is_voided.is_(False),
+        query = (
+            query.outerjoin(settled_sub, settled_sub.c.sid == models.Sale.id)
+            .filter(
+                models.Sale.receivable_amount <= func.coalesce(settled_sub.c.paid, 0),
+                models.Sale.is_voided.is_(False),
+            )
         )
-    )
     if q:
         like = f"%{q}%"
         query = query.filter(or_(models.Sale.invoice_no.ilike(like), models.Sale.customer_name.ilike(like)))
@@ -129,6 +160,7 @@ def sales_history(
     date_to: str = "",
     receipt_type: str = "",
     page: int = 1,
+    search_all: int = 0,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -140,7 +172,7 @@ def sales_history(
     page = max(page, 1)
     df, dt = _parse_date(date_from), _parse_date(date_to)
 
-    query = _filtered_sales_query(db, q, type_filter, df, dt, receipt_type)
+    query = _filtered_sales_query(db, q, type_filter, df, dt, receipt_type, bool(search_all))
 
     if type_filter == "sale":
         # "Sale" should read as sales only — an exchange's Total is netted
@@ -150,15 +182,18 @@ def sales_history(
         # than a single SQL sum.
         all_matching = query.order_by(models.Sale.id.desc()).all()
         total_count = len(all_matching)
-        total_sales = sum((_sold_amount(s) for s in all_matching), Decimal("0"))
+        total_sales = sum((_sold_amount(s) for s in all_matching if not s.is_voided), Decimal("0"))
         pages = max((total_count + PAGE_SIZE - 1) // PAGE_SIZE, 1)
         page = min(page, pages)
         start = (page - 1) * PAGE_SIZE
         sales_page = all_matching[start:start + PAGE_SIZE]
     else:
-        total_count, total_sales = query.with_entities(
-            func.count(models.Sale.id), func.coalesce(func.sum(models.Sale.total), 0)
-        ).one()
+        total_count = query.with_entities(func.count(models.Sale.id)).scalar() or 0
+        # Voided rows are listed when searching everything (that's the point),
+        # but a cancelled sale is not money taken — keep it out of the total.
+        total_sales = query.with_entities(
+            func.coalesce(func.sum(case((models.Sale.is_voided.is_(True), 0), else_=models.Sale.total)), 0)
+        ).scalar()
         pages = max((total_count + PAGE_SIZE - 1) // PAGE_SIZE, 1)
         page = min(page, pages)
         sales_page = (
@@ -167,6 +202,28 @@ def sales_history(
             .limit(PAGE_SIZE)
             .all()
         )
+
+    # Searching everything mixes paid, credit and voided in one list, so each
+    # row has to say which it is — the list is no longer "all paid" by
+    # definition the way the Cash Sales tab is.
+    row_status = {}
+    if search_all and sales_page:
+        paid_map = dict(
+            db.query(
+                models.ReceivableSettlement.sale_id,
+                func.coalesce(func.sum(models.ReceivableSettlement.amount), 0),
+            )
+            .filter(models.ReceivableSettlement.sale_id.in_([s.id for s in sales_page]))
+            .group_by(models.ReceivableSettlement.sale_id)
+            .all()
+        )
+        for s in sales_page:
+            if s.is_voided:
+                row_status[s.id] = "voided"
+            elif (s.receivable_amount or Decimal("0")) > Decimal(str(paid_map.get(s.id, 0))):
+                row_status[s.id] = "credit"
+            else:
+                row_status[s.id] = "paid"
 
     row_totals = {s.id: (_sold_amount(s) if type_filter == "sale" else (s.total or Decimal("0"))) for s in sales_page}
     totals = {"count": total_count, "sales": Decimal(str(total_sales or 0))}
@@ -179,7 +236,7 @@ def sales_history(
          "sales": sales_page, "totals": totals, "tab": tab, "q": q,
          "row_totals": row_totals,
          "type_filter": type_filter, "date_from": date_from, "date_to": date_to,
-         "receipt_type": receipt_type,
+         "receipt_type": receipt_type, "search_all": search_all, "row_status": row_status,
          "types": TYPE_LABELS, "page": page, "pages": pages},
     )
 
@@ -191,6 +248,7 @@ def export_sales(
     date_from: str = "",
     date_to: str = "",
     receipt_type: str = "",
+    search_all: int = 0,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -201,13 +259,37 @@ def export_sales(
     q = (q or "").strip()
     df, dt = _parse_date(date_from), _parse_date(date_to)
 
-    query = _filtered_sales_query(db, q, type_filter, df, dt, receipt_type)
+    query = _filtered_sales_query(db, q, type_filter, df, dt, receipt_type, bool(search_all))
     sales = query.order_by(models.Sale.id.desc()).all()
+
+    # Same reasoning as the on-screen list: an all-invoices export mixes paid,
+    # credit and voided rows, so it has to carry a Status column or the
+    # numbers can't be read correctly.
+    paid_map = {}
+    if search_all and sales:
+        paid_map = dict(
+            db.query(
+                models.ReceivableSettlement.sale_id,
+                func.coalesce(func.sum(models.ReceivableSettlement.amount), 0),
+            )
+            .filter(models.ReceivableSettlement.sale_id.in_([s.id for s in sales]))
+            .group_by(models.ReceivableSettlement.sale_id)
+            .all()
+        )
+
+    def _status_of(sale):
+        if sale.is_voided:
+            return "Voided"
+        if (sale.receivable_amount or Decimal("0")) > Decimal(str(paid_map.get(sale.id, 0))):
+            return "Credit (unpaid)"
+        return "Paid"
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Sales"
     headers = ["Invoice #", "Type", "Date", "Customer", "Payment", "Total"]
+    if search_all:
+        headers.append("Status")
     ws.append(headers)
     header_fill = PatternFill("solid", fgColor="1F6FEB")
     for cell in ws[1]:
@@ -216,16 +298,19 @@ def export_sales(
 
     for s in sales:
         amount = _sold_amount(s) if type_filter == "sale" else (s.total or Decimal("0"))
-        ws.append([
+        row = [
             s.invoice_no,
             TYPE_LABELS.get(s.txn_type, s.txn_type),
             s.created_at.strftime("%Y-%m-%d %I:%M %p") if s.created_at else "",
             s.customer_name or "Walk-in",
             s.payment_method or "",
             float(amount),
-        ])
+        ]
+        if search_all:
+            row.append(_status_of(s))
+        ws.append(row)
 
-    widths = [16, 12, 20, 24, 20, 14]
+    widths = [16, 12, 20, 24, 20, 14, 16]
     for i, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = width
     ws.freeze_panes = "A2"
@@ -416,7 +501,8 @@ def settle_form(sale_id: int, request: Request, from_page: str = "", db: Session
         {
             "request": request, "app_name": request.app.title, "user": user,
             "sale": sale, "outstanding": outstanding, "methods": SETTLE_METHODS, "error": None,
-            "back_url": _back_url(user, sale, from_page), "from_page": from_page,
+            "back_url": _back_url(user, sale, from_page), "from_page": from_page, "payment_date": "",
+            "today_iso": datetime.now(MANILA).date().isoformat(),
         },
     )
 
@@ -444,13 +530,19 @@ async def settle_pay(sale_id: int, request: Request, db: Session = Depends(get_d
             "sales/settle.html",
             {"request": request, "app_name": request.app.title, "user": user,
              "sale": sale, "outstanding": outstanding, "methods": SETTLE_METHODS, "error": error,
-             "back_url": _back_url(user, sale, from_page), "from_page": from_page},
+             "back_url": _back_url(user, sale, from_page), "from_page": from_page,
+             "payment_date": form.get("payment_date") or "",
+             "today_iso": datetime.now(MANILA).date().isoformat()},
         )
 
     if amount <= 0:
         return rerender("Enter an amount greater than zero.")
     if amount > outstanding:
         amount = outstanding  # never collect more than owed
+
+    payment_dt, date_err = _resolve_settlement_datetime(form.get("payment_date"))
+    if date_err:
+        return rerender(date_err)
 
     if method == "cheque":
         # A post-dated cheque doesn't settle anything yet — it just goes into
@@ -478,9 +570,14 @@ async def settle_pay(sale_id: int, request: Request, db: Session = Depends(get_d
         sale_id=sale.id, method=method, amount=amount, ref_no=ref_no,
         cashier_id=user.id,
     )
+    if payment_dt:
+        settlement.created_at = payment_dt
     db.add(settlement)
     try:
-        entry = accounting.post_receivable_settlement(db, sale, amount=amount, method=method, entered_by_id=user.id)
+        entry = accounting.post_receivable_settlement(
+            db, sale, amount=amount, method=method, entered_by_id=user.id,
+            txn_date=payment_dt.date() if payment_dt else None,
+        )
         if entry:
             settlement.journal_entry_id = entry.id
     except accounting.PostingError:

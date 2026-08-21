@@ -136,7 +136,7 @@
     </div>
     {% endif %}
 
-    <div class="r-billto">Customer: <b>{{ sale.customer_name or 'Walk-in' }}</b></div>
+    <div class="r-billto">Customer: <b>{{ sale.customer_name or 'Walk-in' }}</b>{% if can_edit_customer and not sale.is_voided %} <a href="#" onclick="showEditCustomer(event)" style="font-size:11px;">✎ edit</a>{% endif %}</div>
     {% if sale.delivery_address %}
     <div class="r-billto">Delivery Address: <b>{{ sale.delivery_address }}</b></div>
     {% endif %}
@@ -152,6 +152,9 @@
     {% endif %}
     {% if edit_payment_error %}
     <div class="void-error">⚠ {{ edit_payment_error }}</div>
+    {% endif %}
+    {% if edit_customer_error %}
+    <div class="void-error">⚠ {{ edit_customer_error }}</div>
     {% endif %}
     {% if edit_invoice_error %}
     <div class="void-error">⚠ {{ edit_invoice_error }}</div>
@@ -185,6 +188,28 @@
         <button type="button" class="btn back" style="padding:6px 12px;font-size:12px;" onclick="hideEditPayment()">Cancel</button>
       </div>
       <p style="margin:8px 0 0;color:var(--muted);">Moves the ledger posting to the corrected account too — switching to Credit opens (or adds to) the customer's account here, same as ringing it up on credit from the start. Switching a credit sale back only works if nothing's been paid on it yet.</p>
+    </form>
+    {% endif %}
+
+    {% if can_edit_customer and not sale.is_voided %}
+    <form id="editCustomerForm" method="post" action="/pos/receipt/{{ sale.id }}/edit-customer"
+          style="display:none;margin:0 0 12px;padding:9px 11px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:12px;">
+      <label style="color:var(--ink);">Correct the customer
+        <input type="text" name="new_customer_name" value="{{ sale.customer_name or '' }}" list="receiptCustomerNames"
+               placeholder="Leave blank for Walk-in" autocomplete="off"
+               style="display:block;margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;">
+      </label>
+      <datalist id="receiptCustomerNames">
+        {% for name in customer_names %}<option value="{{ name }}"></option>{% endfor %}
+      </datalist>
+      <div style="margin-top:8px;display:flex;gap:8px;">
+        <button type="submit" class="btn print" style="padding:6px 12px;font-size:12px;">Save</button>
+        <button type="button" class="btn back" style="padding:6px 12px;font-size:12px;" onclick="hideEditCustomer()">Cancel</button>
+      </div>
+      <p style="margin:8px 0 0;color:var(--muted);">
+        A name that isn't on file yet is added as a new customer.
+        {% if credit_outstanding > 0 %}This sale still has credit outstanding, so changing the name moves that balance — and every payment already collected on it — to the corrected customer's account.{% endif %}
+      </p>
     </form>
     {% endif %}
 
@@ -400,6 +425,15 @@
       document.getElementById('editInvoiceForm').style.display = 'none';
     }
     {% if edit_invoice_error %}showEditInvoice();{% endif %}
+
+    function showEditCustomer(e) {
+      if (e) e.preventDefault();
+      document.getElementById('editCustomerForm').style.display = 'block';
+    }
+    function hideEditCustomer() {
+      document.getElementById('editCustomerForm').style.display = 'none';
+    }
+    {% if edit_customer_error %}showEditCustomer();{% endif %}
   </script>
   {% endif %}
 

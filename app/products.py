@@ -1278,6 +1278,40 @@ def stock_card(product_id: int, request: Request, db: Session = Depends(get_db),
     total_delta = sum((Decimal(str(m.qty_base or 0)) for m in movements), Decimal("0"))
     opening = current_total - total_delta
 
+    # What each sale-driven movement actually sold for. A StockMovement only
+    # ever carries cost, never price — the price lives on the sale's own line,
+    # so it's looked up here by the invoice # the movement already carries in
+    # `ref`. Read from the sale rather than the product's current
+    # selling_price on purpose: a row then shows what was really charged that
+    # day, even after the item is re-priced later. Movements written before
+    # `ref` was populated have nothing to match on and simply show no price.
+    priced_by_ref = {}
+    for line, sale in (
+        db.query(models.SaleLine, models.Sale)
+        .join(models.Sale, models.SaleLine.sale_id == models.Sale.id)
+        .filter(models.SaleLine.product_id == product_id)
+        .all()
+    ):
+        key = f"{sale.receipt_type}{sale.invoice_no}" if sale.receipt_type else sale.invoice_no
+        priced_by_ref.setdefault(key, []).append(line)
+
+    def _sold_line(movement, delta):
+        """The sale line behind this movement, or None. An exchange can put
+        the sold and the returned side of the same product on one invoice, so
+        where there's more than one candidate, pick the side whose direction
+        matches this movement (out = the sold line, in = the returned one)."""
+        lines = priced_by_ref.get(movement.ref or "")
+        if not lines:
+            return None
+        if len(lines) > 1:
+            want_sold = delta < 0
+            match = next(
+                (ln for ln in lines if (Decimal(str(ln.qty or 0)) > 0) == want_sold), None
+            )
+            if match:
+                return match
+        return lines[0]
+
     running = opening
     total_in = total_out = Decimal("0")
     rows = []
@@ -1288,12 +1322,40 @@ def stock_card(product_id: int, request: Request, db: Session = Depends(get_db),
             total_in += delta
         else:
             total_out += -delta
+        sold = _sold_line(m, delta)
+        factor = Decimal(str(sold.unit_factor or 1)) if sold else Decimal("1")
+
+        # Cost and price have to be read in the SAME unit or the row lies.
+        # A movement's own unit_cost is always per base unit (e.g. per Kg),
+        # so on a sale rung up per bag it would sit beside a per-bag selling
+        # price and imply a huge margin when the real per-bag cost is 20x
+        # what's shown. Scale the cost by the sold unit's factor so both
+        # columns read per bag. SaleLine.unit_cost is the cost frozen at the
+        # moment of sale — the same figure COGS uses — so it wins over the
+        # movement's when present.
+        movement_cost = Decimal(str(m.unit_cost)) if m.unit_cost is not None else None
+        if sold:
+            base_cost = Decimal(str(sold.unit_cost or 0))
+            if base_cost <= 0 and movement_cost is not None:
+                base_cost = movement_cost
+            unit_cost_shown = base_cost * factor if base_cost > 0 else None
+        else:
+            unit_cost_shown = movement_cost
+
         rows.append({
             "movement": m,
             "label": MOVEMENT_LABELS.get(m.reason, (m.reason or "").replace("-", " ").title()),
             "in_qty": delta if delta > 0 else None,
             "out_qty": -delta if delta < 0 else None,
             "balance": running,
+            "unit_cost": unit_cost_shown,
+            "sold_price": Decimal(str(sold.unit_price or 0)) if sold else None,
+            # Labels both money columns. Only worth showing when it isn't the
+            # base unit the qty columns are counted in — otherwise
+            # "₱260.00 / Unit" is just noise.
+            "sold_unit": (
+                sold.unit_name if sold and sold.unit_name and factor != 1 else None
+            ),
         })
     rows.reverse()  # newest first for display
 

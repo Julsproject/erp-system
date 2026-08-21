@@ -10,6 +10,12 @@
   <a class="btn-secondary" href="/pdc">← Back to Cheques</a>
 </div>
 
+{% if delete_error %}
+<div class="quo-status-banner cancelled" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">
+  <strong>Can't delete.</strong> This cheque's status changed since the page loaded — it's no longer pending, so deleting it would erase real history. Refresh to see its current status.
+</div>
+{% endif %}
+
 {% if pdc.status == 'pending' %}
   {% if pdc.cheque_date < today %}
   <div class="quo-status-banner cancelled" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">
@@ -110,6 +116,9 @@
   {% if pdc.status == 'pending' %}
   <form method="post" action="/pdc/{{ pdc.id }}/cancel" onsubmit="return confirm('Cancel this cheque record?');">
     <button class="btn-secondary" type="submit">Cancel</button>
+  </form>
+  <form method="post" action="/pdc/{{ pdc.id }}/delete" onsubmit="return confirm('Delete this cheque entry? Use this only for a duplicate or data-entry mistake — this cannot be undone.');">
+    <button class="btn-secondary" type="submit" style="color:#b91c1c;">🗑 Delete</button>
   </form>
   {% endif %}
 </div>

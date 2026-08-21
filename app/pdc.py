@@ -46,6 +46,7 @@ def list_pdc(
     direction: str = "",
     status_filter: str = "",
     page: int = 1,
+    deleted: int = 0,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -87,13 +88,13 @@ def list_pdc(
             "request": request, "app_name": request.app.title, "user": user,
             "rows": rows, "direction": direction, "status_filter": status_filter,
             "counts": counts, "labels": STATUS_LABELS, "pending_total": pending_total,
-            "today": today, "horizon": horizon, "page": page, "pages": pages,
+            "today": today, "horizon": horizon, "page": page, "pages": pages, "deleted": deleted,
         },
     )
 
 
 @router.get("/pdc/{pdc_id:int}", response_class=HTMLResponse)
-def view_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def view_pdc(pdc_id: int, request: Request, delete_error: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -103,7 +104,8 @@ def view_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user=
         return RedirectResponse("/pdc", status_code=302)
     return templates.TemplateResponse(
         "pdc/view.html",
-        {"request": request, "app_name": request.app.title, "user": user, "pdc": pdc, "today": _today()},
+        {"request": request, "app_name": request.app.title, "user": user, "pdc": pdc, "today": _today(),
+         "delete_error": delete_error},
     )
 
 
@@ -264,6 +266,36 @@ def cancel_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), use
         )
         db.commit()
     return RedirectResponse(f"/pdc/{pdc_id}", status_code=status.HTTP_302_FOUND)
+
+
+@router.post("/pdc/{pdc_id:int}/delete")
+def delete_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Removes a pending cheque entirely — for a genuine data-entry mistake
+    (e.g. the same cheque logged 2-3 times), not a real transaction worth
+    keeping a "cancelled" record of. Only allowed while still pending: a
+    cheque never posted anything to the books at that stage (see
+    create_pdc — no journal entry, no settlement, nothing to reverse), so
+    there's nothing left over once it's gone. Once deposited/cleared/bounced,
+    real financial history exists against it — that has to go through
+    Cancel (a soft void) instead, never a hard delete."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    pdc = db.get(models.PostDatedCheque, pdc_id)
+    if not pdc:
+        return RedirectResponse("/pdc", status_code=status.HTTP_302_FOUND)
+    if pdc.status != "pending":
+        return RedirectResponse(f"/pdc/{pdc_id}?delete_error=1", status_code=status.HTTP_302_FOUND)
+
+    audit.record(
+        db, user=user, request=request, action="delete", entity_type="post_dated_cheque",
+        entity_id=pdc.id, entity_label=pdc.cheque_no or f"PDC-{pdc.id}",
+        summary=f"Deleted cheque {pdc.cheque_no or pdc.id} — {pdc.amount} (data-entry mistake)",
+    )
+    db.delete(pdc)
+    db.commit()
+    return RedirectResponse("/pdc?deleted=1", status_code=status.HTTP_302_FOUND)
 
 
 # --------------------------------------------------------------------------- #

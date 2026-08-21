@@ -510,9 +510,20 @@ async function onReceiptTypeChange() {
   const type = receiptTypeBox.value;
   localStorage.setItem('pos_receipt_type', type);
   saveDraft();
+  await refreshInvoiceSuggestion();
+}
+// Also re-check when "Encoded by" changes — on a shared login (several
+// people using the same account), that's the only real signal of whose
+// booklet this actually is; without it the suggestion falls back to "last
+// sale on this login" and mixes everyone's numbers together.
+async function refreshInvoiceSuggestion() {
+  const type = receiptTypeBox.value;
   if (!type || invoiceBox.value.trim()) return;
   try {
-    const res = await fetch('/pos/next-invoice?receipt_type=' + encodeURIComponent(type));
+    const encodedById = document.getElementById('encodedBy').value;
+    let url = '/pos/next-invoice?receipt_type=' + encodeURIComponent(type);
+    if (encodedById) url += '&encoded_by_id=' + encodeURIComponent(encodedById);
+    const res = await fetch(url);
     const data = await res.json();
     // Re-check: a restored draft (or fast typing) may have filled the box
     // while this request was in flight, and it must not be clobbered.
@@ -559,7 +570,7 @@ function addFoundProduct(p) {
 }
 invoiceBox.addEventListener('input', computeTotals);
 txnDateBox.addEventListener('input', computeTotals);
-document.getElementById('encodedBy').addEventListener('change', saveDraft);
+document.getElementById('encodedBy').addEventListener('change', () => { saveDraft(); refreshInvoiceSuggestion(); });
 
 /* ---- customer lookup ---- */
 const custResults = document.getElementById('custResults');
@@ -654,7 +665,39 @@ function renderResults(products) {
   });
 }
 
-function addToCart(p, customPrice) { cart.push({ product: p, unitIndex: 0, qty: 1, discount: 0, discType: 'amt', customPrice: !!customPrice }); renderCart(); }
+// Tapping the same product again bumps the existing line's quantity instead
+// of stacking a second identical row — "two taps = qty 2" is what the floor
+// expects, and duplicate rows for one item make the cart harder to read and
+// the printed receipt longer than it needs to be.
+//
+// Only an identical line merges: same product AND same unit. A different
+// unit (Piece vs Box) stays its own row, since it carries its own price.
+// Quick-created products (customPrice) never merge either — those hold a
+// price typed for that one line, so folding another item into it would
+// charge a price nobody picked for it.
+function addToCart(p, customPrice) {
+  if (!customPrice) {
+    const i = cart.findIndex(l => l.product.id === p.id && l.unitIndex === 0 && !l.customPrice);
+    if (i !== -1) {
+      cart[i].qty = (Number(cart[i].qty) || 0) + 1;
+      renderCart();
+      flashCartRow(i);
+      return;
+    }
+  }
+  cart.push({ product: p, unitIndex: 0, qty: 1, discount: 0, discType: 'amt', customPrice: !!customPrice });
+  renderCart();
+}
+
+// A qty going 1 -> 2 is a much subtler change than a whole new row appearing,
+// so flash the row it landed on — otherwise a second tap reads as "nothing
+// happened" and the cashier taps again.
+function flashCartRow(i) {
+  const tr = document.querySelectorAll('#cartBody tr')[i];
+  if (!tr) return;
+  tr.classList.add('row-bumped');
+  setTimeout(() => tr.classList.remove('row-bumped'), 700);
+}
 function setCustomPrice(i, v) { cart[i].product.units[cart[i].unitIndex].price = parseFloat(v) || 0; refreshCartComputed(); }
 
 function baseNeededByProduct() {
@@ -1427,11 +1470,20 @@ function returnManualAdd(p) {
 async function lookupReturn() {
   const inv = document.getElementById('returnInvoice').value.trim();
   if (!inv) return;
-  const res = await fetch('/pos/lookup?invoice=' + encodeURIComponent(inv));
+  // The booklet already picked for this transaction narrows the search —
+  // the same number can exist in DRS and DRB as two different receipts.
+  const bk = receiptTypeBox.value;
+  let url = '/pos/lookup?invoice=' + encodeURIComponent(inv);
+  if (bk) url += '&receipt_type=' + encodeURIComponent(bk);
+  const res = await fetch(url);
   const data = await res.json();
   const info = document.getElementById('returnInfo');
   if (!data.found) {
-    returnSale = null; returnLines = []; info.innerHTML = '<div class="alert">No sale found for invoice ' + escapeHtml(inv) + '.</div>';
+    returnSale = null; returnLines = [];
+    info.innerHTML = data.ambiguous
+      ? '<div class="alert">Invoice ' + escapeHtml(inv) + ' exists in more than one booklet (' +
+        escapeHtml(data.booklets.join(', ')) + '). Pick the right booklet above, then look it up again.</div>'
+      : '<div class="alert">No sale found for invoice ' + escapeHtml(inv) + '.</div>';
     renderReturnLines(); return;
   }
   returnSale = data;

@@ -9,6 +9,10 @@
   <a class="btn" href="/pdc/new">+ New Cheque</a>
 </div>
 
+{% if deleted %}
+<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;">Cheque deleted.</div>
+{% endif %}
+
 <div class="stat-row">
   <div class="mini-stat"><span class="mini-num">{{ counts.get('pending', 0) }}</span><span>Pending</span></div>
   <div class="mini-stat owed"><span class="mini-num">{{ pending_total|peso }}</span><span>Total Pending Value</span></div>
@@ -72,7 +76,14 @@
           <span class="txn" style="background:#f1f5f9;color:#64748b;">Cancelled</span>
           {% endif %}
         </td>
-        <td class="row-actions"><a class="btn-link" href="/pdc/{{ p.id }}">View</a></td>
+        <td class="row-actions">
+          <a class="btn-link" href="/pdc/{{ p.id }}">View</a>
+          {% if p.status == 'pending' %}
+          <form method="post" action="/pdc/{{ p.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete this cheque entry? Use this only for a duplicate or data-entry mistake — this cannot be undone.');">
+            <button type="submit" class="btn-link danger">Delete</button>
+          </form>
+          {% endif %}
+        </td>
       </tr>
       {% else %}
       <tr><td colspan="7" class="empty">No cheques {{ 'with this status' if status_filter else 'on file' }}.</td></tr>

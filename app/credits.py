@@ -1,6 +1,6 @@
 """Credits menu: look up a customer and view/print their credit statement."""
 import io
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from . import accounting, audit, models, settings_store
 from .database import get_db
 from .deps import get_current_user, is_staff
-from .sales import SETTLE_METHODS
+from .sales import MANILA, SETTLE_METHODS, _resolve_settlement_datetime
 from .templating import templates
 
 router = APIRouter()
@@ -376,6 +376,7 @@ def pay_full_form(customer_id: int, request: Request, db: Session = Depends(get_
         {
             "request": request, "app_name": request.app.title, "user": user,
             "customer": customer, "owed": owed, "total": total, "methods": SETTLE_METHODS, "error": None,
+            "payment_date": "", "today_iso": datetime.now(MANILA).date().isoformat(),
         },
     )
 
@@ -394,6 +395,10 @@ def _apply_batch_payment(db: Session, user, customer, targets, method: str, ref_
             cheque_date = date.fromisoformat(raw_date)
         except ValueError:
             return "Enter a valid cheque date (the date printed on the cheque)."
+
+    payment_dt, date_err = _resolve_settlement_datetime(form.get("payment_date"))
+    if date_err:
+        return date_err
 
     if method == "cheque":
         total = sum((o for _, o in targets), Decimal("0"))
@@ -414,9 +419,14 @@ def _apply_batch_payment(db: Session, user, customer, targets, method: str, ref_
             settlement = models.ReceivableSettlement(
                 sale_id=sale.id, method=method, amount=outstanding, ref_no=ref_no, cashier_id=user.id,
             )
+            if payment_dt:
+                settlement.created_at = payment_dt
             db.add(settlement)
             try:
-                entry = accounting.post_receivable_settlement(db, sale, amount=outstanding, method=method, entered_by_id=user.id)
+                entry = accounting.post_receivable_settlement(
+                    db, sale, amount=outstanding, method=method, entered_by_id=user.id,
+                    txn_date=payment_dt.date() if payment_dt else None,
+                )
                 if entry:
                     settlement.journal_entry_id = entry.id
             except accounting.PostingError:
@@ -450,6 +460,7 @@ async def pay_full_submit(customer_id: int, request: Request, db: Session = Depe
             {
                 "request": request, "app_name": request.app.title, "user": user,
                 "customer": customer, "owed": owed, "total": total, "methods": SETTLE_METHODS, "error": error,
+                "payment_date": form.get("payment_date") or "", "today_iso": datetime.now(MANILA).date().isoformat(),
             },
         )
     db.commit()
@@ -478,6 +489,7 @@ def pay_selected_form(
         {
             "request": request, "app_name": request.app.title, "user": user,
             "customer": customer, "owed": owed, "total": total, "methods": SETTLE_METHODS, "error": None,
+            "payment_date": "", "today_iso": datetime.now(MANILA).date().isoformat(),
         },
     )
 
@@ -509,6 +521,7 @@ async def pay_selected_submit(customer_id: int, request: Request, db: Session = 
             {
                 "request": request, "app_name": request.app.title, "user": user,
                 "customer": customer, "owed": owed, "total": total, "methods": SETTLE_METHODS, "error": error,
+                "payment_date": form.get("payment_date") or "", "today_iso": datetime.now(MANILA).date().isoformat(),
             },
         )
     db.commit()

@@ -21,22 +21,33 @@
 </div>
 
 <div class="stat-row">
-  <div class="mini-stat"><span class="mini-num">{{ totals.count }}</span><span>Paid Transactions</span></div>
-  <div class="mini-stat"><span class="mini-num">{{ totals.sales|peso }}</span><span>Total Sales (Paid)</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ totals.count }}</span><span>{{ 'Transactions Found' if search_all else 'Paid Transactions' }}</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ totals.sales|peso }}</span><span>{{ 'Total (excl. voided)' if search_all else 'Total Sales (Paid)' }}</span></div>
 </div>
 
+{% if search_all %}
+<p class="muted" style="margin:-6px 0 16px;">Searching <b>every invoice</b> — paid, credit and voided together. Each row is tagged with its status.</p>
+{% else %}
 <p class="muted" style="margin:-6px 0 16px;">Fully-paid transactions only. Sales with outstanding credit appear under <a href="/sales/receivables">Receivables</a>.</p>
+{% endif %}
 
 {% set qs = '&q=' ~ q if q else '' %}
 {% set qs = qs ~ ('&type_filter=' ~ type_filter if type_filter else '') %}
 {% set qs = qs ~ ('&date_from=' ~ date_from if date_from else '') %}
 {% set qs = qs ~ ('&date_to=' ~ date_to if date_to else '') %}
 {% set qs = qs ~ ('&receipt_type=' ~ receipt_type if receipt_type else '') %}
+{% set qs = qs ~ ('&search_all=1' if search_all else '') %}
 {% set filter_count = (1 if type_filter else 0) + (1 if date_from else 0) + (1 if date_to else 0) + (1 if receipt_type else 0) %}
 
 <form class="toolbar" method="get" action="/sales">
-  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search invoice # or customer…">
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="{{ 'Search any invoice # or customer…' if search_all else 'Search invoice # or customer…' }}">
   <button class="btn-secondary" type="submit">Search</button>
+
+  <label class="checkbox" style="display:flex;align-items:center;gap:7px;white-space:nowrap;font-size:13px;cursor:pointer;"
+         title="Search paid, credit and voided invoices together, instead of only fully-paid ones">
+    <input type="checkbox" name="search_all" value="1" {{ 'checked' if search_all }} onchange="this.form.submit()">
+    Search all invoices
+  </label>
 
   <details class="filter-drop" {{ 'open' if filter_count }}>
     <summary>
@@ -80,7 +91,7 @@
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Invoice #</th><th>Type</th><th>Date</th><th>Customer</th><th>Payment</th><th class="num">Total</th><th></th></tr>
+      <tr><th>Invoice #</th><th>Type</th><th>Date</th><th>Customer</th><th>Payment</th>{% if search_all %}<th>Status</th>{% endif %}<th class="num">Total</th><th></th></tr>
     </thead>
     <tbody>
       {% for s in sales %}
@@ -90,18 +101,26 @@
         <td>{{ s.created_at.strftime('%b %d, %Y %I:%M %p') if s.created_at else '' }}</td>
         <td>{{ s.customer_name or 'Walk-in' }}{% if s.encoded_by %} <span class="muted" style="font-size:11px;">encoded by {{ s.encoded_by.name }}</span>{% endif %}</td>
         <td>{{ s.payment_method or '—' }}</td>
+        {% if search_all %}
+        {% set st = row_status.get(s.id) %}
+        <td>
+          {% if st == 'voided' %}<span class="txn" style="background:#fee2e2;color:#b91c1c;">Voided</span>
+          {% elif st == 'credit' %}<span class="txn" style="background:#fef3c7;color:#b45309;">Credit</span>
+          {% else %}<span class="txn" style="background:#dcfce7;color:#15803d;">Paid</span>{% endif %}
+        </td>
+        {% endif %}
         {% set disp_total = row_totals.get(s.id, s.total) %}
         <td class="num strong {{ 'neg' if disp_total and disp_total < 0 }}">{{ disp_total|peso }}</td>
         <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales">Receipt</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="empty">No fully-paid sales {{ 'match that filter' if (q or type_filter or date_from or date_to) else 'yet' }}.</td></tr>
+      <tr><td colspan="{{ 8 if search_all else 7 }}" class="empty">{{ 'No invoices' if search_all else 'No fully-paid sales' }} {{ 'match that filter' if (q or type_filter or date_from or date_to) else 'yet' }}.</td></tr>
       {% endfor %}
     </tbody>
     {% if sales %}
     <tfoot>
       <tr style="background:var(--surface-2);">
-        <td colspan="5" class="strong">Total{{ ' (this filter)' if (q or type_filter or date_from or date_to or receipt_type) }}</td>
+        <td colspan="{{ 6 if search_all else 5 }}" class="strong">Total{{ ' (excl. voided)' if search_all else (' (this filter)' if (q or type_filter or date_from or date_to or receipt_type)) }}</td>
         <td class="num strong">{{ totals.sales|peso }}</td>
         <td></td>
       </tr>

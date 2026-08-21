@@ -750,6 +750,15 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
 .warn-tag { font-size: 10.5px; font-weight: 700; color: var(--warn); background: var(--warn-tint); padding: 2px 6px; border-radius: 6px; margin-left: 4px; }
 .cart-qty.over { border-color: var(--warn); background: var(--warn-tint); }
 
+/* Re-tapping a product already in the cart raises its qty rather than adding
+   a duplicate row — this flash is the confirmation that the tap registered,
+   since the row itself doesn't otherwise move. */
+.cart-table tr.row-bumped td { animation: row-bump 0.7s ease-out; }
+@keyframes row-bump {
+  0%, 40% { background: rgba(79, 70, 229, .18); }
+  100% { background: transparent; }
+}
+
 /* ---------- POS mode selector ---------- */
 .pos-modes { display: inline-flex; gap: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 5px; margin-bottom: 18px; box-shadow: var(--shadow-sm); }
 .mode-btn { padding: 10px 22px; border: none; background: transparent; border-radius: 10px; font-size: 14.5px; font-weight: 600; color: var(--muted); cursor: pointer; transition: background .15s, color .15s; }

@@ -148,6 +148,27 @@ def _linked_ref(db: Session, prefix: str, orig) -> str | None:
     return candidate
 
 
+def _invoice_taken(db: Session, invoice_no: str, receipt_type, exclude_sale_id: int = None) -> bool:
+    """Is this invoice # already used IN THIS BOOKLET?
+
+    Each booklet (DRS/DRB/SI/...) is its own physical pad with its own
+    numbering, so DRS 255 and DRB 255 are two different receipts and both
+    have to be enterable — only a repeat within the same booklet is a real
+    collision. The database enforces the same pairing (see migration 0057),
+    so two tills saving at once still can't slip a duplicate through; this
+    check exists to fail with a readable message instead of an integrity
+    error.
+    """
+    rt = (receipt_type or "").strip() or None
+    query = db.query(models.Sale.id).filter(
+        models.Sale.invoice_no == invoice_no,
+        models.Sale.receipt_type.is_(None) if rt is None else models.Sale.receipt_type == rt,
+    )
+    if exclude_sale_id:
+        query = query.filter(models.Sale.id != exclude_sale_id)
+    return query.first() is not None
+
+
 @router.get("/pos", response_class=HTMLResponse)
 def pos_page(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
@@ -231,7 +252,13 @@ def pos_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_curr
             return {"products": [_product_payload_for_pos(barcode_hit)]}
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
-        query = query.filter(models.Product.name.ilike(f"%{q}%"))
+        # Every word has to appear somewhere in the name, in any order —
+        # matching the whole phrase as one string means "a/c seinna" finds
+        # nothing, because the real name has "1/4 LITER BURNT" sitting
+        # between those two words. Cashiers type the bits they remember, not
+        # the full name in order.
+        for term in q.split():
+            query = query.filter(models.Product.name.ilike(f"%{term}%"))
     products = query.order_by(models.Product.name).limit(30).all()
     return {"products": [_product_payload_for_pos(p) for p in products]}
 
@@ -301,8 +328,12 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
     invoice_no = (invoice_no or "").strip()
     if not invoice_no:
         return False, "Invoice number is required."
-    if db.query(models.Sale).filter(models.Sale.invoice_no == invoice_no).first():
-        return False, f"Invoice number '{invoice_no}' is already used."
+    if _invoice_taken(db, invoice_no, receipt_type):
+        booklet = (receipt_type or "").strip()
+        return False, (
+            f"Invoice number '{invoice_no}' is already used"
+            + (f" in the {booklet} booklet." if booklet else ".")
+        )
 
     # Optional backdating: the shop enters past transactions after the fact,
     # so a real transaction date lands the sale on the day it happened in
@@ -548,28 +579,45 @@ def _last_receipt_number(receipt_type: str, invoice_no: str):
 
 
 @router.get("/pos/next-invoice")
-def pos_next_invoice(receipt_type: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+def pos_next_invoice(
+    receipt_type: str = "", encoded_by_id: int = 0,
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     """Suggest the next invoice # for a receipt booklet (DRS/DRB/SI/...) by
-    incrementing the last one used for that same type — either by a real
-    sale OR logged as cancelled/spoiled (see /pos/cancelled-receipts), so a
-    torn-out receipt doesn't get its number silently reissued. Each booklet
-    has its own physical numbering, separate from the others. Returns ""
-    when there's nothing of that type to count from, or its number doesn't
-    end in digits to increment."""
+    incrementing the last one used for that same type by THIS cashier —
+    either by a real sale OR logged as cancelled/spoiled (see
+    /pos/cancelled-receipts), so a torn-out receipt doesn't get its number
+    silently reissued. Scoped per cashier because each cashier physically
+    holds their own booklet — two cashiers can both be on a "DRS" booklet
+    at completely different number ranges, so suggesting off the single
+    most-recent sale system-wide (regardless of who made it) would hand
+    cashier A a number from cashier B's booklet.
+
+    A shared login (e.g. one "admin" account several people actually use)
+    breaks that — every sale carries the same cashier_id no matter who's
+    really at the till, so "my own last invoice" collapses back into
+    "whoever on this login sold most recently." The POS's own "Encoded by"
+    picker exists for exactly this case, so when it's set, that identity
+    wins over the logged-in account for this suggestion.
+
+    Returns "" when there's nothing of that type from this cashier/encoder
+    to count from, or its number doesn't end in digits to increment."""
     if not user:
         return JSONResponse({"invoice_no": ""}, status_code=401)
     receipt_type = (receipt_type or "").strip()
     if not receipt_type:
         return {"invoice_no": ""}
-    last_sale = (
-        db.query(models.Sale)
-        .filter(models.Sale.receipt_type == receipt_type, models.Sale.txn_type == "sale")
-        .order_by(models.Sale.id.desc())
-        .first()
+    sale_query = db.query(models.Sale).filter(
+        models.Sale.receipt_type == receipt_type, models.Sale.txn_type == "sale",
     )
+    if encoded_by_id:
+        sale_query = sale_query.filter(models.Sale.encoded_by_id == encoded_by_id)
+    else:
+        sale_query = sale_query.filter(models.Sale.cashier_id == user.id)
+    last_sale = sale_query.order_by(models.Sale.id.desc()).first()
     last_cancelled = (
         db.query(models.CancelledReceipt)
-        .filter(models.CancelledReceipt.receipt_type == receipt_type)
+        .filter(models.CancelledReceipt.receipt_type == receipt_type, models.CancelledReceipt.recorded_by_id == user.id)
         .order_by(models.CancelledReceipt.id.desc())
         .first()
     )
@@ -669,16 +717,34 @@ def cancelled_receipts_delete(row_id: int, request: Request, db: Session = Depen
 
 
 @router.get("/pos/lookup")
-def pos_lookup(invoice: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
-    """Find an original SALE by invoice number, for refund/exchange."""
+def pos_lookup(invoice: str = "", receipt_type: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Find an original SALE by invoice number, for refund/exchange.
+
+    Invoice numbers only repeat across booklets (DRS 255 and DRB 255 are
+    different receipts), so a bare number can now legitimately match more
+    than one sale. Returning whichever came first would refund the wrong
+    receipt, so an ambiguous number comes back asking which booklet instead.
+    A number typed with its booklet already picked resolves directly.
+    """
     if not user:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     invoice = (invoice or "").strip()
-    sale = (
-        db.query(models.Sale)
-        .filter(models.Sale.invoice_no == invoice, models.Sale.txn_type == "sale", models.Sale.is_voided.is_(False))
-        .first()
+    receipt_type = (receipt_type or "").strip()
+    query = db.query(models.Sale).filter(
+        models.Sale.invoice_no == invoice,
+        models.Sale.txn_type == "sale",
+        models.Sale.is_voided.is_(False),
     )
+    if receipt_type:
+        query = query.filter(models.Sale.receipt_type == receipt_type)
+    matches = query.all()
+    if len(matches) > 1:
+        return {
+            "found": False,
+            "ambiguous": True,
+            "booklets": sorted({m.receipt_type or "(no booklet)" for m in matches}),
+        }
+    sale = matches[0] if matches else None
     if not sale:
         return {"found": False}
     lines = [{
@@ -722,8 +788,13 @@ async def pos_refund(request: Request, db: Session = Depends(get_db), user=Depen
     # The cashier's own invoice # (e.g. "45") wins when they typed one; only
     # auto-generate a reference (REF-45, or a sequential fallback) if they left it blank.
     typed_invoice = (data.get("invoice_no") or "").strip()
-    if typed_invoice and db.query(models.Sale).filter(models.Sale.invoice_no == typed_invoice).first():
-        return JSONResponse({"ok": False, "error": f"Invoice number '{typed_invoice}' is already used."}, status_code=400)
+    typed_receipt_type = (data.get("receipt_type") or "").strip() or None
+    if typed_invoice and _invoice_taken(db, typed_invoice, typed_receipt_type):
+        return JSONResponse(
+            {"ok": False, "error": f"Invoice number '{typed_invoice}' is already used"
+                                   + (f" in the {typed_receipt_type} booklet." if typed_receipt_type else ".")},
+            status_code=400,
+        )
 
     # Same as a normal sale: a typed customer name gets its own Customer
     # record (created if new), not just free text on the receipt — otherwise
@@ -842,8 +913,13 @@ async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Dep
         return JSONResponse({"ok": False, "error": "Nothing to exchange."}, status_code=400)
 
     typed_invoice = (data.get("invoice_no") or "").strip()
-    if typed_invoice and db.query(models.Sale).filter(models.Sale.invoice_no == typed_invoice).first():
-        return JSONResponse({"ok": False, "error": f"Invoice number '{typed_invoice}' is already used."}, status_code=400)
+    typed_receipt_type = (data.get("receipt_type") or "").strip() or None
+    if typed_invoice and _invoice_taken(db, typed_invoice, typed_receipt_type):
+        return JSONResponse(
+            {"ok": False, "error": f"Invoice number '{typed_invoice}' is already used"
+                                   + (f" in the {typed_receipt_type} booklet." if typed_receipt_type else ".")},
+            status_code=400,
+        )
 
     # Same as a normal sale: a typed customer name gets its own Customer
     # record (created if new), not just free text on the receipt — otherwise
@@ -1049,6 +1125,7 @@ def pos_receipt(
     edit_items_error: str = "",
     edit_payment_error: str = "",
     edit_invoice_error: str = "",
+    edit_customer_error: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -1078,6 +1155,15 @@ def pos_receipt(
     )
     credit_outstanding = (sale.receivable_amount or Decimal("0")) - Decimal(str(credit_paid or 0))
 
+    # Existing names, for the customer-correction field's autocomplete —
+    # typing a fresh name silently creates a customer, so offering what's
+    # already on file is what stops "J. Santos" and "J Santos" becoming two
+    # accounts. Only loaded for the staff who can actually see that field.
+    customer_names = (
+        [c.name for c in db.query(models.Customer.name).order_by(models.Customer.name).all()]
+        if is_staff(user) else []
+    )
+
     return templates.TemplateResponse(
         "receipt.html",
         {"request": request, "app_name": request.app.title, "user": user,
@@ -1086,6 +1172,8 @@ def pos_receipt(
          "can_void": _can_void_sale(user), "void_error": VOID_ERRORS.get(void_error),
          "can_edit_date": is_staff(user), "edit_date_error": EDIT_DATE_ERRORS.get(edit_date_error),
          "can_edit_invoice": is_staff(user), "edit_invoice_error": EDIT_INVOICE_ERRORS.get(edit_invoice_error),
+         "can_edit_customer": is_staff(user), "edit_customer_error": EDIT_CUSTOMER_ERRORS.get(edit_customer_error),
+         "customer_names": customer_names,
          "today_iso": datetime.now(MANILA).date().isoformat(),
          "can_edit_items": is_staff(user) and _can_edit_sale_items(db, sale) is None,
          "edit_items_error": EDIT_ITEMS_ERRORS.get(edit_items_error),
@@ -1122,7 +1210,14 @@ EDIT_INVOICE_ERRORS = {
     "denied": "You don't have permission to edit a sale's invoice #.",
     "voided": "This sale is voided — its invoice # can't be edited.",
     "empty": "Invoice # is required.",
-    "used": "That invoice # is already used by another sale.",
+    "used": "That invoice # is already used by another sale in the same booklet.",
+}
+
+EDIT_CUSTOMER_ERRORS = {
+    "denied": "You don't have permission to edit a sale's customer.",
+    "voided": "This sale is voided — its customer can't be edited.",
+    "credit": "This sale has a credit balance, so it needs a named customer — "
+              "someone has to owe it. Type the correct customer instead of clearing it.",
 }
 
 # Editing a sale's items in place is only offered for the simple, common
@@ -1304,7 +1399,7 @@ def edit_sale_invoice(
         return _back("empty")
     if new_invoice_no == sale.invoice_no:
         return _back()
-    if db.query(models.Sale.id).filter(models.Sale.invoice_no == new_invoice_no, models.Sale.id != sale.id).first():
+    if _invoice_taken(db, new_invoice_no, sale.receipt_type, exclude_sale_id=sale.id):
         return _back("used")
 
     old_invoice_no = sale.invoice_no
@@ -1314,6 +1409,65 @@ def edit_sale_invoice(
         entity_id=sale.id, entity_label=sale.invoice_no,
         summary=f"Corrected invoice # for sale: {old_invoice_no} → {new_invoice_no}",
         changes={"invoice_no": [old_invoice_no, new_invoice_no]},
+    )
+    db.commit()
+    return _back()
+
+
+@router.post("/pos/receipt/{sale_id:int}/edit-customer")
+def edit_sale_customer(
+    sale_id: int,
+    request: Request,
+    new_customer_name: str = Form(""),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Correct who a sale was rung up to — a misspelled name, or the wrong
+    customer picked entirely. Staff only.
+
+    On a credit sale this genuinely moves the debt: the customer's statement
+    is built from the sales pointing at them, so re-pointing this one moves
+    the invoice AND every payment already collected on it (settlements hang
+    off the sale, not the customer) onto the corrected account. That's the
+    right behaviour for "I picked the wrong customer" — but it's also why
+    clearing the name back to Walk-in is refused while credit is outstanding:
+    a receivable with nobody attached is money owed by no one.
+    """
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    sale = db.get(models.Sale, sale_id)
+    if not sale:
+        return RedirectResponse("/pos", status_code=302)
+
+    def _back(err=None):
+        suffix = f"&edit_customer_error={err}" if err else ""
+        return RedirectResponse(f"/pos/receipt/{sale_id}?from=sales{suffix}", status_code=302)
+
+    if not is_staff(user):
+        return _back("denied")
+    if sale.is_voided:
+        return _back("voided")
+
+    new_customer_name = (new_customer_name or "").strip()
+    old_customer_name = sale.customer_name or "Walk-in"
+    if new_customer_name == (sale.customer_name or ""):
+        return _back()
+
+    if not new_customer_name:
+        if (sale.receivable_amount or Decimal("0")) > 0:
+            return _back("credit")
+        sale.customer_id = None
+        sale.customer_name = None
+    else:
+        customer = get_or_create_customer(db, new_customer_name)
+        sale.customer_id = customer.id if customer else None
+        sale.customer_name = new_customer_name
+
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="sale",
+        entity_id=sale.id, entity_label=sale.invoice_no,
+        summary=f"Corrected customer on {sale.invoice_no}: {old_customer_name} → {new_customer_name or 'Walk-in'}",
+        changes={"customer_name": [old_customer_name, new_customer_name or "Walk-in"]},
     )
     db.commit()
     return _back()
