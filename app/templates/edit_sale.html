@@ -141,9 +141,9 @@ function renderResults(products) {
 }
 function addToCart(p) { cart.push({ product: p, unitIndex: 0, qty: 1, discount: 0, discType: 'amt', customPrice: false }); renderCart(); }
 function setUnit(i, v) { cart[i].unitIndex = parseInt(v); renderCart(); }
-function setQty(i, v) { cart[i].qty = parseFloat(v) || 0; renderCart(); }
-function setPrice(i, v) { cart[i].product.units[cart[i].unitIndex].price = parseFloat(v) || 0; renderCart(); }
-function setDisc(i, v) { cart[i].discount = parseFloat(v) || 0; renderCart(); }
+function setQty(i, v) { cart[i].qty = parseFloat(v) || 0; refreshCartComputed(); }
+function setPrice(i, v) { cart[i].product.units[cart[i].unitIndex].price = parseFloat(v) || 0; refreshCartComputed(); }
+function setDisc(i, v) { cart[i].discount = parseFloat(v) || 0; refreshCartComputed(); }
 function removeLine(i) { cart.splice(i, 1); renderCart(); }
 
 function renderCart() {
@@ -165,9 +165,33 @@ function renderCart() {
       '<td class="num"><input class="cart-qty" type="number" step="0.001" min="0" value="' + fmtQty(line.qty) + '" oninput="setQty(' + i + ', this.value)"></td>' +
       '<td class="num"><input class="cart-price" type="number" step="0.01" min="0" value="' + unit.price.toFixed(2) + '" oninput="setPrice(' + i + ', this.value)"></td>' +
       '<td class="num"><div class="disc-cell"><input class="cart-disc" type="number" step="0.01" min="0" value="' + line.discount + '" oninput="setDisc(' + i + ', this.value)"></div></td>' +
-      '<td class="num strong">' + peso(lineTotalOf(line)) + '</td>' +
+      '<td class="num strong line-total">' + peso(lineTotalOf(line)) + '</td>' +
       '<td><button type="button" class="btn-link danger" onclick="removeLine(' + i + ')">✕</button></td>';
     body.appendChild(tr);
+  });
+  computeTotals();
+}
+
+// Update line totals WITHOUT rebuilding the row inputs, so the field being
+// typed into keeps focus and its cursor position — rebuilding on every
+// keystroke (the old behavior) made typing look like it "did nothing" after
+// the first digit, since type="number" inputs can't have their cursor
+// position restored after a value swap. Same fix as Purchases' edit-items
+// page uses for the same reason.
+function refreshCartComputed() {
+  const rows = document.querySelectorAll('#cartBody tr');
+  cart.forEach((line, i) => {
+    const tr = rows[i];
+    if (!tr) return;
+    const unit = line.product.units[line.unitIndex];
+    const qtyInput = tr.querySelector('.cart-qty');
+    const priceInput = tr.querySelector('.cart-price');
+    const discInput = tr.querySelector('.cart-disc');
+    const totalCell = tr.querySelector('.line-total');
+    if (qtyInput && document.activeElement !== qtyInput) qtyInput.value = fmtQty(line.qty);
+    if (priceInput && document.activeElement !== priceInput) priceInput.value = unit.price.toFixed(2);
+    if (discInput && document.activeElement !== discInput) discInput.value = line.discount;
+    if (totalCell) totalCell.textContent = peso(lineTotalOf(line));
   });
   computeTotals();
 }
