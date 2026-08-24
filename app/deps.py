@@ -60,3 +60,18 @@ def is_display(user) -> bool:
     up the tablet, there is nothing else to browse to.
     """
     return user is not None and (user.role or "").lower() == "display"
+
+
+def safe_back_url(raw: str, fallback: str) -> str:
+    """A caller-supplied "return here afterwards" URL, made safe to redirect to.
+
+    Used so editing a row from a filtered list lands back on that same
+    filtered list instead of an unfiltered one. Only same-site paths are
+    accepted: it must start with a single "/", which rejects both
+    "//evil.com" (protocol-relative) and "https://evil.com" — otherwise a
+    crafted link could turn our own redirect into a way off the site.
+    """
+    raw = (raw or "").strip()
+    if raw.startswith("/") and not raw.startswith("//"):
+        return raw
+    return fallback

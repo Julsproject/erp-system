@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from . import accounting, audit, models, settings_store
@@ -148,6 +148,139 @@ def _linked_ref(db: Session, prefix: str, orig) -> str | None:
     return candidate
 
 
+# A cashier who parks sale after sale without ever finishing them would grow
+# this list forever; a cap keeps the picker usable and is far more than the
+# handful genuinely in flight at once.
+MAX_SALE_DRAFTS = 30
+
+# How far past a cashier's last number to look for a free one before giving up
+# and letting them type it themselves. Generous enough to step over a long run
+# another till already used, small enough not to scan a whole booklet.
+NEXT_INVOICE_SCAN_LIMIT = 500
+
+
+def _draft_row(d: models.SaleDraft) -> dict:
+    return {
+        "id": d.id,
+        "label": d.label or "Untitled",
+        "item_count": d.item_count or 0,
+        "total": float(d.total or 0),
+        "saved_at": d.updated_at.isoformat() if d.updated_at else None,
+    }
+
+
+@router.get("/pos/drafts")
+def list_sale_drafts(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """This cashier's parked sales. Scoped to the person who saved them —
+    two cashiers sharing one till shouldn't be picking through each other's
+    half-typed carts."""
+    if not user:
+        return JSONResponse({"drafts": []}, status_code=401)
+    drafts = (
+        db.query(models.SaleDraft)
+        .filter(models.SaleDraft.created_by == user.id)
+        .order_by(models.SaleDraft.updated_at.desc())
+        .all()
+    )
+    return {"drafts": [_draft_row(d) for d in drafts]}
+
+
+@router.post("/pos/drafts")
+async def save_sale_draft(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Park the POS screen's current state so the till can be freed up.
+
+    Nothing is validated the way a real checkout is — that's the point: a
+    draft exists precisely because something isn't resolved yet (an unknown
+    price, an item not on file). It gets checked properly when it's resumed
+    and completed as a normal sale.
+    """
+    if not user:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    data = await request.json()
+    payload = data.get("payload")
+    if not isinstance(payload, dict) or not (payload.get("cart") or []):
+        return JSONResponse({"ok": False, "error": "Nothing to save — add at least one item first."}, status_code=400)
+
+    draft_id = data.get("draft_id")
+    draft = None
+    if draft_id:
+        draft = (
+            db.query(models.SaleDraft)
+            .filter(models.SaleDraft.id == int(draft_id), models.SaleDraft.created_by == user.id)
+            .first()
+        )
+    if draft is None:
+        existing = (
+            db.query(models.SaleDraft).filter(models.SaleDraft.created_by == user.id).count()
+        )
+        if existing >= MAX_SALE_DRAFTS:
+            return JSONResponse(
+                {"ok": False, "error": f"You already have {MAX_SALE_DRAFTS} saved drafts. Finish or delete one first."},
+                status_code=400,
+            )
+        draft = models.SaleDraft(created_by=user.id)
+        db.add(draft)
+
+    draft.label = (data.get("label") or "").strip()[:120] or None
+    draft.payload = json.dumps(payload)
+    draft.item_count = len(payload.get("cart") or [])
+    try:
+        draft.total = Decimal(str(data.get("total") or 0))
+    except (InvalidOperation, TypeError, ValueError):
+        draft.total = Decimal("0")
+    db.commit()
+    return {"ok": True, "draft": _draft_row(draft)}
+
+
+@router.get("/pos/drafts/{draft_id:int}")
+def get_sale_draft(draft_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return JSONResponse({"found": False}, status_code=401)
+    draft = (
+        db.query(models.SaleDraft)
+        .filter(models.SaleDraft.id == draft_id, models.SaleDraft.created_by == user.id)
+        .first()
+    )
+    if not draft:
+        return {"found": False}
+    try:
+        payload = json.loads(draft.payload)
+    except ValueError:
+        return {"found": False}
+    return {"found": True, "id": draft.id, "label": draft.label, "payload": payload}
+
+
+@router.post("/pos/drafts/{draft_id:int}/delete")
+def delete_sale_draft(draft_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return JSONResponse({"ok": False}, status_code=401)
+    draft = (
+        db.query(models.SaleDraft)
+        .filter(models.SaleDraft.id == draft_id, models.SaleDraft.created_by == user.id)
+        .first()
+    )
+    if draft:
+        db.delete(draft)
+        db.commit()
+    return {"ok": True}
+
+
+def _price_term(term: str):
+    """A search word read as a peso amount, or None when it isn't one.
+
+    Customers quote the price far more often than the exact product name
+    ("yung one-thirty na pintura"), so a number typed into POS search should
+    be able to find what costs that much. Anything that isn't cleanly a
+    positive number — "1/4", "60ML", "BS1400" — comes back None and is left
+    to match names only.
+    """
+    try:
+        value = Decimal(term.replace(",", ""))
+    except (InvalidOperation, ValueError, ArithmeticError):
+        return None
+    return value if value > 0 else None
+
+
 def _invoice_taken(db: Session, invoice_no: str, receipt_type, exclude_sale_id: int = None) -> bool:
     """Is this invoice # already used IN THIS BOOKLET?
 
@@ -258,7 +391,25 @@ def pos_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_curr
         # between those two words. Cashiers type the bits they remember, not
         # the full name in order.
         for term in q.split():
-            query = query.filter(models.Product.name.ilike(f"%{term}%"))
+            name_match = models.Product.name.ilike(f"%{term}%")
+            price = _price_term(term)
+            if price is None:
+                query = query.filter(name_match)
+                continue
+            # A number could be part of a name ("60ML", "BS1400") or the price
+            # the customer was quoted, and there's no telling which from the
+            # word alone — so match either. Checked against the unit ladder
+            # too: an item bought by the bag is remembered at its bag price,
+            # not the per-kilo one the base price holds.
+            unit_priced = (
+                db.query(models.ProductUnit.id)
+                .filter(
+                    models.ProductUnit.product_id == models.Product.id,
+                    models.ProductUnit.price == price,
+                )
+                .exists()
+            )
+            query = query.filter(or_(name_match, models.Product.selling_price == price, unit_priced))
     products = query.order_by(models.Product.name).limit(30).all()
     return {"products": [_product_payload_for_pos(p) for p in products]}
 
@@ -621,16 +772,38 @@ def pos_next_invoice(
         .order_by(models.CancelledReceipt.id.desc())
         .first()
     )
-    candidates = [
-        _last_receipt_number(receipt_type, last_sale.invoice_no if last_sale else None),
-        _last_receipt_number(receipt_type, last_cancelled.invoice_no if last_cancelled else None),
-    ]
-    candidates = [c for c in candidates if c]
-    if not candidates:
+    # Continue from this cashier's own last SALE. Their last cancelled receipt
+    # only stands in when they have no sale in this booklet yet — taking
+    # whichever number is HIGHEST (the old behaviour) meant one receipt
+    # spoiled far ahead dragged every later suggestion up with it, skipping
+    # every good number in between.
+    parsed = _last_receipt_number(receipt_type, last_sale.invoice_no if last_sale else None)
+    if not parsed:
+        parsed = _last_receipt_number(receipt_type, last_cancelled.invoice_no if last_cancelled else None)
+    if not parsed:
         return {"invoice_no": ""}
-    prefix, number, width = max(candidates, key=lambda c: c[1])
-    next_no = str(number + 1).zfill(width)
-    return {"invoice_no": f"{prefix}{next_no}"}
+    prefix, number, width = parsed
+
+    # Numbers already spent in this booklet — by ANYONE, and whether they
+    # became a sale or were logged as spoiled. Deliberately not scoped to this
+    # cashier: a booklet number is physically unique, it can only be written
+    # once no matter who was holding the pad, and saving a repeat is refused
+    # anyway (see _invoice_taken).
+    taken = {n for (n,) in db.query(models.Sale.invoice_no)
+             .filter(models.Sale.receipt_type == receipt_type).all() if n}
+    taken |= {n for (n,) in db.query(models.CancelledReceipt.invoice_no)
+              .filter(models.CancelledReceipt.receipt_type == receipt_type).all() if n}
+
+    # Step forward one at a time to the first free number, so a gap left by
+    # someone else's sale is stepped over without abandoning this cashier's
+    # own place in the pad. Bounded so an exhausted range can't spin.
+    candidate = number + 1
+    for _ in range(NEXT_INVOICE_SCAN_LIMIT):
+        suggestion = f"{prefix}{str(candidate).zfill(width)}"
+        if suggestion not in taken:
+            return {"invoice_no": suggestion}
+        candidate += 1
+    return {"invoice_no": ""}
 
 
 RECEIPT_TYPES = ["DRS", "DRB", "SI"]

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Archived Customers · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Archived Customers</h1>
+    <p class="muted">Hidden from the customer list and pickers — their sales history is untouched.</p>
+  </div>
+  <a class="btn-secondary" href="/customers">← Back to Customers</a>
+</div>
+
+<form class="toolbar" method="get" action="/customers/archived">
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search archived customer…" autofocus>
+  <button class="btn-secondary" type="submit">Search</button>
+  {% if q %}<a class="btn-link" href="/customers/archived">Clear</a>{% endif %}
+</form>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Customer</th><th>TIN</th><th>Address</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for c in customers %}
+      <tr>
+        <td class="strong">{{ c.name }}</td>
+        <td>{{ c.tin or '—' }}</td>
+        <td>{{ c.address or '—' }}</td>
+        <td class="row-actions">
+          <a class="btn-link" href="/customers/{{ c.id }}/history">History</a>
+          <form method="post" action="/customers/{{ c.id }}/restore" style="display:inline;"
+                onsubmit="return confirm('Restore {{ c.name|e }} to the customer list?');">
+            <button type="submit" class="btn-link">Restore</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">{{ 'No archived customer matches that search.' if q else 'No archived customers.' }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

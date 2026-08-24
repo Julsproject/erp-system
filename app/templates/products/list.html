@@ -71,6 +71,15 @@
 </div>
 
 {% set qs_base = ('q=' ~ q ~ '&' if q) ~ ('alert=1&' if alert) %}
+{# This exact list view — search, filters and page — handed to row links so
+   Back/Cancel/after-save returns here instead of dumping the user on an
+   unfiltered page 1 and making them search all over again. #}
+{% set cur_url = '/products?page=' ~ page
+   ~ ('&q=' ~ q if q else '')
+   ~ ('&alert=1' if alert else '')
+   ~ ('&category_id=' ~ category_id if category_id else '')
+   ~ ('&subcategory_id=' ~ subcategory_id if subcategory_id else '')
+   ~ ('&shelf_id=' ~ shelf_id if shelf_id else '') %}
 <div class="pill-filter-bar">
   {% if categories %}
   {% set current_cat = categories|selectattr('id', 'equalto', category_id)|map(attribute='name')|first if category_id else None %}
@@ -196,7 +205,7 @@
         <td class="num">{{ p.stock_qty|whole_qty }}</td>
         <td class="num strong">{{ p.total_qty|whole_qty }}</td>
         <td class="row-actions">
-          {% if is_admin_user %}<a class="btn-link" href="/products/{{ p.id }}/edit">Edit</a>{% endif %}
+          {% if is_admin_user %}<a class="btn-link" href="/products/{{ p.id }}/edit?back={{ cur_url|urlencode }}">Edit</a>{% endif %}
           {% if (user.role or '')|lower == 'admin' %}
           <a class="btn-link" href="/products/{{ p.id }}/stock-card">Stock card</a>
           {% endif %}

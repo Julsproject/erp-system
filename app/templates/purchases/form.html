@@ -38,6 +38,14 @@
 <div>
   <!-- Document -->
   <section class="card pos-cart-panel">
+    {% if not return_against_po %}
+    <div id="purchaseDraftBanner" class="alert" style="display:none;background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8;margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">
+        <span><strong>Unfinished purchase restored.</strong> Nasa ibaba pa rin ang huli mong pinasok — hindi pa ito na-save.</span>
+        <button type="button" class="btn-secondary" onclick="discardPurchaseDraft()" style="white-space:nowrap;">Discard &amp; start fresh</button>
+      </div>
+    </div>
+    {% endif %}
     <div class="pos-head-fields">
       <label class="pos-customer">Supplier
         <select id="supplierId" {{ 'disabled' if return_against_po }}>
@@ -51,7 +59,7 @@
         {% endif %}
       </label>
       <label class="pos-customer">Supplier Invoice / DR #
-        <input id="invoiceNo" type="text" placeholder="optional" autocomplete="off"
+        <input id="invoiceNo" type="text" placeholder="optional" autocomplete="off" oninput="savePurchaseDraft()"
                value="{{ return_against_po.ref_no if return_against_po else '' }}">
       </label>
     </div>
@@ -83,10 +91,10 @@
 
     <div class="pos-head-fields">
       <label class="pos-customer">Delivery date <span class="muted">(blank = today)</span>
-        <input id="deliveryDate" type="date" title="The date this delivery actually happened. Set it when encoding a past purchase so it lands on the right day in reports; leave blank for a delivery received today.">
+        <input id="deliveryDate" type="date" oninput="savePurchaseDraft()" title="The date this delivery actually happened. Set it when encoding a past purchase so it lands on the right day in reports; leave blank for a delivery received today.">
       </label>
       <label class="pos-customer">Notes
-        <input id="notes" type="text" placeholder="optional" autocomplete="off">
+        <input id="notes" type="text" placeholder="optional" autocomplete="off" oninput="savePurchaseDraft()">
       </label>
     </div>
 
@@ -102,9 +110,9 @@
       </label>
     </div>
     <div id="chequeFields" class="cheque-grid" style="display:none;">
-      <label>Bank<input id="chequeBank" type="text" placeholder="e.g. BDO"></label>
-      <label>Cheque #<input id="chequeNo" type="text" placeholder="000123"></label>
-      <label>Cheque date<input id="chequeDate" type="date"></label>
+      <label>Bank<input id="chequeBank" type="text" placeholder="e.g. BDO" oninput="savePurchaseDraft()"></label>
+      <label>Cheque #<input id="chequeNo" type="text" placeholder="000123" oninput="savePurchaseDraft()"></label>
+      <label>Cheque date<input id="chequeDate" type="date" oninput="savePurchaseDraft()"></label>
     </div>
     <p class="hint" id="chequeHint" style="display:none;margin:0 0 12px;">
       This still logs the purchase as settled — the cheque itself goes into the <a href="/pdc">Cheques register</a> as pending until it clears.
@@ -158,6 +166,7 @@
 <script>
 const peso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const txnType = {{ 'true' if return_against_po else 'false' }} ? 'return' : 'receive';
+const isReturnAgainstPo = {{ 'true' if return_against_po else 'false' }};
 const returnAgainstId = {{ return_against_po.id if return_against_po else 'null' }};
 function round2(n) { return (Math.round((Number(n) || 0) * 100) / 100).toString(); }
 function round4(n) { return (Math.round((Number(n) || 0) * 10000) / 10000).toString(); }
@@ -207,6 +216,74 @@ function setReturnTotal(i, v) {
   recompute();
 }
 function removeReturnLine(i) { returnLines.splice(i, 1); renderReturnLines(); }
+
+/* ============================= Unfinished-purchase draft =================
+   Same idea as the POS autosave draft: a cashier who taps Back, checks
+   something else, or reloads by accident shouldn't lose a half-typed
+   delivery — nothing is written to the server until Save Purchase. Scoped
+   to a plain "New Purchase" only (not "Return to Supplier" — that page's
+   lines start prefilled from a specific delivery already on file, so
+   there's no free-typed state worth persisting the same way). */
+const PURCHASE_DRAFT_KEY = 'purchase_draft';
+const PURCHASE_DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;  // a day-old draft is stale, not helpful
+let purchaseDraftReady = false;  // don't save while the page is still building itself
+
+function savePurchaseDraft() {
+  if (!purchaseDraftReady || isReturnAgainstPo) return;
+  const supplierId = document.getElementById('supplierId').value;
+  const hasLines = receiveLines.some(l => (l.name || '').trim());
+  const hasAnything = hasLines || supplierId || document.getElementById('invoiceNo').value.trim()
+    || document.getElementById('notes').value.trim();
+  if (!hasAnything) { localStorage.removeItem(PURCHASE_DRAFT_KEY); return; }
+  try {
+    localStorage.setItem(PURCHASE_DRAFT_KEY, JSON.stringify({
+      savedAt: Date.now(),
+      lines: receiveLines,
+      supplierId: supplierId,
+      invoiceNo: document.getElementById('invoiceNo').value,
+      deliveryDate: document.getElementById('deliveryDate').value,
+      notes: document.getElementById('notes').value,
+      paymentMethod: document.getElementById('paymentMethod') ? document.getElementById('paymentMethod').value : '',
+      chequeBank: document.getElementById('chequeBank') ? document.getElementById('chequeBank').value : '',
+      chequeNo: document.getElementById('chequeNo') ? document.getElementById('chequeNo').value : '',
+      chequeDate: document.getElementById('chequeDate') ? document.getElementById('chequeDate').value : '',
+      vat: !!(document.getElementById('vatOn') && document.getElementById('vatOn').checked),
+    }));
+  } catch (e) { /* quota/private mode — the purchase still works, it just won't survive a reload */ }
+}
+
+function clearPurchaseDraft() {
+  try { localStorage.removeItem(PURCHASE_DRAFT_KEY); } catch (e) {}
+}
+
+function discardPurchaseDraft() {
+  clearPurchaseDraft();
+  document.getElementById('purchaseDraftBanner').style.display = 'none';
+  clearAll();
+}
+
+function restorePurchaseDraft() {
+  if (isReturnAgainstPo) return false;
+  let d = null;
+  try { d = JSON.parse(localStorage.getItem(PURCHASE_DRAFT_KEY) || 'null'); } catch (e) { d = null; }
+  if (!d || !d.savedAt || (Date.now() - d.savedAt) > PURCHASE_DRAFT_MAX_AGE_MS) { clearPurchaseDraft(); return false; }
+  const hasLines = Array.isArray(d.lines) && d.lines.some(l => (l.name || '').trim());
+  if (!hasLines && !d.supplierId && !(d.invoiceNo || '').trim()) { clearPurchaseDraft(); return false; }
+
+  receiveLines = Array.isArray(d.lines) && d.lines.length ? d.lines : [blankRow()];
+  if (d.supplierId) document.getElementById('supplierId').value = d.supplierId;
+  document.getElementById('invoiceNo').value = d.invoiceNo || '';
+  document.getElementById('deliveryDate').value = d.deliveryDate || '';
+  document.getElementById('notes').value = d.notes || '';
+  if (document.getElementById('paymentMethod') && d.paymentMethod) document.getElementById('paymentMethod').value = d.paymentMethod;
+  if (document.getElementById('chequeBank')) document.getElementById('chequeBank').value = d.chequeBank || '';
+  if (document.getElementById('chequeNo')) document.getElementById('chequeNo').value = d.chequeNo || '';
+  if (document.getElementById('chequeDate')) document.getElementById('chequeDate').value = d.chequeDate || '';
+  if (document.getElementById('vatOn')) document.getElementById('vatOn').checked = !!d.vat;
+  if (document.getElementById('paymentMethod')) onPaymentMethodChange();
+  document.getElementById('purchaseDraftBanner').style.display = 'block';
+  return true;
+}
 
 /* ============================= RECEIVE flow =============================
    Spreadsheet-style rows: type Qty / Unit / Product Name / Unit Price
@@ -328,6 +405,7 @@ function onNameInput(i, v) {
   const hint = tr && tr.querySelector('.row-hint');
   if (hint) { hint.style.display = v.trim() ? 'block' : 'none'; hint.textContent = 'will be created as a new product'; }
   if (ensureTrailingBlankRow()) appendRowDom(receiveLines.length - 1);
+  savePurchaseDraft();  // a typed name alone (before qty/cost) still needs saving
   clearTimeout(searchTimers[i]);
   searchTimers[i] = setTimeout(() => runRowSearch(i), 180);
 }
@@ -404,12 +482,24 @@ function renderLines() {
 }
 
 function clearAll() {
+  clearPurchaseDraft();
   if (txnType === 'return') { returnLines = []; }
   else { receiveLines = [blankRow()]; }
+  // Return to Supplier locks the supplier to the delivery it's against —
+  // that one stays put on Clear; a plain New Purchase clears it like
+  // everything else.
+  if (!isReturnAgainstPo) document.getElementById('supplierId').value = '';
   document.getElementById('invoiceNo').value = '';
   document.getElementById('deliveryDate').value = '';
   document.getElementById('notes').value = '';
   if (document.getElementById('vatOn')) document.getElementById('vatOn').checked = false;
+  if (document.getElementById('paymentMethod')) {
+    document.getElementById('paymentMethod').value = 'payable';
+    document.getElementById('chequeBank').value = '';
+    document.getElementById('chequeNo').value = '';
+    document.getElementById('chequeDate').value = '';
+    onPaymentMethodChange();
+  }
   renderLines();
 }
 
@@ -419,6 +509,7 @@ function onPaymentMethodChange() {
   document.getElementById('chequeFields').style.display = isCheque ? 'grid' : 'none';
   document.getElementById('chequeHint').style.display = isCheque ? 'block' : 'none';
   document.getElementById('payableHint').style.display = method === 'payable' ? 'block' : 'none';
+  savePurchaseDraft();
 }
 
 function activeLines() {
@@ -456,6 +547,7 @@ function recompute() {
   const w = document.getElementById('warnBox');
   if (warn) { w.innerHTML = warn; w.style.display = 'block'; } else { w.style.display = 'none'; }
   document.getElementById('saveBtn').disabled = !ok;
+  savePurchaseDraft();
 }
 
 document.getElementById('supplierId').addEventListener('change', recompute);
@@ -497,7 +589,7 @@ async function savePurchase() {
   try {
     const res = await fetch('/purchases', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
     const data = await res.json();
-    if (data.ok) { window.location = '/purchases/' + data.purchase_id; }
+    if (data.ok) { clearPurchaseDraft(); window.location = '/purchases/' + data.purchase_id; }
     else { showError(data.error || 'Save failed.'); btn.disabled = false; btn.textContent = 'Save Purchase'; }
   } catch (e) {
     showError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Save Purchase';
@@ -546,6 +638,10 @@ async function createSupplier() {
 
 function showError(m) { const e = document.getElementById('pError'); e.textContent = m; e.style.display = 'block'; }
 
+// Pull back any unfinished purchase before the first paint, then arm saving
+// — restoring must not itself write a draft mid-way through rebuilding state.
+restorePurchaseDraft();
+purchaseDraftReady = true;
 renderLines();
 if (document.getElementById('paymentMethod')) onPaymentMethodChange();
 </script>

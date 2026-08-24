@@ -1159,3 +1159,38 @@ class Notification(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     read_at = Column(DateTime(timezone=True), nullable=True)
     resolved_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class SaleDraft(Base):
+    """A POS sale parked mid-entry, to be picked up later.
+
+    The cashier is partway through a long list, hits something they can't
+    resolve yet (an item not on file, a price to confirm) and needs the till
+    free for the next customer. Parking it here means the list doesn't have
+    to be typed twice.
+
+    Deliberately NOT a Quotation: that is a customer-facing document with its
+    own number, statuses and a printable PDF. This is internal scratch — no
+    number, never printed, and it touches nothing (stock, costing, ledger)
+    until it is resumed and completed as an ordinary sale.
+
+    `payload` is the POS screen's own state as JSON rather than normalised
+    rows, because it holds live client-side detail (the unit ladder, which
+    unit index is chosen, per-line discount type, custom-price flags) that
+    only means anything when loaded back into that same screen. Reports never
+    read a half-finished entry, so there is nothing to gain from splitting it
+    into columns. item_count/total are stored alongside purely so the picker
+    can list drafts without parsing every blob.
+    """
+    __tablename__ = "sale_drafts"
+
+    id = Column(Integer, primary_key=True)
+    label = Column(String(120), nullable=True)   # what the cashier called it
+    payload = Column(Text, nullable=False)       # full POS state, JSON
+    item_count = Column(Integer, nullable=False, server_default="0")
+    total = Column(Numeric(12, 2), nullable=False, server_default="0")
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    creator = relationship("User")

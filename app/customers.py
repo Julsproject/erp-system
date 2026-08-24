@@ -10,9 +10,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from . import models, settings_store
+from . import audit, models, settings_store
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_staff, safe_back_url
 from .templating import templates
 
 router = APIRouter()
@@ -106,6 +106,8 @@ def list_customers(
     request: Request,
     q: str = "",
     page: int = 1,
+    cust_msg: str = "",
+    cust_error: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -160,6 +162,9 @@ def list_customers(
             "total": total,
             "total_receivable": total_receivable,
             "customers_owing": customers_owing or 0,
+            "cust_msg": cust_msg,
+            "cust_error": cust_error,
+            "is_staff_user": is_staff(user),
         },
     )
 
@@ -170,12 +175,13 @@ def new_customer(request: Request, user=Depends(get_current_user)):
         return RedirectResponse("/login", status_code=302)
     return templates.TemplateResponse(
         "customers/form.html",
-        {"request": request, "app_name": request.app.title, "user": user, "customer": None, "error": None},
+        {"request": request, "app_name": request.app.title, "user": user, "customer": None, "error": None,
+         "back": "/customers"},
     )
 
 
 @router.get("/customers/{customer_id:int}/edit", response_class=HTMLResponse)
-def edit_customer(customer_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def edit_customer(customer_id: int, request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     customer = db.get(models.Customer, customer_id)
@@ -183,7 +189,9 @@ def edit_customer(customer_id: int, request: Request, db: Session = Depends(get_
         return RedirectResponse("/customers", status_code=302)
     return templates.TemplateResponse(
         "customers/form.html",
-        {"request": request, "app_name": request.app.title, "user": user, "customer": customer, "error": None},
+        {"request": request, "app_name": request.app.title, "user": user, "customer": customer, "error": None,
+         # The filtered list they came from, so a search survives an edit.
+         "back": safe_back_url(back, "/customers")},
     )
 
 
@@ -386,11 +394,13 @@ async def create_customer(request: Request, db: Session = Depends(get_db), user=
     if not user:
         return RedirectResponse("/login", status_code=302)
     form = await request.form()
+    back = safe_back_url(form.get("back") or "", "/customers")
     name = (form.get("name") or "").strip()
     if not name:
         return templates.TemplateResponse(
             "customers/form.html",
-            {"request": request, "app_name": request.app.title, "user": user, "customer": None, "error": "Customer name is required."},
+            {"request": request, "app_name": request.app.title, "user": user, "customer": None,
+             "error": "Customer name is required.", "back": back},
         )
     cust = models.Customer(
         name=name,
@@ -400,7 +410,7 @@ async def create_customer(request: Request, db: Session = Depends(get_db), user=
     )
     db.add(cust)
     db.commit()
-    return RedirectResponse("/customers", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(back, status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/customers/{customer_id:int}")
@@ -411,11 +421,13 @@ async def update_customer(customer_id: int, request: Request, db: Session = Depe
     if not customer:
         return RedirectResponse("/customers", status_code=302)
     form = await request.form()
+    back = safe_back_url(form.get("back") or "", "/customers")
     name = (form.get("name") or "").strip()
     if not name:
         return templates.TemplateResponse(
             "customers/form.html",
-            {"request": request, "app_name": request.app.title, "user": user, "customer": customer, "error": "Customer name is required."},
+            {"request": request, "app_name": request.app.title, "user": user, "customer": customer,
+             "error": "Customer name is required.", "back": back},
         )
     customer.name = name
     customer.tin = (form.get("tin") or "").strip() or None
@@ -425,4 +437,118 @@ async def update_customer(customer_id: int, request: Request, db: Session = Depe
     except (TypeError, ValueError):
         customer.credit_days = 15
     db.commit()
-    return RedirectResponse("/customers", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(back, status_code=status.HTTP_302_FOUND)
+
+
+def _customer_outstanding(db: Session, customer_id: int) -> Decimal:
+    """What this customer still owes across all their credit sales."""
+    owed = (
+        db.query(func.coalesce(func.sum(models.Sale.receivable_amount), 0))
+        .filter(models.Sale.customer_id == customer_id)
+        .scalar()
+    )
+    paid = (
+        db.query(func.coalesce(func.sum(models.ReceivableSettlement.amount), 0))
+        .join(models.Sale, models.ReceivableSettlement.sale_id == models.Sale.id)
+        .filter(models.Sale.customer_id == customer_id)
+        .scalar()
+    )
+    return Decimal(str(owed or 0)) - Decimal(str(paid or 0))
+
+
+def _customer_has_history(db: Session, customer_id: int) -> bool:
+    """True if anything real points at this customer. Those foreign keys are
+    not ON DELETE CASCADE on purpose — a sale from three months ago must not
+    vanish because someone tidied the customer list — so a hard DELETE here
+    would either fail outright or quietly break that history."""
+    checks = [
+        (models.Sale, models.Sale.customer_id),
+        (models.Quotation, models.Quotation.customer_id),
+        (models.PostDatedCheque, models.PostDatedCheque.customer_id),
+    ]
+    for model, col in checks:
+        if db.query(model.id).filter(col == customer_id).first():
+            return True
+    return False
+
+
+@router.post("/customers/{customer_id:int}/delete")
+def delete_customer(customer_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Remove a customer from the list.
+
+    Hard-deletes only one that has never been transacted with (a typo, or a
+    name created by accident). Anything with real history is ARCHIVED instead
+    — hidden from the list and pickers while its sales stay attached and
+    attributable, which is the same trade-off products already make.
+
+    Refused outright while they still owe money: hiding an account with an
+    open balance is how a debt quietly stops being chased.
+    """
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    customer = db.get(models.Customer, customer_id)
+    if not customer:
+        return RedirectResponse("/customers", status_code=302)
+
+    back = safe_back_url(request.query_params.get("back") or "", "/customers")
+    sep = "&" if "?" in back else "?"
+
+    if _customer_outstanding(db, customer_id) > 0:
+        return RedirectResponse(f"{back}{sep}cust_error=owing", status_code=status.HTTP_302_FOUND)
+
+    name = customer.name
+    if _customer_has_history(db, customer_id):
+        customer.is_active = False
+        audit.record(
+            db, user=user, request=request, action="archive", entity_type="customer",
+            entity_id=customer.id, entity_label=name,
+            summary=f"Archived customer “{name}” — has sales history, so kept for the record",
+        )
+        db.commit()
+        return RedirectResponse(f"{back}{sep}cust_msg=archived", status_code=status.HTTP_302_FOUND)
+
+    audit.record(
+        db, user=user, request=request, action="delete", entity_type="customer",
+        entity_id=customer.id, entity_label=name,
+        summary=f"Deleted customer “{name}” (never had any activity)",
+    )
+    db.delete(customer)
+    db.commit()
+    return RedirectResponse(f"{back}{sep}cust_msg=deleted", status_code=status.HTTP_302_FOUND)
+
+
+@router.get("/customers/archived", response_class=HTMLResponse)
+def archived_customers(request: Request, q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    q = (q or "").strip()
+    query = db.query(models.Customer).filter(models.Customer.is_active.is_(False))
+    if q:
+        query = query.filter(models.Customer.name.ilike(f"%{q}%"))
+    customers = query.order_by(models.Customer.name).all()
+    return templates.TemplateResponse(
+        "customers/archived.html",
+        {"request": request, "app_name": request.app.title, "user": user, "customers": customers, "q": q},
+    )
+
+
+@router.post("/customers/{customer_id:int}/restore")
+def restore_customer(customer_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    customer = db.get(models.Customer, customer_id)
+    if customer:
+        customer.is_active = True
+        audit.record(
+            db, user=user, request=request, action="restore", entity_type="customer",
+            entity_id=customer.id, entity_label=customer.name,
+            summary=f"Restored customer “{customer.name}” from archive",
+        )
+        db.commit()
+    return RedirectResponse("/customers/archived", status_code=status.HTTP_302_FOUND)

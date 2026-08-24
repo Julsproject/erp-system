@@ -6,9 +6,30 @@
   <span class="muted" id="clock"></span>
 </div>
 
-<div class="pos-modes">
-  <button type="button" class="mode-btn active" data-m="payment" onclick="setMode('payment')">Sale</button>
-  <button type="button" class="mode-btn" data-m="quotation" onclick="setMode('quotation')">Quotation</button>
+<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+  <div class="pos-modes" style="margin-bottom:0;">
+    <button type="button" class="mode-btn active" data-m="payment" onclick="setMode('payment')">Sale</button>
+    <button type="button" class="mode-btn" data-m="quotation" onclick="setMode('quotation')">Quotation</button>
+  </div>
+  <button type="button" class="btn-secondary" id="openDraftsBtn" onclick="showDrafts()" style="padding:8px 14px;">
+    🗒 Saved drafts <span id="draftCount" class="muted"></span>
+  </button>
+</div>
+<div style="height:18px;"></div>
+
+<!-- Parked sales: a long list the cashier couldn't finish yet (unknown price,
+     item not on file) lives here until they can come back to it. -->
+<div id="draftsOverlay" class="modal-overlay" style="display:none;" onclick="if (event.target === this) hideDrafts();">
+  <div class="modal-box np-panel" style="max-width:600px;">
+    <h3 class="np-title">Saved drafts</h3>
+    <p class="muted" style="margin:-6px 0 12px;font-size:12.5px;">
+      Unfinished sales you parked. Opening one loads it back into the till — it stays here until you complete that sale.
+    </p>
+    <div id="draftsList"></div>
+    <div style="margin-top:14px;text-align:right;">
+      <button type="button" class="btn-secondary" onclick="hideDrafts()">Close</button>
+    </div>
+  </div>
 </div>
 
 <div class="pos-grid" id="saleView">
@@ -341,6 +362,7 @@
 
     <div class="pos-actions">
       <button class="btn-secondary" onclick="clearCart()">Clear</button>
+      <button type="button" class="btn-secondary" id="saveDraftBtn" onclick="parkSale()">🗒 Save as draft</button>
       <button class="btn pos-complete" id="completeBtn" onclick="checkout()" disabled>Complete Sale</button>
     </div>
     <div id="posError" class="alert" style="display:none;margin-top:14px;"></div>
@@ -1016,6 +1038,159 @@ function clearDraft() {
   try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
 }
 
+/* ===== Parked sales ("Save as draft") =====
+   Distinct from the autosave draft above: that one is a crash-guard for the
+   ONE sale in progress on this browser. These are deliberately parked sales,
+   saved on the server so they survive a different device or a cleared
+   browser, and there can be several at once — the cashier hits an item they
+   can't price yet, parks the whole list, serves the next customer, and picks
+   it up later instead of re-typing everything.
+
+   The id of a draft that was loaded is remembered so completing that sale
+   clears it from the list automatically; parking again just updates it
+   rather than leaving a stale copy behind. */
+let loadedDraftId = null;
+
+function posStateForDraft() {
+  return {
+    cart: cart,
+    invoice: invoiceBox.value,
+    receiptType: receiptTypeBox.value,
+    customer: customerBox.value,
+    deliveryAddress: deliveryAddressBox.value,
+    notes: saleNotesBox.value,
+    txnDate: txnDateBox.value,
+    encodedById: document.getElementById('encodedBy').value,
+    vat: document.getElementById('vatOn').checked,
+    discount: document.getElementById('overallDiscount').value,
+    discType: overallDiscType,
+    paymentMode: paymentMode,
+    payments: payments,
+    fullMethod: document.getElementById('fullMethod').value,
+  };
+}
+
+async function parkSale() {
+  if (!cart.length) { showError('Add at least one item before saving a draft.'); return; }
+  const suggested = customerBox.value.trim() || (cart[0] && cart[0].product.name) || '';
+  const label = prompt('Name this draft so you can recognise it later:', suggested);
+  if (label === null) return;  // cancelled
+
+  const btn = document.getElementById('saveDraftBtn');
+  btn.disabled = true;
+  let subtotal = 0; cart.forEach(l => subtotal += lineTotalOf(l));
+  try {
+    const res = await fetch('/pos/drafts', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        draft_id: loadedDraftId,
+        label: label,
+        total: Math.max(subtotal - overallDiscAmt(subtotal), 0),
+        payload: posStateForDraft(),
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) { showError(data.error || 'Could not save the draft.'); return; }
+    loadedDraftId = null;
+    clearCart();          // till is free for the next customer
+    refreshDraftCount();
+  } catch (e) {
+    showError('Network error — the draft was not saved.');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function refreshDraftCount() {
+  try {
+    const res = await fetch('/pos/drafts');
+    const data = await res.json();
+    const n = (data.drafts || []).length;
+    document.getElementById('draftCount').textContent = n ? '(' + n + ')' : '';
+  } catch (e) { /* count is a convenience, never block the till for it */ }
+}
+
+async function showDrafts() {
+  const box = document.getElementById('draftsList');
+  box.innerHTML = '<p class="pos-hint">Loading…</p>';
+  document.getElementById('draftsOverlay').style.display = 'flex';
+  let data;
+  try {
+    const res = await fetch('/pos/drafts');
+    data = await res.json();
+  } catch (e) {
+    box.innerHTML = '<p class="pos-hint">Could not load drafts.</p>'; return;
+  }
+  const drafts = data.drafts || [];
+  if (!drafts.length) {
+    box.innerHTML = '<p class="pos-hint">No saved drafts. Use “Save as draft” to park an unfinished sale here.</p>';
+    return;
+  }
+  box.innerHTML = '';
+  drafts.forEach(d => {
+    const when = d.saved_at ? new Date(d.saved_at).toLocaleString('en-PH', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '';
+    const row = document.createElement('div');
+    row.className = 'draft-row';
+    row.innerHTML =
+      '<div><div class="strong">' + escapeHtml(d.label) + '</div>' +
+      '<div class="muted" style="font-size:12px;">' + d.item_count + ' item' + (d.item_count === 1 ? '' : 's') +
+      ' · ' + peso(d.total) + (when ? ' · ' + escapeHtml(when) : '') + '</div></div>' +
+      '<div style="display:flex;gap:8px;align-items:center;">' +
+      '<button type="button" class="btn" style="padding:6px 12px;font-size:12.5px;">Open</button>' +
+      '<button type="button" class="btn-link danger">Delete</button></div>';
+    row.querySelector('.btn').onclick = () => loadDraft(d.id);
+    row.querySelector('.btn-link').onclick = () => deleteDraft(d.id, d.label);
+    box.appendChild(row);
+  });
+}
+
+function hideDrafts() { document.getElementById('draftsOverlay').style.display = 'none'; }
+
+async function loadDraft(id) {
+  if (cart.length && !confirm('Replace what is currently in the till with this draft?')) return;
+  let data;
+  try {
+    const res = await fetch('/pos/drafts/' + id);
+    data = await res.json();
+  } catch (e) { showError('Could not open that draft.'); return; }
+  if (!data.found) { showError('That draft is no longer available.'); return; }
+
+  const d = data.payload || {};
+  cart = Array.isArray(d.cart) ? d.cart : [];
+  invoiceBox.value = d.invoice || '';
+  if (d.receiptType) receiptTypeBox.value = d.receiptType;
+  customerBox.value = d.customer || '';
+  deliveryAddressBox.value = d.deliveryAddress || '';
+  saleNotesBox.value = d.notes || '';
+  txnDateBox.value = d.txnDate || '';
+  document.getElementById('encodedBy').value = d.encodedById || '';
+  updateTxnDatePreview();
+  document.getElementById('vatOn').checked = !!d.vat;
+  document.getElementById('overallDiscount').value = d.discount || 0;
+  overallDiscType = d.discType === 'pct' ? 'pct' : 'amt';
+  document.getElementById('overallDiscTypeBtn').textContent = overallDiscType === 'pct' ? '%' : '₱';
+  if (Array.isArray(d.payments) && d.payments.length) payments = d.payments;
+  if (d.fullMethod) document.getElementById('fullMethod').value = d.fullMethod;
+  setPaymentMode(d.paymentMode === 'split' ? 'split' : 'full');
+
+  // Kept on the server until this sale is actually completed — if the page
+  // is closed or the cart cleared now, the parked list is still intact.
+  loadedDraftId = id;
+  hideDrafts();
+  renderCart();
+  document.getElementById('draftBanner').style.display = 'none';
+}
+
+async function deleteDraft(id, label) {
+  if (!confirm('Delete the draft “' + label + '”? This cannot be undone.')) return;
+  try {
+    await fetch('/pos/drafts/' + id + '/delete', { method: 'POST' });
+  } catch (e) { /* fall through to a refresh either way */ }
+  if (loadedDraftId === id) loadedDraftId = null;
+  showDrafts();
+  refreshDraftCount();
+}
+
 function discardDraft() {
   clearDraft();
   document.getElementById('draftBanner').style.display = 'none';
@@ -1280,7 +1455,17 @@ async function checkout() {
     try {
       const res = await fetch('/pos/checkout', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
       const data = await res.json();
-      if (data.ok) { clearDraft(); window.location = '/pos/receipt/' + data.sale_id; }
+      if (data.ok) {
+        clearDraft();
+        // This sale came off the parked list and is now real — drop it, so
+        // the same list can't be rung up twice. Awaited so the delete lands
+        // before the page navigates away.
+        if (loadedDraftId) {
+          try { await fetch('/pos/drafts/' + loadedDraftId + '/delete', { method: 'POST' }); } catch (e) {}
+          loadedDraftId = null;
+        }
+        window.location = '/pos/receipt/' + data.sale_id;
+      }
       else { showError(data.error || 'Checkout failed.'); btn.disabled = false; btn.textContent = 'Complete Sale'; }
     } catch (e) {
       showError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Complete Sale';
@@ -1743,6 +1928,7 @@ tick(); setInterval(tick, 30000);
 // restoring must not itself write a draft mid-way through rebuilding state.
 restoreDraft();
 draftReady = true;
+refreshDraftCount();   // how many parked sales are waiting, shown on the button
 quoRestoreDraft();
 quoDraftReady = true;
 renderPayments();

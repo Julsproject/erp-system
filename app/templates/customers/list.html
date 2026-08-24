@@ -6,8 +6,26 @@
     <h1 class="page-title">Customers</h1>
     <p class="muted">{{ total }} account{{ '' if total == 1 else 's' }}</p>
   </div>
-  <a class="btn" href="/customers/new">+ Add customer</a>
+  <div class="head-actions">
+    {% if is_staff_user %}<a class="btn-secondary" href="/customers/archived">🗄 Archived</a>{% endif %}
+    <a class="btn" href="/customers/new">+ Add customer</a>
+  </div>
 </div>
+
+{% if cust_msg == 'deleted' %}
+<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;">Customer deleted.</div>
+{% elif cust_msg == 'archived' %}
+<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;">
+  Customer archived — they had sales on file, so the record was kept and simply hidden from this list.
+  Bring them back anytime from <a href="/customers/archived">Archived</a>.
+</div>
+{% endif %}
+{% if cust_error == 'owing' %}
+<div class="alert" style="background:#fffbeb;border-color:#fde68a;color:#92400e;">
+  <strong>That customer still owes money.</strong> Settle or write off the balance first — hiding an account with
+  an open balance is how a debt stops getting chased. See <a href="/sales/receivables">Receivables</a>.
+</div>
+{% endif %}
 
 <div class="tabs">
   <a class="tab" href="/sales">Cash Sales</a>
@@ -27,6 +45,9 @@
 </div>
 {% endif %}
 
+{# This exact view — search and page — so Back/Cancel/after-save returns
+   here rather than an unfiltered page 1. #}
+{% set cur_url = '/customers?page=' ~ page ~ ('&q=' ~ q if q else '') %}
 <form class="toolbar" method="get" action="/customers">
   <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search name…">
   <button class="btn-secondary" type="submit">Search</button>
@@ -46,7 +67,15 @@
         <td>{{ c.address or '—' }}</td>
         <td class="row-actions">
           <a class="btn-link" href="/customers/{{ c.id }}/history">History</a>
-          <a class="btn-link" href="/customers/{{ c.id }}/edit">Edit</a>
+          <a class="btn-link" href="/customers/{{ c.id }}/edit?back={{ cur_url|urlencode }}">Edit</a>
+          {% if is_staff_user %}
+          <form method="post" action="/customers/{{ c.id }}/delete?back={{ cur_url|urlencode }}" style="display:inline;"
+                onsubmit="return confirm('Remove {{ c.name|e }} from the customer list?
+
+If they have sales on file they are archived (history kept), not deleted.');">
+            <button type="submit" class="btn-link danger">Delete</button>
+          </form>
+          {% endif %}
         </td>
       </tr>
       {% else %}

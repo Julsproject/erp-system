@@ -3,12 +3,14 @@
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">{{ 'Edit customer' if customer else 'Add customer' }}</h1>
-  <a class="btn-link" href="/customers">← Back to customers</a>
+  <a class="btn-link" href="{{ back }}">← Back to customers</a>
 </div>
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
 
 <form class="card form" method="post" action="{{ '/customers/' ~ customer.id if customer else '/customers' }}">
+  {# Carries the filtered list through the save, so a search isn't lost. #}
+  <input type="hidden" name="back" value="{{ back }}">
   <label class="full">Name
     <input name="name" value="{{ customer.name if customer else '' }}" required autofocus>
   </label>
@@ -25,7 +27,7 @@
   </label>
   <div class="form-actions full">
     <button class="btn" type="submit">{{ 'Save changes' if customer else 'Save customer' }}</button>
-    <a class="btn-secondary" href="/customers">Cancel</a>
+    <a class="btn-secondary" href="{{ back }}">Cancel</a>
   </div>
 </form>
 {% endblock %}

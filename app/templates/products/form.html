@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">{{ 'Edit product' if product else 'Add product' }}</h1>
-  <a class="btn-link" href="/products">← Back to inventory</a>
+  <a class="btn-link" href="{{ back }}">← Back to inventory</a>
 </div>
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
@@ -11,6 +11,9 @@
 
 <form class="card form" method="post" novalidate
       action="{{ '/products/' ~ product.id if product else '/products' }}">
+  {# Carries the filtered list the user came from through the save, so their
+     search/page isn't lost the moment they edit one row. #}
+  <input type="hidden" name="back" value="{{ back }}">
   <label class="full">Product Name
     <input name="name" value="{{ product.name if product else '' }}" required autofocus>
   </label>
@@ -203,7 +206,7 @@
 
   <div class="form-actions full">
     <button class="btn" type="submit">{{ 'Save changes' if product else 'Save product' }}</button>
-    <a class="btn-secondary" href="/products">Cancel</a>
+    <a class="btn-secondary" href="{{ back }}">Cancel</a>
   </div>
 </form>
 

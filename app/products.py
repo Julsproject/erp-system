@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from . import audit, models, pricing, settings_store
 from .database import SessionLocal, get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_staff, safe_back_url
 from .templating import templates
 
 router = APIRouter()
@@ -514,7 +514,7 @@ def export_products_excel(
     )
 
 
-def _render_form(request, db, user, product=None, error=None):
+def _render_form(request, db, user, product=None, error=None, back=""):
     categories = db.query(models.Category).order_by(models.Category.name).all()
     subcategories = db.query(models.SubCategory).order_by(models.SubCategory.name).all()
     unit_types = db.query(models.UnitType).order_by(models.UnitType.name).all()
@@ -532,6 +532,10 @@ def _render_form(request, db, user, product=None, error=None):
             "shelves": shelves,
             "adjustment_reasons": ADJUSTMENT_REASONS,
             "error": error,
+            # Where Back/Cancel/after-save should land — the filtered list the
+            # user came from, so a search isn't lost just because they edited
+            # one row. Falls back to a plain /products when absent.
+            "back": safe_back_url(back, "/products"),
         },
     )
 
@@ -546,7 +550,7 @@ def new_product(request: Request, db: Session = Depends(get_db), user=Depends(ge
 
 
 @router.get("/products/{product_id:int}/edit", response_class=HTMLResponse)
-def edit_product(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def edit_product(product_id: int, request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -554,7 +558,7 @@ def edit_product(product_id: int, request: Request, db: Session = Depends(get_db
     product = db.get(models.Product, product_id)
     if not product:
         return RedirectResponse("/products", status_code=302)
-    return _render_form(request, db, user, product=product)
+    return _render_form(request, db, user, product=product, back=back)
 
 
 def _save_from_form(product: models.Product, db: Session, form):
@@ -725,16 +729,17 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
     if not product:
         return RedirectResponse("/products", status_code=302)
     form = await request.form()
+    back = form.get("back") or ""
     if not (form.get("name") or "").strip():
-        return _render_form(request, db, user, product=product, error="Product name is required.")
+        return _render_form(request, db, user, product=product, error="Product name is required.", back=back)
     barcode = (form.get("barcode") or "").strip()
     if barcode and db.query(models.Product).filter(models.Product.barcode == barcode, models.Product.id != product.id).first():
-        return _render_form(request, db, user, product=product, error=f"Barcode “{barcode}” is already assigned to another product.")
+        return _render_form(request, db, user, product=product, error=f"Barcode “{barcode}” is already assigned to another product.", back=back)
     old_total = Decimal(str(product.total_qty or 0))
     new_total_preview = _to_decimal(form.get("beginning_stock")) + _to_decimal(form.get("stock_qty"))
     adjustment_reason = (form.get("adjustment_reason") or "").strip()
     if new_total_preview != old_total and not adjustment_reason:
-        return _render_form(request, db, user, product=product,
+        return _render_form(request, db, user, product=product, back=back,
                              error="Select a reason for the stock quantity change before saving.")
 
     before = _product_snapshot(product)
@@ -767,7 +772,7 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
                 note=f"{reason_label}: {note_text}" if note_text else reason_label,
             ))
     db.commit()
-    return RedirectResponse("/products", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(safe_back_url(back, "/products"), status_code=status.HTTP_302_FOUND)
 
 
 @router.get("/products/pricing", response_class=HTMLResponse)
