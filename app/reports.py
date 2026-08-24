@@ -21,6 +21,7 @@ from . import models, pricing, settings_store
 from .database import get_db
 from .deps import get_current_user, is_staff
 from .products import low_stock_expr
+from .search_utils import multi_word_ilike
 from .templating import templates
 
 router = APIRouter()
@@ -314,7 +315,7 @@ def _cost_rows(db: Session, q: str = "", page: int = 1, page_size: int = INV_COS
     is the count across the WHOLE filtered set, not just the current page."""
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
-        query = query.filter(models.Product.name.ilike(f"%{q}%"))
+        query = query.filter(multi_word_ilike(models.Product.name, q))
 
     total = query.count()
     pages = max((total + page_size - 1) // page_size, 1)
@@ -960,7 +961,7 @@ def _pricing_rows_for(p: models.Product) -> dict:
 def _pricing_query(db: Session, q: str = "", category_id: int = 0, shelf_id: int = 0):
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
-        query = query.filter(models.Product.name.ilike(f"%{q}%"))
+        query = query.filter(multi_word_ilike(models.Product.name, q))
     if category_id:
         query = query.filter(models.Product.category_id == category_id)
     if shelf_id:
@@ -1005,7 +1006,7 @@ def inventory_pricing(
     # switching pills reflects what's really there — same idea as Inventory's.
     base_for_counts = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
-        base_for_counts = base_for_counts.filter(models.Product.name.ilike(f"%{q}%"))
+        base_for_counts = base_for_counts.filter(multi_word_ilike(models.Product.name, q))
     cat_counts = dict(
         base_for_counts.filter(models.Product.category_id.isnot(None))
         .with_entities(models.Product.category_id, func.count(models.Product.id))

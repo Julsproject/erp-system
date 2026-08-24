@@ -21,6 +21,7 @@ from .database import get_db
 from .deps import get_current_user, is_floor_staff, is_staff
 from .pos import _resolve_txn_datetime, _vat_of
 from .products import _get_or_create_category, _get_or_create_unit_type
+from .search_utils import multi_word_ilike
 from .templating import templates
 
 router = APIRouter()
@@ -162,7 +163,7 @@ def purchase_search(q: str = "", db: Session = Depends(get_db), user=Depends(get
     q = (q or "").strip()
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
-        query = query.filter(models.Product.name.ilike(f"%{q}%"))
+        query = query.filter(multi_word_ilike(models.Product.name, q))
     products = query.order_by(models.Product.name).limit(30).all()
     return {"products": [_purchase_product_payload(p) for p in products]}
 

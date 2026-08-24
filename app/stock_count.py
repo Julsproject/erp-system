@@ -25,6 +25,7 @@ from . import audit, models
 from .database import get_db
 from .deps import get_current_user, is_floor_staff
 from .products import ADJUSTMENT_REASON_LABELS, ADJUSTMENT_REASONS, _parse_upload
+from .search_utils import multi_word_ilike
 from .templating import templates
 
 router = APIRouter()
@@ -81,7 +82,7 @@ def _find_products(db: Session, q: str):
         return [barcode_hit]
     return (
         db.query(models.Product)
-        .filter(models.Product.is_active.is_(True), models.Product.name.ilike(f"%{q}%"))
+        .filter(models.Product.is_active.is_(True), multi_word_ilike(models.Product.name, q))
         .order_by(models.Product.name)
         .limit(15)
         .all()

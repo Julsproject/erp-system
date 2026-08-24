@@ -213,6 +213,7 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 .btn-link { color: var(--brand); text-decoration: none; font-weight: 600; font-size: 14.5px; background: none; border: none; cursor: pointer; padding: 0; }
 .btn-link:hover { text-decoration: underline; }
 .btn-link.danger { color: var(--danger); }
+.rename-btn { font-size: 11px; padding: 0 2px; }
 
 /* ---------- Cards ---------- */
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: 26px; }
@@ -980,15 +981,14 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
   /* Give the identifying column room so it wraps to 2 lines instead of 6. */
   table.grid td.strong { min-width: 128px; }
 
-  /* Bulk-select is a desktop workflow (bulk re-price, print barcode labels) —
-     nobody ticks 40 checkboxes on a phone. Dropping the column reclaims
-     space AND makes the product name the first cell, which is what we want
-     to pin below. Targeted by what the cell contains, not its position, so
-     it can't drift if a table's column order changes. */
-  table.grid thead th:has(> input[type="checkbox"]),
-  table.grid tbody td:has(> input.rowChk),
-  table.grid tbody td:has(> input.lineChk) { display: none; }
-  .bulk-bar { display: none !important; }
+  /* Bulk-select (Inventory's Assign to shelf / bulk price / labels) is
+     genuinely useful on a phone — walking the store re-shelving stock is a
+     mobile workflow, not a desktop one. Keep the checkbox column and the
+     action bar; just make the bar fit a narrow screen instead of hiding it. */
+  .bulk-bar {
+    width: 100%; max-width: 100%; box-sizing: border-box;
+    flex-wrap: wrap; bottom: 0; border-radius: 0;
+  }
 
   /* Pin the identifying column. You still scroll sideways for the numbers,
      but the product/customer name stays on screen, so a row is never a
@@ -1081,6 +1081,14 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
   }
   .row-actions .btn-link, .row-actions button.btn-link {
     min-height: 38px; display: inline-flex; align-items: center; padding: 0 8px;
+  }
+  /* The Inventory rename pencil sits right up against the product name at
+     11px with no padding — fine for a mouse cursor landing precisely on it,
+     impossible to hit with a fingertip. Same fix as row actions above. */
+  .rename-btn {
+    font-size: 15px; min-width: 34px; min-height: 34px;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 0 4px;
   }
   .nav-item { min-height: 42px; }
   /* Momentum scrolling for the wide tables, whatever the screen size. */

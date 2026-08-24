@@ -314,12 +314,16 @@
   </div>
 
   {% if overdue or due_soon %}
-  <h4 style="margin:18px 0 8px;font-size:13px;color:var(--muted);">Credit collections due soon or overdue</h4>
+  {% set credit_qs = ('&days=' ~ days) if not custom else ('&date_from=' ~ date_from ~ '&date_to=' ~ date_to) %}
+  <h4 id="credit-collections" style="margin:18px 0 8px;font-size:13px;color:var(--muted);">
+    Credit collections due soon or overdue
+    <span class="muted" style="font-weight:400;">({{ overdue|length + due_soon|length }} total)</span>
+  </h4>
   <div class="table-wrap">
     <table class="grid">
       <thead><tr><th>Invoice</th><th>Customer</th><th>Due</th><th>Status</th><th class="num">Outstanding</th><th></th></tr></thead>
       <tbody>
-        {% for e in overdue + due_soon %}
+        {% for e in credit_alerts_page %}
         <tr>
           <td class="strong">{{ e.sale.invoice_no }}</td>
           <td>{{ e.sale.customer_name or 'Walk-in' }}</td>
@@ -340,6 +344,13 @@
       </tbody>
     </table>
   </div>
+  {% if credit_pages > 1 %}
+  <div class="pager">
+    {% if credit_page > 1 %}<a class="btn-secondary" href="/?credit_page={{ credit_page - 1 }}{{ credit_qs }}#credit-collections">← Prev</a>{% endif %}
+    <span class="muted">Page {{ credit_page }} of {{ credit_pages }}</span>
+    {% if credit_page < credit_pages %}<a class="btn-secondary" href="/?credit_page={{ credit_page + 1 }}{{ credit_qs }}#credit-collections">Next →</a>{% endif %}
+  </div>
+  {% endif %}
   {% endif %}
 
   {% if out_of_stock or low_stock %}

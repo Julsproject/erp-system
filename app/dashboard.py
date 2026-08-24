@@ -122,12 +122,16 @@ def _pct_change(current: Decimal, previous: Decimal):
     return float((Decimal(str(current or 0)) - prev) / prev * 100)
 
 
+CREDIT_ALERT_PAGE_SIZE = 10
+
+
 @router.get("/", response_class=HTMLResponse)
 def dashboard(
     request: Request,
     days: int = 7,
     date_from: str = "",
     date_to: str = "",
+    credit_page: int = 1,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -356,6 +360,16 @@ def dashboard(
         elif sale.due_date <= horizon:
             due_soon.append(entry)
 
+    # Overdue first (more urgent), then due-soon — same order the table
+    # already showed, just paginated now instead of dumping every row at
+    # once when a lot of customers are behind.
+    credit_alerts = overdue + due_soon
+    credit_pages = max((len(credit_alerts) + CREDIT_ALERT_PAGE_SIZE - 1) // CREDIT_ALERT_PAGE_SIZE, 1)
+    credit_page = min(max(credit_page, 1), credit_pages)
+    credit_alerts_page = credit_alerts[
+        (credit_page - 1) * CREDIT_ALERT_PAGE_SIZE: credit_page * CREDIT_ALERT_PAGE_SIZE
+    ]
+
     # ---- payables (what we owe suppliers) ---------------------------------
     # A 'confirmed' receive-type purchase IS the payable — goods/cost already
     # moved, payment hasn't (fully). Outstanding nets out PurchaseSettlement
@@ -457,6 +471,7 @@ def dashboard(
             "out_of_stock": out_of_stock, "low_stock": low_stock, "no_cost": no_cost,
             "pdc_alert_count": pdc_alert_count,
             "credit_total": credit_total, "due_soon": due_soon, "overdue": overdue,
+            "credit_alerts_page": credit_alerts_page, "credit_page": credit_page, "credit_pages": credit_pages,
             "payables_total": payables_total, "payables_overdue": payables_overdue,
             "ar_aging_rows": _aging_rows(ar_aging, credit_total),
             "ap_aging_rows": _aging_rows(ap_aging, payables_total),

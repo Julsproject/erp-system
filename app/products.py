@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from . import audit, models, pricing, settings_store
 from .database import SessionLocal, get_db
 from .deps import get_current_user, is_staff, safe_back_url
+from .search_utils import multi_word_ilike
 from .templating import templates
 
 router = APIRouter()
@@ -316,7 +317,7 @@ def list_products(
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
         query = query.filter(
-            models.Product.name.ilike(f"%{q}%") | (models.Product.barcode == q)
+            multi_word_ilike(models.Product.name, q) | (models.Product.barcode == q)
         )
     if alert:
         # Only products whose selling price no longer covers cost.
@@ -358,7 +359,7 @@ def list_products(
     base_for_counts = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
         base_for_counts = base_for_counts.filter(
-            models.Product.name.ilike(f"%{q}%") | (models.Product.barcode == q)
+            multi_word_ilike(models.Product.name, q) | (models.Product.barcode == q)
         )
     if alert:
         base_for_counts = base_for_counts.filter(
@@ -465,7 +466,7 @@ def export_products_excel(
     q = (q or "").strip()
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
-        query = query.filter(models.Product.name.ilike(f"%{q}%") | (models.Product.barcode == q))
+        query = query.filter(multi_word_ilike(models.Product.name, q) | (models.Product.barcode == q))
     if alert:
         query = query.filter(models.Product.cost_price > 0, models.Product.selling_price <= models.Product.cost_price)
     if category_id:
@@ -565,6 +566,37 @@ def edit_product(product_id: int, request: Request, back: str = "", db: Session 
     if not product:
         return RedirectResponse("/products", status_code=302)
     return _render_form(request, db, user, product=product, back=back)
+
+
+@router.post("/products/{product_id:int}/rename")
+async def rename_product(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Quick rename straight from the Inventory list/search — a typo or a
+    naming-convention fix (e.g. "PILL BOX 10 X 10" spacing) shouldn't need
+    the full find -> Edit page -> Save -> search-again round trip."""
+    if not user:
+        return JSONResponse({"ok": False, "error": "Please sign in again."}, status_code=401)
+    if not is_staff(user):
+        return JSONResponse({"ok": False, "error": "You don't have permission to rename products."}, status_code=403)
+    product = db.get(models.Product, product_id)
+    if not product:
+        return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
+
+    data = await request.json()
+    new_name = (data.get("name") or "").strip()
+    if not new_name:
+        return JSONResponse({"ok": False, "error": "Name can't be empty."}, status_code=400)
+
+    old_name = product.name
+    if new_name != old_name:
+        product.name = new_name
+        audit.record(
+            db, user=user, request=request, action="update", entity_type="product",
+            entity_id=product.id, entity_label=product.name,
+            summary=f"Renamed “{old_name}” → “{new_name}”",
+            changes={"name": [old_name, new_name]},
+        )
+        db.commit()
+    return {"ok": True, "name": product.name}
 
 
 def _save_from_form(product: models.Product, db: Session, form):
@@ -828,7 +860,7 @@ def price_search(
     if q:
         barcode_hit = query.filter(models.Product.barcode == q).first()
         products = [barcode_hit] if barcode_hit else (
-            query.filter(models.Product.name.ilike(f"%{q}%")).order_by(models.Product.name).limit(100).all()
+            query.filter(multi_word_ilike(models.Product.name, q)).order_by(models.Product.name).limit(100).all()
         )
     else:
         products = query.order_by(models.Product.name).limit(200 if review else 60).all()
@@ -967,7 +999,7 @@ def merge_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_cu
         return {"products": []}
     products = (
         db.query(models.Product)
-        .filter(models.Product.is_active.is_(True), models.Product.name.ilike(f"%{q}%"))
+        .filter(models.Product.is_active.is_(True), multi_word_ilike(models.Product.name, q))
         .order_by(models.Product.name)
         .limit(20)
         .all()
@@ -1050,7 +1082,7 @@ def list_archived_products(
     query = db.query(models.Product).filter(models.Product.is_active.is_(False))
     if q:
         query = query.filter(
-            models.Product.name.ilike(f"%{q}%") | (models.Product.barcode == q)
+            multi_word_ilike(models.Product.name, q) | (models.Product.barcode == q)
         )
     products = query.order_by(models.Product.name).all()
     return templates.TemplateResponse(

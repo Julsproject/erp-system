@@ -182,7 +182,10 @@
           {% if p.units %}
           <button type="button" class="unit-toggle" onclick="toggleUnits(this, {{ p.id }})" title="Show units for this product">▸</button>
           {% endif %}
-          {{ p.name }}
+          <span class="prod-name-text" id="prodName{{ p.id }}">{{ p.name }}</span>
+          {% if is_admin_user %}
+          <button type="button" class="btn-link rename-btn" onclick="startRename({{ p.id }})" title="Rename this product">✎</button>
+          {% endif %}
           {% if p.cost_price and p.cost_price > 0 %}
             {% if not p.selling_price or p.selling_price <= 0 %}
             <span class="warn-tag" title="No selling price set">⚠ no price</span>
@@ -330,6 +333,66 @@ function toggleUnits(btn, productId) {
   btn.textContent = open ? '▾' : '▸';
   document.querySelectorAll('.subunit-row[data-parent-id="' + productId + '"]').forEach(row => {
     row.style.display = open ? '' : 'none';
+  });
+}
+
+// Rename a product straight from this list — a typo or naming-convention
+// fix shouldn't need the full find -> Edit page -> Save -> search-again
+// round trip. Built with DOM methods (no innerHTML) so a name containing
+// special characters can never break out of the markup.
+function startRename(id) {
+  const span = document.getElementById('prodName' + id);
+  const original = span.textContent;
+
+  const wrap = document.createElement('span');
+  wrap.style.cssText = 'display:inline-flex;align-items:center;gap:4px;';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = original;
+  input.style.cssText = 'font-weight:600;font-size:13.5px;padding:3px 6px;border:1px solid var(--brand);border-radius:6px;width:min(240px, 45vw);';
+  const okBtn = document.createElement('button');
+  okBtn.type = 'button'; okBtn.textContent = '✓'; okBtn.title = 'Save';
+  okBtn.className = 'btn-link rename-btn'; okBtn.style.color = '#15803d'; okBtn.style.fontWeight = '700';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button'; cancelBtn.textContent = '✕'; cancelBtn.title = 'Cancel';
+  cancelBtn.className = 'btn-link danger rename-btn';
+  wrap.append(input, okBtn, cancelBtn);
+  span.replaceWith(wrap);
+  input.focus();
+  input.select();
+
+  function cancel() { wrap.replaceWith(span); }
+
+  async function save() {
+    const newName = input.value.trim();
+    if (!newName) { input.focus(); return; }
+    if (newName === original) { cancel(); return; }
+    input.disabled = true; okBtn.disabled = true; cancelBtn.disabled = true;
+    try {
+      const res = await fetch('/products/' + id + '/rename', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ name: newName }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        span.textContent = data.name;
+        wrap.replaceWith(span);
+      } else {
+        alert(data.error || 'Could not rename.');
+        input.disabled = false; okBtn.disabled = false; cancelBtn.disabled = false;
+        input.focus();
+      }
+    } catch (e) {
+      alert('Network error — the rename was not saved.');
+      input.disabled = false; okBtn.disabled = false; cancelBtn.disabled = false;
+    }
+  }
+
+  okBtn.onclick = save;
+  cancelBtn.onclick = cancel;
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); save(); }
+    else if (e.key === 'Escape') cancel();
   });
 }
 </script>
