@@ -328,7 +328,9 @@ def list_products(
         query = query.filter(models.Product.category_id == category_id)
     if subcategory_id:
         query = query.filter(models.Product.subcategory_id == subcategory_id)
-    if shelf_id:
+    if shelf_id == -1:  # sentinel for "No shelf" — a real Shelf.id is never negative
+        query = query.filter(models.Product.shelf_id.is_(None))
+    elif shelf_id:
         query = query.filter(models.Product.shelf_id == shelf_id)
 
     total = query.count()
@@ -408,6 +410,7 @@ def list_products(
         .order_by(models.Shelf.name)
         .all()
     ) if shelf_counts else []
+    no_shelf_count = base_for_counts.filter(models.Product.shelf_id.is_(None)).count()
 
     return templates.TemplateResponse(
         "products/list.html",
@@ -438,6 +441,7 @@ def list_products(
             "shelf_id": shelf_id,
             "shelves": shelves,
             "shelf_counts": shelf_counts,
+            "no_shelf_count": no_shelf_count,
             "last_rollover_period": settings_store.get_setting(db, MONTH_END_SETTING_KEY, ""),
         },
     )
@@ -468,7 +472,9 @@ def export_products_excel(
         query = query.filter(models.Product.category_id == category_id)
     if subcategory_id:
         query = query.filter(models.Product.subcategory_id == subcategory_id)
-    if shelf_id:
+    if shelf_id == -1:  # sentinel for "No shelf" — a real Shelf.id is never negative
+        query = query.filter(models.Product.shelf_id.is_(None))
+    elif shelf_id:
         query = query.filter(models.Product.shelf_id == shelf_id)
     products = query.order_by(models.Product.name).all()
 
@@ -1242,6 +1248,81 @@ async def print_labels(request: Request, db: Session = Depends(get_db), user=Dep
         "products/labels.html",
         {"request": request, "app_name": request.app.title, "user": user, "labels": labels},
     )
+
+
+@router.post("/products/bulk-shelf", response_class=HTMLResponse)
+async def bulk_shelf_start(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Step 1: confirm which shelf, for the products selected in Inventory —
+    same two-step shape as Bulk Price Update. Same idea Stock Count already
+    has (assign a shelf to whatever's being counted), just reachable from
+    Inventory directly instead of only while a count is open."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
+    form = await request.form()
+    ids = sorted({int(i) for i in form.getlist("ids") if i.isdigit()})
+    if not ids:
+        return RedirectResponse("/products", status_code=302)
+    products = (
+        db.query(models.Product)
+        .filter(models.Product.id.in_(ids), models.Product.is_active.is_(True))
+        .order_by(models.Product.name)
+        .all()
+    )
+    shelves = db.query(models.Shelf).order_by(models.Shelf.name).all()
+    return templates.TemplateResponse(
+        "products/bulk_shelf.html",
+        {"request": request, "app_name": request.app.title, "user": user, "products": products, "shelves": shelves},
+    )
+
+
+@router.post("/products/bulk-shelf/apply")
+async def bulk_shelf_apply(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Step 2: move every selected product onto the picked shelf — this
+    REPLACES whatever shelf a product already had (unlike Stock Count's own
+    bulk-assign, which only fills products that have none yet; here the
+    point is a deliberate re-shelve of a chosen batch, so overwriting is the
+    correct default)."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
+    form = await request.form()
+    ids = sorted({int(i) for i in form.getlist("ids") if i.isdigit()})
+    if not ids:
+        return RedirectResponse("/products", status_code=302)
+    try:
+        shelf_id = int(form.get("shelf_id") or 0)
+    except ValueError:
+        shelf_id = 0
+    shelf = db.get(models.Shelf, shelf_id) if shelf_id else None
+    if not shelf:
+        return RedirectResponse("/products?bulk_msg=Pick+a+shelf+first.", status_code=status.HTTP_302_FOUND)
+
+    products = (
+        db.query(models.Product)
+        .filter(models.Product.id.in_(ids), models.Product.is_active.is_(True))
+        .all()
+    )
+    moved = 0
+    for p in products:
+        if p.shelf_id == shelf.id:
+            continue
+        old_shelf_name = p.shelf.name if p.shelf else "no shelf"
+        p.shelf = shelf
+        audit.record(
+            db, user=user, request=request, action="update", entity_type="product",
+            entity_id=p.id, entity_label=p.name,
+            summary=f"Bulk-assigned “{p.name}” to shelf {shelf.name}",
+            changes={"shelf": [old_shelf_name, shelf.name]},
+        )
+        moved += 1
+    db.commit()
+    msg = f"Moved {moved} product{'s' if moved != 1 else ''} to {shelf.name}"
+    if moved < len(products):
+        msg += f" ({len(products) - moved} already there)"
+    return RedirectResponse(f"/products?bulk_msg={msg}", status_code=status.HTTP_302_FOUND)
 
 
 # Human labels + in/out direction for the stock-movement reasons written across

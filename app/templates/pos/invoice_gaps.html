@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Invoice Number Gaps · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Find Missing Invoice Numbers</h1>
+    <p class="muted">Check a range of numbers against what's actually on file — a real sale/refund/exchange,
+      or logged as <a href="/pos/cancelled-receipts">cancelled/spoiled</a>. Anything left over is unaccounted for.</p>
+  </div>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<div class="card" style="max-width:560px;margin-bottom:18px;">
+  <form class="form" method="get" action="/pos/invoice-gaps">
+    <div class="full">
+      <label style="margin-bottom:6px;display:block;">Receipt Type <span class="muted">— pick one or more</span></label>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;">
+        {% for rt in receipt_types %}
+        <label class="checkbox" style="display:flex;align-items:center;gap:6px;font-weight:normal;">
+          <input type="checkbox" name="receipt_types" value="{{ rt }}" {{ 'checked' if rt in picked }}>
+          {{ rt }}
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="field-row full" style="display:flex;gap:14px;">
+      <label style="flex:1;">From
+        <input type="text" name="range_from" value="{{ range_from }}" placeholder="e.g. 34451" inputmode="numeric">
+      </label>
+      <label style="flex:1;">To
+        <input type="text" name="range_to" value="{{ range_to }}" placeholder="e.g. 35559" inputmode="numeric">
+      </label>
+    </div>
+    <p class="hint full" style="margin:2px 0 0;">Checked separately per booklet — DRS 52260 and DRB 52260 are two different receipts, so the same range against both isn't the same check.</p>
+    <div class="form-actions full">
+      <button class="btn" type="submit">Check range</button>
+    </div>
+  </form>
+</div>
+
+{% if results %}
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ results|length }}</span><span>Booklet{{ '' if results|length == 1 else 's' }} checked</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ results|sum(attribute='checked_count') }}</span><span>Numbers checked</span></div>
+  <div class="mini-stat {{ 'owed' if total_missing }}"><span class="mini-num">{{ total_missing }}</span><span>Missing (all booklets)</span></div>
+</div>
+
+{% for r in results %}
+<h3 class="ex-h">{{ r.receipt_type }} <span class="muted">— {{ r.accounted_count }} of {{ r.checked_count }} accounted for, {{ r.missing_count }} missing</span></h3>
+
+{% if r.missing %}
+<div class="table-wrap" style="margin-bottom:14px;">
+  <table class="grid">
+    <thead><tr><th>Missing #</th><th></th></tr></thead>
+    <tbody>
+      {% for m in r.missing %}
+      <tr>
+        <td class="strong">{{ r.receipt_type }}{{ m }}</td>
+        <td class="row-actions"><a class="btn-link" href="/pos/cancelled-receipts">Log as cancelled</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="pos-hint" style="margin-bottom:14px;">Nothing missing in {{ r.receipt_type }} — every number in this range is either a real transaction or logged as cancelled.</p>
+{% endif %}
+
+{% if r.cancelled_in_range %}
+<details style="margin-bottom:22px;">
+  <summary class="muted" style="cursor:pointer;font-size:12.5px;">
+    {{ r.cancelled_in_range|length }} number{{ '' if r.cancelled_in_range|length == 1 else 's' }} in this range already logged as cancelled — that's why they don't count as missing
+  </summary>
+  <div class="table-wrap" style="margin-top:8px;">
+    <table class="grid">
+      <thead><tr><th>Cancelled #</th><th>Date</th><th>Reason</th></tr></thead>
+      <tbody>
+        {% for c in r.cancelled_in_range %}
+        <tr>
+          <td class="strong">{{ r.receipt_type }}{{ c.number }}</td>
+          <td>{{ c.date }}</td>
+          <td>{{ c.reason or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endblock %}

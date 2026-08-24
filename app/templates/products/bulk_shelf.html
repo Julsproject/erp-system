@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Bulk Assign Shelf · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Bulk Assign Shelf</h1>
+    <p class="muted">{{ products|length }} product{{ '' if products|length == 1 else 's' }} selected</p>
+  </div>
+  <a class="btn-link" href="/products">← Back to inventory</a>
+</div>
+
+<form id="bulkShelfForm" method="post" action="/products/bulk-shelf/apply"
+      onsubmit="return confirm('Move all ' + {{ products|length }} + ' selected product(s) to this shelf? Any shelf they\'re already on is replaced.');">
+  {% for p in products %}
+  <input type="hidden" name="ids" value="{{ p.id }}">
+  {% endfor %}
+
+  <div class="card" style="max-width:420px;margin-bottom:18px;">
+    <label>Move to shelf
+      <select name="shelf_id" required>
+        <option value="">— choose shelf —</option>
+        {% for s in shelves %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <p class="hint" style="margin:10px 0 0;">This replaces whatever shelf each product is already on. No shelf yet is fine too.</p>
+    <div class="form-actions" style="margin-top:14px;">
+      <button class="btn" type="submit">Assign shelf</button>
+    </div>
+  </div>
+</form>
+
+<div class="table-wrap" style="max-width:720px;">
+  <table class="grid">
+    <thead><tr><th>Product</th><th>Current shelf</th></tr></thead>
+    <tbody>
+      {% for p in products %}
+      <tr>
+        <td class="strong">{{ p.name }}</td>
+        <td>{{ p.shelf.name if p.shelf else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

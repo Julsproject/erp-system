@@ -808,6 +808,120 @@ def pos_next_invoice(
 
 RECEIPT_TYPES = ["DRS", "DRB", "SI"]
 
+# A booklet handed a genuinely huge range (a typo, or "just show me
+# everything") would mean building and scanning that many numbers per
+# request — this caps it so the page fails fast with a clear message
+# instead of hanging.
+INVOICE_GAP_RANGE_LIMIT = 5000
+
+
+def _numeric_core(invoice_no: str):
+    """The first run of digits in an invoice #, as an int — or None.
+
+    A booklet number doesn't always come back as a clean "52259"; a
+    correction or a manual entry can leave it as "OS61763P" or "61764P".
+    The physical number is what a gap check actually cares about, so this
+    reads through whatever prefix/suffix got typed around it rather than
+    requiring an exact format match.
+    """
+    if not invoice_no:
+        return None
+    m = re.search(r"\d+", invoice_no)
+    return int(m.group()) if m else None
+
+
+def _invoice_gap_check(db: Session, receipt_type: str, lo: int, hi: int, width: int):
+    """Numbers in [lo, hi] for one booklet, sorted into three piles: sold
+    (a real sale/refund/exchange), cancelled (logged as spoiled — carried
+    with its reason/date so that side of the check is actually visible, not
+    just trusted), and missing (neither)."""
+    sold = set()
+    for (n,) in db.query(models.Sale.invoice_no).filter(models.Sale.receipt_type == receipt_type):
+        core = _numeric_core(n)
+        if core is not None:
+            sold.add(core)
+
+    cancelled_detail = {}  # number -> the CancelledReceipt row explaining it
+    for row in db.query(models.CancelledReceipt).filter(models.CancelledReceipt.receipt_type == receipt_type):
+        core = _numeric_core(row.invoice_no)
+        if core is not None:
+            cancelled_detail[core] = row
+
+    checked_count = hi - lo + 1
+    missing_nums = []
+    cancelled_in_range = []
+    for n in range(lo, hi + 1):
+        if n in sold:
+            continue
+        if n in cancelled_detail:
+            row = cancelled_detail[n]
+            cancelled_in_range.append({
+                "number": str(n).zfill(width),
+                "date": row.cancelled_date.strftime("%b %d, %Y") if row.cancelled_date else "",
+                "reason": row.reason or "",
+            })
+            continue
+        missing_nums.append(n)
+
+    return {
+        "receipt_type": receipt_type,
+        "checked_count": checked_count,
+        "accounted_count": checked_count - len(missing_nums),
+        "missing_count": len(missing_nums),
+        "missing": [str(n).zfill(width) for n in missing_nums],
+        "cancelled_in_range": cancelled_in_range,
+    }
+
+
+@router.get("/pos/invoice-gaps", response_class=HTMLResponse)
+def invoice_gaps(
+    request: Request, receipt_types: list[str] = Query(default=[]), range_from: str = "", range_to: str = "",
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    """Which numbers in a booklet's range are unaccounted for — not a real
+    sale/refund/exchange AND not logged as cancelled/spoiled. The BIR-style
+    check ("every number issued either sold or explained") run over a range
+    instead of one at a time. Runs against each booklet picked, since a
+    number range doesn't mean anything shared across booklets — DRS 52260
+    and DRB 52260 are two different physical receipts with their own history.
+    """
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    picked = [rt.strip().upper() for rt in receipt_types if rt.strip()]
+    picked = [rt for rt in RECEIPT_TYPES if rt in picked]  # de-dupe, keep RECEIPT_TYPES' order
+    range_from = (range_from or "").strip()
+    range_to = (range_to or "").strip()
+    error = None
+    results = []
+    total_missing = 0
+
+    if picked and range_from and range_to:
+        if not (range_from.isdigit() and range_to.isdigit()):
+            error = "From and To must be plain numbers, e.g. 34451."
+        else:
+            lo, hi = int(range_from), int(range_to)
+            if lo > hi:
+                lo, hi = hi, lo
+            if hi - lo + 1 > INVOICE_GAP_RANGE_LIMIT:
+                error = f"That's {hi - lo + 1:,} numbers — narrow it to {INVOICE_GAP_RANGE_LIMIT:,} or fewer at a time."
+            else:
+                width = max(len(range_from), len(range_to))
+                results = [_invoice_gap_check(db, rt, lo, hi, width) for rt in picked]
+                total_missing = sum(r["missing_count"] for r in results)
+
+    return templates.TemplateResponse(
+        "pos/invoice_gaps.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "receipt_types": RECEIPT_TYPES, "picked": picked,
+            "range_from": range_from, "range_to": range_to, "error": error,
+            "results": results, "total_missing": total_missing,
+        },
+    )
+
 
 @router.get("/pos/cancelled-receipts", response_class=HTMLResponse)
 def cancelled_receipts_list(

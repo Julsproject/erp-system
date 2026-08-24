@@ -119,8 +119,8 @@
   </details>
   {% endif %}
 
-  {% if shelves %}
-  {% set current_shelf = shelves|selectattr('id', 'equalto', shelf_id)|map(attribute='name')|first if shelf_id else None %}
+  {% if shelves or no_shelf_count %}
+  {% set current_shelf = 'No shelf' if shelf_id == -1 else (shelves|selectattr('id', 'equalto', shelf_id)|map(attribute='name')|first if shelf_id else None) %}
   <details class="filter-drop">
     <summary>{{ current_shelf or 'All shelves' }}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 9l6 6 6-6"/></svg>
@@ -128,6 +128,11 @@
     <div class="filter-panel pills-panel">
       <div class="cat-pills">
         <a class="cat-pill {{ 'active' if not shelf_id }}" href="/products?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}{{ 'subcategory_id=' ~ subcategory_id ~ '&' if subcategory_id }}shelf_id=0">All shelves</a>
+        {% if no_shelf_count %}
+        <a class="cat-pill {{ 'active' if shelf_id == -1 }}" href="/products?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}{{ 'subcategory_id=' ~ subcategory_id ~ '&' if subcategory_id }}shelf_id=-1">
+          No shelf <span class="cat-pill-count">{{ no_shelf_count }}</span>
+        </a>
+        {% endif %}
         {% for s in shelves %}
         <a class="cat-pill {{ 'active' if shelf_id == s.id }}" href="/products?{{ qs_base }}{{ 'category_id=' ~ category_id ~ '&' if category_id }}{{ 'subcategory_id=' ~ subcategory_id ~ '&' if subcategory_id }}shelf_id={{ s.id }}">
           {{ s.name }} <span class="cat-pill-count">{{ shelf_counts.get(s.id, 0) }}</span>
@@ -265,6 +270,7 @@
 <div class="bulk-bar" id="bulkBar" style="display:none;">
   <span><strong id="bulkCount">0</strong> selected</span>
   <button type="submit" form="bulkForm" formaction="/products/bulk-price" class="btn-secondary">💲 Bulk price update</button>
+  <button type="submit" form="bulkForm" formaction="/products/bulk-shelf" class="btn-secondary">📦 Assign to shelf</button>
   <button type="submit" form="bulkForm" formaction="/products/labels" class="btn-secondary">🏷 Print barcode labels</button>
   <button type="button" class="btn-link" onclick="clearAllChk()">Clear selection</button>
 </div>
