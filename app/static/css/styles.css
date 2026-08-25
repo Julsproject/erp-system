@@ -710,7 +710,6 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
 .pos-complete:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; transform: none; }
 
 @media (max-width: 900px) { .pos-grid { grid-template-columns: 1fr; } .pos-search-panel { position: static; } }
-@media (max-width: 900px) { .pricing-split { grid-template-columns: 1fr; } .pricing-right { position: static; } }
 
 /* ---------- Discount type toggle ---------- */
 .disc-cell { display: inline-flex; align-items: center; gap: 4px; justify-content: flex-end; }
@@ -1372,6 +1371,15 @@ kbd {
 .pricing-split { display: grid; grid-template-columns: 0.85fr 1.4fr; gap: 20px; align-items: start; }
 .pricing-left { padding: 16px; }
 .pricing-right { padding: 20px; position: sticky; top: 20px; }
+/* Stacked below 900px — declared after the base grid above so it actually
+   wins the cascade (equal specificity, later wins); a copy of this used to
+   sit earlier in the file and lost to the rule above, leaving the edit
+   panel squeezed into a ~200px sliver on phones with its Save/Close and
+   rename buttons pushed off the right edge of the screen. */
+@media (max-width: 900px) {
+  .pricing-split { grid-template-columns: 1fr; }
+  .pricing-right { position: static; }
+}
 .review-toggle {
   display: flex; align-items: center; gap: 9px; padding: 4px 2px 14px; margin-bottom: 10px;
   cursor: pointer; font-size: 13.5px; font-weight: 600; color: var(--ink);
@@ -1391,6 +1399,13 @@ kbd {
 .price-item:hover { background: var(--brand-tint); border-color: #d6d9fb; }
 .price-item.selected { background: var(--brand-tint); border-color: var(--brand); box-shadow: 0 0 0 2px rgba(79,70,229,.14); }
 .price-item-name { font-weight: 600; font-size: 14px; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+/* The edit panel's header (name + rename pencil) reuses this class for its
+   font/weight, but wants the opposite layout: name and pencil sit right
+   next to each other, and only the review flag (when present) gets pushed
+   to the far right — space-between with the flag hidden left the pencil
+   stranded at the far edge, nowhere near the name it edits. */
+.pe-header { justify-content: flex-start; }
+.pe-header .pe-review-flag { margin-left: auto; }
 .price-item-sub { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
 .pe-cost-input { width: 140px; padding: 9px 11px; border: 1px solid var(--line-2); border-radius: 8px; font-size: 15px; font-weight: 700; background: var(--surface); color: var(--ink); font-variant-numeric: tabular-nums; }
 .pe-cost-input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }

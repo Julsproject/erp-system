@@ -27,8 +27,9 @@
   </div>
 
   <div class="card pricing-right" id="priceEditCard" style="display:none;">
-    <div class="price-item-name" style="font-size:17px;margin-bottom:2px;">
+    <div class="price-item-name pe-header" style="font-size:17px;margin-bottom:2px;">
       <span id="peName">—</span>
+      <button type="button" class="btn-link rename-btn" onclick="peStartRename()" title="Rename this product">✎</button>
       <span class="pe-review-flag" id="peFlag" style="display:none;"></span>
     </div>
     <p class="muted" id="peBarcode" style="margin:0 0 14px;font-size:12.5px;"></p>
@@ -187,6 +188,69 @@ function peCancel() {
   document.getElementById('priceEmptyCard').style.display = 'block';
   document.getElementById('priceEmptyCard').textContent = 'Select an item on the left to edit its cost and pricing.';
   peRenderList();
+}
+
+function peStartRename() {
+  if (!peSelectedId) return;
+  const span = document.getElementById('peName');
+  const original = span.textContent;
+  const pencil = span.nextElementSibling;
+  pencil.style.display = 'none';
+
+  const wrap = document.createElement('span');
+  wrap.style.cssText = 'display:inline-flex;align-items:center;gap:4px;';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = original;
+  input.style.cssText = 'font-weight:600;font-size:15px;padding:3px 6px;border:1px solid var(--brand);border-radius:6px;width:min(280px, 60vw);';
+  const okBtn = document.createElement('button');
+  okBtn.type = 'button'; okBtn.textContent = '✓'; okBtn.title = 'Save';
+  okBtn.className = 'btn-link rename-btn'; okBtn.style.color = '#15803d'; okBtn.style.fontWeight = '700';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button'; cancelBtn.textContent = '✕'; cancelBtn.title = 'Cancel';
+  cancelBtn.className = 'btn-link danger rename-btn';
+  wrap.append(input, okBtn, cancelBtn);
+  span.replaceWith(wrap);
+  input.focus();
+  input.select();
+
+  function cancel() { wrap.replaceWith(span); pencil.style.display = ''; }
+
+  async function save() {
+    const newName = input.value.trim();
+    if (!newName) { input.focus(); return; }
+    if (newName === original) { cancel(); return; }
+    input.disabled = true; okBtn.disabled = true; cancelBtn.disabled = true;
+    try {
+      const res = await fetch('/products/' + peSelectedId + '/rename', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ name: newName }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        span.textContent = data.name;
+        wrap.replaceWith(span);
+        pencil.style.display = '';
+        const p = peProducts.find(x => x.id === peSelectedId);
+        if (p) p.name = data.name;
+        peRenderList();
+      } else {
+        alert(data.error || 'Could not rename.');
+        input.disabled = false; okBtn.disabled = false; cancelBtn.disabled = false;
+        input.focus();
+      }
+    } catch (e) {
+      alert('Network error — the rename was not saved.');
+      input.disabled = false; okBtn.disabled = false; cancelBtn.disabled = false;
+    }
+  }
+
+  okBtn.onclick = save;
+  cancelBtn.onclick = cancel;
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); save(); }
+    else if (e.key === 'Escape') cancel();
+  });
 }
 
 /* Mirrors app/pricing.py's markup_price / margin_price / true_margin. */
