@@ -559,7 +559,10 @@ async function refreshInvoiceSuggestion() {
 // clobbered by the draft restore that runs afterward; doing it here at
 // parse time raced restoreDraft() and could leave the invoice blank even
 // with a booklet already selected.
-searchBox.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 180); });
+searchBox.addEventListener('input', () => {
+  localStorage.setItem('pos_last_search', searchBox.value);
+  clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 180);
+});
 // A barcode scanner types the code then sends Enter — resolve immediately
 // (no debounce) and, if it matched exactly one product, add it straight to
 // the cart and clear the box so the next scan is ready to go.
@@ -575,6 +578,7 @@ searchBox.addEventListener('keydown', async (e) => {
   if (products.length === 1) {
     addFoundProduct(products[0]);
     searchBox.value = '';
+    localStorage.removeItem('pos_last_search');
     renderResults([]);
     document.getElementById('posResults').innerHTML = '<p class="pos-hint">Type a product name to begin.</p>';
   } else {
@@ -1650,6 +1654,7 @@ function returnManualAdd(p) {
   });
   renderReturnLines();
   searchBox.value = '';
+  localStorage.removeItem('pos_last_search');
   document.getElementById('posResults').innerHTML = '<p class="pos-hint">' + escapeHtml(p.name) + ' added to the return — search again to add another.</p>';
 }
 async function lookupReturn() {
@@ -1730,7 +1735,10 @@ let quoCart = [];
 let quoDiscType = 'amt';
 let quoSearchTimer = null;
 const quoSearchBox = document.getElementById('quoSearch');
-quoSearchBox.addEventListener('input', () => { clearTimeout(quoSearchTimer); quoSearchTimer = setTimeout(quoRunSearch, 180); });
+quoSearchBox.addEventListener('input', () => {
+  localStorage.setItem('pos_quo_last_search', quoSearchBox.value);
+  clearTimeout(quoSearchTimer); quoSearchTimer = setTimeout(quoRunSearch, 180);
+});
 // Same barcode-scanner behavior as the Sale search box: Enter resolves
 // immediately (no debounce), and if it matched exactly one product, adds it
 // straight to the quote and clears the box for the next scan.
@@ -1746,6 +1754,7 @@ quoSearchBox.addEventListener('keydown', async (e) => {
   if (products.length === 1) {
     quoAdd(products[0]);
     quoSearchBox.value = '';
+    localStorage.removeItem('pos_quo_last_search');
     document.getElementById('quoResults').innerHTML = '<p class="pos-hint">Type a product name to begin.</p>';
   } else {
     quoRenderResults(products);
@@ -1953,5 +1962,12 @@ if (receiptTypeBox.value && !invoiceBox.value.trim()) {
   onReceiptTypeChange();
 }
 restoreTxnDatePref();
+
+// Bring back whatever was typed into a search box before the last refresh —
+// covers the browser's own back/forward too, since both re-run this script.
+const savedPosSearch = localStorage.getItem('pos_last_search');
+if (savedPosSearch) { searchBox.value = savedPosSearch; runSearch(); }
+const savedQuoSearch = localStorage.getItem('pos_quo_last_search');
+if (savedQuoSearch) { quoSearchBox.value = savedQuoSearch; quoRunSearch(); }
 </script>
 {% endblock %}

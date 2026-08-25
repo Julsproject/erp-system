@@ -92,7 +92,10 @@ let peReviewOnly = {{ 'true' if initial_review else 'false' }};
 
 const peSearchBox = document.getElementById('priceSearch');
 let peTimer = null;
-peSearchBox.addEventListener('input', () => { clearTimeout(peTimer); peTimer = setTimeout(peLoadList, 200); });
+peSearchBox.addEventListener('input', () => {
+  localStorage.setItem('pricing_last_search', peSearchBox.value);
+  clearTimeout(peTimer); peTimer = setTimeout(peLoadList, 200);
+});
 peSearchBox.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter') return;
   e.preventDefault();
@@ -370,6 +373,8 @@ async function peSave() {
   msg.style.display = 'block';
 }
 
+const savedPriceSearch = localStorage.getItem('pricing_last_search');
+if (savedPriceSearch) peSearchBox.value = savedPriceSearch;
 peLoadList();
 </script>
 {% endblock %}

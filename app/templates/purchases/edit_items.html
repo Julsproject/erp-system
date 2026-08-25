@@ -66,7 +66,13 @@ function lineTotalOf(line) { return (Number(line.qty) || 0) * (Number(line.unitC
 
 const searchBox = document.getElementById('posSearch');
 let searchTimer = null;
-searchBox.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 180); });
+// Scoped to this purchase's id so a leftover search from editing a
+// different purchase never bleeds into this one.
+const searchStorageKey = 'edit_purchase_search_' + purchaseId;
+searchBox.addEventListener('input', () => {
+  localStorage.setItem(searchStorageKey, searchBox.value);
+  clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 180);
+});
 searchBox.addEventListener('keydown', async (e) => {
   if (e.key !== 'Enter') return;
   e.preventDefault();
@@ -79,6 +85,7 @@ searchBox.addEventListener('keydown', async (e) => {
   if (products.length === 1) {
     addToCart(products[0]);
     searchBox.value = '';
+    localStorage.removeItem(searchStorageKey);
     document.getElementById('posResults').innerHTML = '<p class="pos-hint">Type a product name to add it.</p>';
   } else {
     renderResults(products);
@@ -183,5 +190,7 @@ async function saveEdit() {
 }
 
 renderCart();
+const savedEditPurchaseSearch = localStorage.getItem(searchStorageKey);
+if (savedEditPurchaseSearch) { searchBox.value = savedEditPurchaseSearch; runSearch(); }
 </script>
 {% endblock %}
