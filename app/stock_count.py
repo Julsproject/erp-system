@@ -339,14 +339,13 @@ def stock_count_view(count_id: int, request: Request, db: Session = Depends(get_
 
 
 @router.post("/stock-count/{count_id:int}/scan")
-async def stock_count_scan(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def stock_count_scan(count_id: int, data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user or not is_floor_staff(user):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     count = db.get(models.StockCount, count_id)
     if not count or count.status != "open":
         return JSONResponse({"ok": False, "error": "This count isn't open anymore."}, status_code=400)
 
-    data = await request.json()
     add_qty = _dec(data.get("qty"), "1")
 
     # A disambiguation pick (from a previous ambiguous name search) sends the
@@ -383,7 +382,7 @@ async def stock_count_scan(count_id: int, request: Request, db: Session = Depend
 
 
 @router.post("/stock-count/{count_id:int}/add-shelf")
-async def stock_count_add_shelf(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def stock_count_add_shelf(count_id: int, data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Bulk-add every product on one shelf as a line (counted_qty starts at
     0, same as a freshly-scanned line) — lets a count be worked shelf by
     shelf instead of hunting the alphabetical product list. Shelves are
@@ -394,7 +393,6 @@ async def stock_count_add_shelf(count_id: int, request: Request, db: Session = D
     if not count or count.status != "open":
         return JSONResponse({"ok": False, "error": "This count isn't open anymore."}, status_code=400)
 
-    data = await request.json()
     try:
         shelf_id = int(data.get("shelf_id") or 0)
     except (TypeError, ValueError):
@@ -434,7 +432,7 @@ async def stock_count_add_shelf(count_id: int, request: Request, db: Session = D
 
 
 @router.post("/stock-count/{count_id:int}/assign-shelf")
-async def stock_count_assign_shelf(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def stock_count_assign_shelf(count_id: int, data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Put every counted product that has no shelf yet onto one shelf.
 
     The same idea the count-sheet import already offers, but available while
@@ -449,7 +447,6 @@ async def stock_count_assign_shelf(count_id: int, request: Request, db: Session 
     if not count or count.status != "open":
         return JSONResponse({"ok": False, "error": "This count isn't open anymore."}, status_code=400)
 
-    data = await request.json()
     try:
         shelf_id = int(data.get("shelf_id") or 0)
     except (TypeError, ValueError):
@@ -518,7 +515,7 @@ def stock_count_import_form(count_id: int, request: Request, db: Session = Depen
 
 
 @router.post("/stock-count/{count_id:int}/import", response_class=HTMLResponse)
-async def stock_count_import_upload(
+def stock_count_import_upload(
     count_id: int, request: Request, file: UploadFile = File(...), assign_shelf_id: int = Form(0),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
@@ -530,7 +527,7 @@ async def stock_count_import_upload(
     if not count or count.status != "open":
         return RedirectResponse("/stock-count", status_code=302)
 
-    contents = await file.read()
+    contents = file.file.read()
     rows, error = _parse_upload(
         file.filename, contents,
         header_map=HEADER_MAP_COUNT, fields=FIELDS_COUNT,
@@ -655,7 +652,7 @@ def stock_count_search(count_id: int, q: str = "", db: Session = Depends(get_db)
 
 
 @router.post("/stock-count/{count_id:int}/line/{line_id:int}/set")
-async def stock_count_set_line(count_id: int, line_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def stock_count_set_line(count_id: int, line_id: int, data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user or not is_floor_staff(user):
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     count = db.get(models.StockCount, count_id)
@@ -665,7 +662,6 @@ async def stock_count_set_line(count_id: int, line_id: int, request: Request, db
     if not line or line.stock_count_id != count.id:
         return JSONResponse({"ok": False, "error": "Line not found."}, status_code=404)
 
-    data = await request.json()
     try:
         new_qty = Decimal(str(data.get("counted_qty", "")).strip().replace(",", ""))
     except InvalidOperation:
@@ -679,7 +675,7 @@ async def stock_count_set_line(count_id: int, line_id: int, request: Request, db
 
 
 @router.post("/stock-count/{count_id:int}/line/{line_id:int}/set-units")
-async def stock_count_set_line_units(count_id: int, line_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def stock_count_set_line_units(count_id: int, line_id: int, data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Per-unit count entry — e.g. '2 FORWARD, 3 Elf, 1 Elf 1/2 physically on
     the shelf' — resolved into the one counted_qty (base units) everything
     else reads, so this is purely a friendlier way to arrive at that number."""
@@ -695,7 +691,6 @@ async def stock_count_set_line_units(count_id: int, line_id: int, request: Reque
     if not product:
         return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
 
-    data = await request.json()
     raw = data.get("units") or {}
     if not isinstance(raw, dict):
         return JSONResponse({"ok": False, "error": "Invalid data."}, status_code=400)

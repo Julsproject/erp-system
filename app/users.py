@@ -1,5 +1,5 @@
 """User accounts (admin only) — needed so the owner can create cashier logins."""
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -65,15 +65,19 @@ def edit_user(user_id: int, request: Request, db: Session = Depends(get_db), use
 
 
 @router.post("/users")
-async def create_user(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def create_user(
+    request: Request,
+    username: str = Form(""), password: str = Form(""), full_name: str = Form(""),
+    role: str = Form("cashier"), status_field: str = Form("active", alias="status"),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
         return RedirectResponse("/", status_code=302)
 
-    form = await request.form()
-    username = (form.get("username") or "").strip().lower()
-    password = form.get("password") or ""
+    username = (username or "").strip().lower()
+    password = password or ""
     if not username:
         return _render_form(request, user, error="Username is required.")
     if len(password) < 4:
@@ -81,13 +85,13 @@ async def create_user(request: Request, db: Session = Depends(get_db), user=Depe
     if db.query(models.User).filter(func.lower(models.User.username) == username).first():
         return _render_form(request, user, error=f"Username '{username}' is already taken.")
 
-    role = (form.get("role") or "cashier").strip().lower()
+    role = (role or "cashier").strip().lower()
     new_user = models.User(
         username=username,
-        full_name=(form.get("full_name") or "").strip() or None,
+        full_name=(full_name or "").strip() or None,
         password_hash=hash_password(password),
         role=role,
-        is_active=(form.get("status") or "active") == "active",
+        is_active=(status_field or "active") == "active",
     )
     db.add(new_user)
     db.flush()
@@ -101,7 +105,12 @@ async def create_user(request: Request, db: Session = Depends(get_db), user=Depe
 
 
 @router.post("/users/{user_id:int}")
-async def update_user(user_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def update_user(
+    user_id: int, request: Request,
+    full_name: str = Form(""), role: str = Form("cashier"), status_field: str = Form("active", alias="status"),
+    password: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
@@ -110,12 +119,11 @@ async def update_user(user_id: int, request: Request, db: Session = Depends(get_
     if not target:
         return RedirectResponse("/users", status_code=302)
 
-    form = await request.form()
     before = {"full_name": target.full_name, "role": target.role,
               "status": "active" if target.is_active else "disabled"}
-    target.full_name = (form.get("full_name") or "").strip() or None
-    new_role = (form.get("role") or "cashier").strip().lower()
-    active = (form.get("status") or "active") == "active"
+    target.full_name = (full_name or "").strip() or None
+    new_role = (role or "cashier").strip().lower()
+    active = (status_field or "active") == "active"
 
     # Don't let the last admin lock everyone out of user management.
     if target.role == "admin" and (new_role != "admin" or not active):
@@ -131,7 +139,7 @@ async def update_user(user_id: int, request: Request, db: Session = Depends(get_
     target.is_active = active
 
     pw_changed = False
-    password = form.get("password") or ""
+    password = password or ""
     if password:
         if len(password) < 4:
             return _render_form(request, user, target=target, error="Password must be at least 4 characters.")

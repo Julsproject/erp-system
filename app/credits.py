@@ -3,7 +3,7 @@ import io
 from datetime import date, datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Form, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -435,7 +435,12 @@ def _apply_batch_payment(db: Session, user, customer, targets, method: str, ref_
 
 
 @router.post("/credits/{customer_id:int}/pay-full")
-async def pay_full_submit(customer_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def pay_full_submit(
+    customer_id: int, request: Request,
+    method: str = Form("cash"), ref_no: str = Form(""), payment_date: str = Form(""),
+    cheque_date: str = Form(""), bank: str = Form(""), cheque_no: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -446,9 +451,9 @@ async def pay_full_submit(customer_id: int, request: Request, db: Session = Depe
     owed = _outstanding_sales(db, customer_id)
     total = sum((o for _, o in owed), Decimal("0"))
 
-    form = await request.form()
-    method = (form.get("method") or "cash").strip().lower()
-    ref_no = (form.get("ref_no") or "").strip() or None
+    method = (method or "cash").strip().lower()
+    ref_no = (ref_no or "").strip() or None
+    form = {"cheque_date": cheque_date, "payment_date": payment_date, "bank": bank, "cheque_no": cheque_no}
 
     if not owed:
         return RedirectResponse(f"/credits/{customer_id}", status_code=status.HTTP_302_FOUND)
@@ -460,7 +465,7 @@ async def pay_full_submit(customer_id: int, request: Request, db: Session = Depe
             {
                 "request": request, "app_name": request.app.title, "user": user,
                 "customer": customer, "owed": owed, "total": total, "methods": SETTLE_METHODS, "error": error,
-                "payment_date": form.get("payment_date") or "", "today_iso": datetime.now(MANILA).date().isoformat(),
+                "payment_date": payment_date or "", "today_iso": datetime.now(MANILA).date().isoformat(),
             },
         )
     db.commit()
@@ -495,7 +500,13 @@ def pay_selected_form(
 
 
 @router.post("/credits/{customer_id:int}/pay-selected")
-async def pay_selected_submit(customer_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def pay_selected_submit(
+    customer_id: int, request: Request,
+    sale_ids: list[str] = Form([]),
+    method: str = Form("cash"), ref_no: str = Form(""), payment_date: str = Form(""),
+    cheque_date: str = Form(""), bank: str = Form(""), cheque_no: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -504,15 +515,15 @@ async def pay_selected_submit(customer_id: int, request: Request, db: Session = 
     if not customer:
         return RedirectResponse("/credits", status_code=302)
 
-    form = await request.form()
-    ids = {int(i) for i in form.getlist("sale_ids") if i.isdigit()}
+    ids = {int(i) for i in sale_ids if i.isdigit()}
     owed = [(s, o) for s, o in _outstanding_sales(db, customer_id) if s.id in ids]
     if not owed:
         return RedirectResponse(f"/credits/{customer_id}", status_code=status.HTTP_302_FOUND)
     total = sum((o for _, o in owed), Decimal("0"))
 
-    method = (form.get("method") or "cash").strip().lower()
-    ref_no = (form.get("ref_no") or "").strip() or None
+    method = (method or "cash").strip().lower()
+    ref_no = (ref_no or "").strip() or None
+    form = {"cheque_date": cheque_date, "payment_date": payment_date, "bank": bank, "cheque_no": cheque_no}
 
     error = _apply_batch_payment(db, user, customer, owed, method, ref_no, form)
     if error:
@@ -521,7 +532,7 @@ async def pay_selected_submit(customer_id: int, request: Request, db: Session = 
             {
                 "request": request, "app_name": request.app.title, "user": user,
                 "customer": customer, "owed": owed, "total": total, "methods": SETTLE_METHODS, "error": error,
-                "payment_date": form.get("payment_date") or "", "today_iso": datetime.now(MANILA).date().isoformat(),
+                "payment_date": payment_date or "", "today_iso": datetime.now(MANILA).date().isoformat(),
             },
         )
     db.commit()

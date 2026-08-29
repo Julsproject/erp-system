@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from . import audit, models, pricing, settings_store
 from .database import SessionLocal, get_db
@@ -569,7 +570,7 @@ def edit_product(product_id: int, request: Request, back: str = "", db: Session 
 
 
 @router.post("/products/{product_id:int}/rename")
-async def rename_product(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def rename_product(product_id: int, data: dict, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Quick rename straight from the Inventory list/search — a typo or a
     naming-convention fix (e.g. "PILL BOX 10 X 10" spacing) shouldn't need
     the full find -> Edit page -> Save -> search-again round trip."""
@@ -581,7 +582,6 @@ async def rename_product(product_id: int, request: Request, db: Session = Depend
     if not product:
         return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
 
-    data = await request.json()
     new_name = (data.get("name") or "").strip()
     if not new_name:
         return JSONResponse({"ok": False, "error": "Name can't be empty."}, status_code=400)
@@ -739,22 +739,31 @@ async def create_product(request: Request, db: Session = Depends(get_db), user=D
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
     form = await request.form()
-    if not (form.get("name") or "").strip():
-        return _render_form(request, db, user, product=None, error="Product name is required.")
-    barcode = (form.get("barcode") or "").strip()
-    if barcode and db.query(models.Product).filter(models.Product.barcode == barcode).first():
-        return _render_form(request, db, user, product=None, error=f"Barcode “{barcode}” is already assigned to another product.")
-    product = models.Product()
-    db.add(product)  # add before _save_from_form so its internal flush (for the units-ladder chain) can assign ids
-    _save_from_form(product, db, form)
-    db.flush()  # assign product.id so the audit row can reference it
-    audit.record(
-        db, user=user, request=request, action="create", entity_type="product",
-        entity_id=product.id, entity_label=product.name,
-        summary=f"Created product “{product.name}”",
-    )
-    db.commit()
-    return RedirectResponse("/products", status_code=status.HTTP_302_FOUND)
+
+    # The DB work below is synchronous SQLAlchemy — running it directly in
+    # this async function would block the whole app for every other user
+    # for as long as it takes. run_in_threadpool moves it off the event
+    # loop, same as any plain `def` route gets for free; only the form
+    # parsing above (which genuinely needs await) stays on the loop.
+    def _do():
+        if not (form.get("name") or "").strip():
+            return _render_form(request, db, user, product=None, error="Product name is required.")
+        barcode = (form.get("barcode") or "").strip()
+        if barcode and db.query(models.Product).filter(models.Product.barcode == barcode).first():
+            return _render_form(request, db, user, product=None, error=f"Barcode “{barcode}” is already assigned to another product.")
+        product = models.Product()
+        db.add(product)  # add before _save_from_form so its internal flush (for the units-ladder chain) can assign ids
+        _save_from_form(product, db, form)
+        db.flush()  # assign product.id so the audit row can reference it
+        audit.record(
+            db, user=user, request=request, action="create", entity_type="product",
+            entity_id=product.id, entity_label=product.name,
+            summary=f"Created product “{product.name}”",
+        )
+        db.commit()
+        return RedirectResponse("/products", status_code=status.HTTP_302_FOUND)
+
+    return await run_in_threadpool(_do)
 
 
 @router.post("/products/{product_id:int}")
@@ -763,54 +772,59 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
-    product = db.get(models.Product, product_id)
-    if not product:
-        return RedirectResponse("/products", status_code=302)
     form = await request.form()
-    back = form.get("back") or ""
-    if not (form.get("name") or "").strip():
-        return _render_form(request, db, user, product=product, error="Product name is required.", back=back)
-    barcode = (form.get("barcode") or "").strip()
-    if barcode and db.query(models.Product).filter(models.Product.barcode == barcode, models.Product.id != product.id).first():
-        return _render_form(request, db, user, product=product, error=f"Barcode “{barcode}” is already assigned to another product.", back=back)
-    old_total = Decimal(str(product.total_qty or 0))
-    new_total_preview = _to_decimal(form.get("beginning_stock")) + _to_decimal(form.get("stock_qty"))
-    adjustment_reason = (form.get("adjustment_reason") or "").strip()
-    if new_total_preview != old_total and not adjustment_reason:
-        return _render_form(request, db, user, product=product, back=back,
-                             error="Select a reason for the stock quantity change before saving.")
 
-    before = _product_snapshot(product)
-    _save_from_form(product, db, form)
-    db.flush()
-    after = _product_snapshot(product)
-    new_total = Decimal(str(product.total_qty or 0))
-    changes = audit.diff(before, after)
-    if changes:
-        # Flag a stock correction distinctly — it's the theft-sensitive edit.
-        stock_touched = "stock_qty" in changes or "beginning_stock" in changes
-        audit.record(
-            db, user=user, request=request,
-            action="adjust_stock" if stock_touched else "update",
-            entity_type="product", entity_id=product.id, entity_label=product.name,
-            summary=(f"Adjusted stock for “{product.name}”" if stock_touched else f"Edited “{product.name}”"),
-            changes=changes,
-        )
-        # Record the net stock change as a movement too, so the Stock Card
-        # ledger reconciles — manual edits used to leave no trace here. Value
-        # it at current cost so it also shows up as shrinkage/gain in P&L.
-        delta = new_total - old_total
-        if delta != 0:
-            unit_cost = Decimal(str(product.cost_price or 0))
-            reason_label = ADJUSTMENT_REASON_LABELS.get(adjustment_reason, adjustment_reason or "manual edit")
-            note_text = (form.get("adjustment_note") or "").strip()
-            db.add(models.StockMovement(
-                product_id=product.id, qty_base=delta, reason="adjustment", ref="manual edit",
-                unit_cost=unit_cost, value=delta * unit_cost,
-                note=f"{reason_label}: {note_text}" if note_text else reason_label,
-            ))
-    db.commit()
-    return RedirectResponse(safe_back_url(back, "/products"), status_code=status.HTTP_302_FOUND)
+    # See create_product just above — same reason for the threadpool hop.
+    def _do():
+        product = db.get(models.Product, product_id)
+        if not product:
+            return RedirectResponse("/products", status_code=302)
+        back = form.get("back") or ""
+        if not (form.get("name") or "").strip():
+            return _render_form(request, db, user, product=product, error="Product name is required.", back=back)
+        barcode = (form.get("barcode") or "").strip()
+        if barcode and db.query(models.Product).filter(models.Product.barcode == barcode, models.Product.id != product.id).first():
+            return _render_form(request, db, user, product=product, error=f"Barcode “{barcode}” is already assigned to another product.", back=back)
+        old_total = Decimal(str(product.total_qty or 0))
+        new_total_preview = _to_decimal(form.get("beginning_stock")) + _to_decimal(form.get("stock_qty"))
+        adjustment_reason = (form.get("adjustment_reason") or "").strip()
+        if new_total_preview != old_total and not adjustment_reason:
+            return _render_form(request, db, user, product=product, back=back,
+                                 error="Select a reason for the stock quantity change before saving.")
+
+        before = _product_snapshot(product)
+        _save_from_form(product, db, form)
+        db.flush()
+        after = _product_snapshot(product)
+        new_total = Decimal(str(product.total_qty or 0))
+        changes = audit.diff(before, after)
+        if changes:
+            # Flag a stock correction distinctly — it's the theft-sensitive edit.
+            stock_touched = "stock_qty" in changes or "beginning_stock" in changes
+            audit.record(
+                db, user=user, request=request,
+                action="adjust_stock" if stock_touched else "update",
+                entity_type="product", entity_id=product.id, entity_label=product.name,
+                summary=(f"Adjusted stock for “{product.name}”" if stock_touched else f"Edited “{product.name}”"),
+                changes=changes,
+            )
+            # Record the net stock change as a movement too, so the Stock Card
+            # ledger reconciles — manual edits used to leave no trace here. Value
+            # it at current cost so it also shows up as shrinkage/gain in P&L.
+            delta = new_total - old_total
+            if delta != 0:
+                unit_cost = Decimal(str(product.cost_price or 0))
+                reason_label = ADJUSTMENT_REASON_LABELS.get(adjustment_reason, adjustment_reason or "manual edit")
+                note_text = (form.get("adjustment_note") or "").strip()
+                db.add(models.StockMovement(
+                    product_id=product.id, qty_base=delta, reason="adjustment", ref="manual edit",
+                    unit_cost=unit_cost, value=delta * unit_cost,
+                    note=f"{reason_label}: {note_text}" if note_text else reason_label,
+                ))
+        db.commit()
+        return RedirectResponse(safe_back_url(back, "/products"), status_code=status.HTTP_302_FOUND)
+
+    return await run_in_threadpool(_do)
 
 
 @router.get("/products/pricing", response_class=HTMLResponse)
@@ -880,7 +894,7 @@ def price_search(
 
 
 @router.post("/products/{product_id:int}/pricing")
-async def update_pricing(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def update_pricing(product_id: int, data: dict, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     if not is_staff(user):
@@ -888,7 +902,6 @@ async def update_pricing(product_id: int, request: Request, db: Session = Depend
     product = db.get(models.Product, product_id)
     if not product:
         return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
-    data = await request.json()
     before = _product_snapshot(product)
     if "cost_price" in data:
         product.cost_price = _to_decimal(data.get("cost_price"))
@@ -1123,15 +1136,14 @@ def _bulk_mode_label(mode: str, value: Decimal) -> str:
 
 
 @router.post("/products/bulk-price", response_class=HTMLResponse)
-async def bulk_price_start(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def bulk_price_start(request: Request, ids: list[str] = Form([]), db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Step 1: show the selected products with a live client-side preview.
     Nothing is saved here — Apply (below) recomputes and saves for real."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
-    form = await request.form()
-    ids = sorted({int(i) for i in form.getlist("ids") if i.isdigit()})
+    ids = sorted({int(i) for i in ids if i.isdigit()})
     if not ids:
         return RedirectResponse("/products", status_code=302)
     products = (
@@ -1157,79 +1169,87 @@ async def bulk_price_apply(request: Request, db: Session = Depends(get_db), user
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
     form = await request.form()
-    ids = sorted({int(i) for i in form.getlist("ids") if i.isdigit()})
-    mode = (form.get("mode") or "").strip()
-    if mode not in BULK_MODES:
-        mode = "pct"
-    try:
-        value = Decimal(str(form.get("value") or "0").strip().replace(",", ""))
-    except InvalidOperation:
-        value = Decimal("0")
 
-    if not ids:
-        return RedirectResponse("/products", status_code=302)
+    # Field names are dynamic (new_price_<id> per row), so this can't be
+    # declared as fixed Form(...) params — instead the DB work (the actual
+    # blocking part) runs off the event loop via run_in_threadpool, same
+    # effect as converting to a plain `def` route.
+    def _do():
+        ids = sorted({int(i) for i in form.getlist("ids") if i.isdigit()})
+        mode = (form.get("mode") or "").strip()
+        if mode not in BULK_MODES:
+            mode = "pct"
+        try:
+            value = Decimal(str(form.get("value") or "0").strip().replace(",", ""))
+        except InvalidOperation:
+            value = Decimal("0")
 
-    products = (
-        db.query(models.Product)
-        .filter(models.Product.id.in_(ids), models.Product.is_active.is_(True))
-        .all()
-    )
-    label = _bulk_mode_label(mode, value)
-    updated = 0
-    skipped = 0
-    for p in products:
-        if mode in ("markup", "margin", "cost_pct") and (not p.cost_price or p.cost_price <= 0):
-            skipped += 1
-            continue
-        before = _product_snapshot(p)
+        if not ids:
+            return RedirectResponse("/products", status_code=302)
 
-        # For the three Fixed-Price modes, the row's own editable field wins
-        # when present — same trust level as a normal single-product price
-        # edit (an admin explicitly typed this number), so it overrides the
-        # uniform mode/value calculation for that one product only.
-        override = None
-        if mode in ("pct", "amount", "cost_pct"):
-            raw_override = (form.get(f"new_price_{p.id}") or "").strip()
-            if raw_override:
-                try:
-                    override = max(Decimal(raw_override), Decimal("0")).quantize(CENTS, rounding=ROUND_HALF_UP)
-                except InvalidOperation:
-                    override = None
+        products = (
+            db.query(models.Product)
+            .filter(models.Product.id.in_(ids), models.Product.is_active.is_(True))
+            .all()
+        )
+        label = _bulk_mode_label(mode, value)
+        updated = 0
+        skipped = 0
+        for p in products:
+            if mode in ("markup", "margin", "cost_pct") and (not p.cost_price or p.cost_price <= 0):
+                skipped += 1
+                continue
+            before = _product_snapshot(p)
 
-        if mode == "pct":
-            new_price = override if override is not None else (
-                Decimal(str(p.selling_price or 0)) * (1 + value / 100)
-            ).quantize(CENTS, rounding=ROUND_HALF_UP)
-            p.selling_price = max(new_price, Decimal("0"))
-        elif mode == "amount":
-            new_price = override if override is not None else (
-                Decimal(str(p.selling_price or 0)) + value
-            ).quantize(CENTS, rounding=ROUND_HALF_UP)
-            p.selling_price = max(new_price, Decimal("0"))
-        elif mode == "cost_pct":
-            # Same math as Markup, but writes straight into Fixed Price —
-            # for the common case of seeding a never-set Fixed Price in bulk.
-            new_price = override if override is not None else pricing.markup_price(p.cost_price, value)
-            p.selling_price = max(new_price, Decimal("0"))
-        elif mode == "markup":
-            p.markup_pct = value
-            p.markup_price = pricing.markup_price(p.cost_price, value)
-        else:  # margin
-            p.margin_pct = value
-            p.margin_price = pricing.margin_price(p.cost_price, value)
-        after = _product_snapshot(p)
-        changes = audit.diff(before, after)
-        if changes:
-            audit.record(
-                db, user=user, request=request, action="update", entity_type="product",
-                entity_id=p.id, entity_label=p.name, summary=label, changes=changes,
-            )
-            updated += 1
-    db.commit()
-    msg = f"Updated {updated} product{'s' if updated != 1 else ''}"
-    if skipped:
-        msg += f", skipped {skipped} with no cost on file"
-    return RedirectResponse(f"/products?bulk_msg={msg}", status_code=status.HTTP_302_FOUND)
+            # For the three Fixed-Price modes, the row's own editable field wins
+            # when present — same trust level as a normal single-product price
+            # edit (an admin explicitly typed this number), so it overrides the
+            # uniform mode/value calculation for that one product only.
+            override = None
+            if mode in ("pct", "amount", "cost_pct"):
+                raw_override = (form.get(f"new_price_{p.id}") or "").strip()
+                if raw_override:
+                    try:
+                        override = max(Decimal(raw_override), Decimal("0")).quantize(CENTS, rounding=ROUND_HALF_UP)
+                    except InvalidOperation:
+                        override = None
+
+            if mode == "pct":
+                new_price = override if override is not None else (
+                    Decimal(str(p.selling_price or 0)) * (1 + value / 100)
+                ).quantize(CENTS, rounding=ROUND_HALF_UP)
+                p.selling_price = max(new_price, Decimal("0"))
+            elif mode == "amount":
+                new_price = override if override is not None else (
+                    Decimal(str(p.selling_price or 0)) + value
+                ).quantize(CENTS, rounding=ROUND_HALF_UP)
+                p.selling_price = max(new_price, Decimal("0"))
+            elif mode == "cost_pct":
+                # Same math as Markup, but writes straight into Fixed Price —
+                # for the common case of seeding a never-set Fixed Price in bulk.
+                new_price = override if override is not None else pricing.markup_price(p.cost_price, value)
+                p.selling_price = max(new_price, Decimal("0"))
+            elif mode == "markup":
+                p.markup_pct = value
+                p.markup_price = pricing.markup_price(p.cost_price, value)
+            else:  # margin
+                p.margin_pct = value
+                p.margin_price = pricing.margin_price(p.cost_price, value)
+            after = _product_snapshot(p)
+            changes = audit.diff(before, after)
+            if changes:
+                audit.record(
+                    db, user=user, request=request, action="update", entity_type="product",
+                    entity_id=p.id, entity_label=p.name, summary=label, changes=changes,
+                )
+                updated += 1
+        db.commit()
+        msg = f"Updated {updated} product{'s' if updated != 1 else ''}"
+        if skipped:
+            msg += f", skipped {skipped} with no cost on file"
+        return RedirectResponse(f"/products?bulk_msg={msg}", status_code=status.HTTP_302_FOUND)
+
+    return await run_in_threadpool(_do)
 
 
 def _generate_internal_barcode(product_id: int) -> str:
@@ -1252,13 +1272,12 @@ def _barcode_data_uri(code: str) -> str:
 
 
 @router.post("/products/labels", response_class=HTMLResponse)
-async def print_labels(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def print_labels(request: Request, ids: list[str] = Form([]), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
-    form = await request.form()
-    ids = sorted({int(i) for i in form.getlist("ids") if i.isdigit()})
+    ids = sorted({int(i) for i in ids if i.isdigit()})
     if not ids:
         return RedirectResponse("/products", status_code=302)
     products = (
@@ -1283,7 +1302,7 @@ async def print_labels(request: Request, db: Session = Depends(get_db), user=Dep
 
 
 @router.post("/products/bulk-shelf", response_class=HTMLResponse)
-async def bulk_shelf_start(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def bulk_shelf_start(request: Request, ids: list[str] = Form([]), db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Step 1: confirm which shelf, for the products selected in Inventory —
     same two-step shape as Bulk Price Update. Same idea Stock Count already
     has (assign a shelf to whatever's being counted), just reachable from
@@ -1292,8 +1311,7 @@ async def bulk_shelf_start(request: Request, db: Session = Depends(get_db), user
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
-    form = await request.form()
-    ids = sorted({int(i) for i in form.getlist("ids") if i.isdigit()})
+    ids = sorted({int(i) for i in ids if i.isdigit()})
     if not ids:
         return RedirectResponse("/products", status_code=302)
     products = (
@@ -1310,7 +1328,10 @@ async def bulk_shelf_start(request: Request, db: Session = Depends(get_db), user
 
 
 @router.post("/products/bulk-shelf/apply")
-async def bulk_shelf_apply(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def bulk_shelf_apply(
+    request: Request, ids: list[str] = Form([]), shelf_id: str = Form("0"),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     """Step 2: move every selected product onto the picked shelf — this
     REPLACES whatever shelf a product already had (unlike Stock Count's own
     bulk-assign, which only fills products that have none yet; here the
@@ -1320,12 +1341,11 @@ async def bulk_shelf_apply(request: Request, db: Session = Depends(get_db), user
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
-    form = await request.form()
-    ids = sorted({int(i) for i in form.getlist("ids") if i.isdigit()})
+    ids = sorted({int(i) for i in ids if i.isdigit()})
     if not ids:
         return RedirectResponse("/products", status_code=302)
     try:
-        shelf_id = int(form.get("shelf_id") or 0)
+        shelf_id = int(shelf_id or 0)
     except ValueError:
         shelf_id = 0
     shelf = db.get(models.Shelf, shelf_id) if shelf_id else None
@@ -1843,7 +1863,7 @@ def import_form(request: Request, user=Depends(get_current_user)):
 
 
 @router.post("/products/import", response_class=HTMLResponse)
-async def import_upload(
+def import_upload(
     request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -1854,7 +1874,7 @@ async def import_upload(
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
 
-    contents = await file.read()
+    contents = file.file.read()
     rows, error = _parse_upload(file.filename, contents)
 
     if error:
@@ -1901,27 +1921,35 @@ async def import_confirm(request: Request, db: Session = Depends(get_db), user=D
         return RedirectResponse("/products", status_code=302)
 
     form = await request.form()
-    filename = form.get("filename") or "import"
-    try:
-        payload = json.loads(form.get("rows_json") or "[]")
-    except ValueError:
-        payload = []
 
-    numbered_rows = [(int(item["line_no"]), item["record"]) for item in payload]
-    # Re-classify against the *current* data rather than trusting the preview
-    # snapshot — something could have changed (or another admin could have
-    # imported) in the time between rendering the review screen and this submit.
-    classified = _classify_import_rows(db, numbered_rows)
+    # Which rows to apply is keyed by dynamic apply_<line_no> field names, so
+    # this can't be fixed Form(...) params — the actual row-by-row import
+    # (the blocking part, and the slowest route in the app for a big file)
+    # runs off the event loop via run_in_threadpool instead.
+    def _do():
+        filename = form.get("filename") or "import"
+        try:
+            payload = json.loads(form.get("rows_json") or "[]")
+        except ValueError:
+            payload = []
 
-    skip_line_nos = {
-        item["line_no"] for item in classified
-        if item["action"] == "update" and form.get(f"apply_{item['line_no']}") is None
-    }
-    result = _run_import(db, user, request, filename, classified, skip_line_nos=skip_line_nos)
-    return templates.TemplateResponse(
-        "products/import.html",
-        {"request": request, "app_name": request.app.title, "user": user, "result": result},
-    )
+        numbered_rows = [(int(item["line_no"]), item["record"]) for item in payload]
+        # Re-classify against the *current* data rather than trusting the preview
+        # snapshot — something could have changed (or another admin could have
+        # imported) in the time between rendering the review screen and this submit.
+        classified = _classify_import_rows(db, numbered_rows)
+
+        skip_line_nos = {
+            item["line_no"] for item in classified
+            if item["action"] == "update" and form.get(f"apply_{item['line_no']}") is None
+        }
+        result = _run_import(db, user, request, filename, classified, skip_line_nos=skip_line_nos)
+        return templates.TemplateResponse(
+            "products/import.html",
+            {"request": request, "app_name": request.app.title, "user": user, "result": result},
+        )
+
+    return await run_in_threadpool(_do)
 
 
 @router.get("/products/import/template")
@@ -2049,7 +2077,7 @@ def import_units_form(request: Request, user=Depends(get_current_user)):
 
 
 @router.post("/products/import/units", response_class=HTMLResponse)
-async def import_units_upload(
+def import_units_upload(
     request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -2060,7 +2088,7 @@ async def import_units_upload(
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
 
-    contents = await file.read()
+    contents = file.file.read()
     rows, error = _parse_upload(
         file.filename, contents,
         header_map=HEADER_MAP_UNITS, fields=FIELDS_UNITS,

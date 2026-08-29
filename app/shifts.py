@@ -16,7 +16,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -111,20 +111,21 @@ def open_shift_form(request: Request, next: str = "/pos", db: Session = Depends(
 
 
 @router.post("/shifts/open")
-async def open_shift(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def open_shift(
+    request: Request, opening_amount: str = Form(""), next: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if get_open_shift(db, user.id):
-        form = await request.form()
-        return RedirectResponse((form.get("next") or "/pos"), status_code=302)
+        return RedirectResponse((next or "/pos"), status_code=302)
 
-    form = await request.form()
-    opening = _dec(form.get("opening_amount"))
+    opening = _dec(opening_amount)
     if opening < 0:
         return templates.TemplateResponse(
             "shifts/open.html",
             {"request": request, "app_name": request.app.title, "user": user,
-             "next": form.get("next") or "/pos", "error": "Enter a valid opening amount (0 or more)."},
+             "next": next or "/pos", "error": "Enter a valid opening amount (0 or more)."},
         )
     shift = models.CashierShift(cashier_id=user.id, opening_amount=opening)
     db.add(shift)
@@ -135,7 +136,7 @@ async def open_shift(request: Request, db: Session = Depends(get_db), user=Depen
         summary=f"{user.username} opened the drawer with {opening}",
     )
     db.commit()
-    return RedirectResponse((form.get("next") or "/pos"), status_code=status.HTTP_302_FOUND)
+    return RedirectResponse((next or "/pos"), status_code=status.HTTP_302_FOUND)
 
 
 @router.get("/shifts/current", response_class=HTMLResponse)
@@ -156,15 +157,19 @@ def current_shift(request: Request, db: Session = Depends(get_db), user=Depends(
 
 
 @router.post("/shifts/close")
-async def close_shift(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def close_shift(
+    request: Request,
+    counted_cash: str | None = Form(None), notes: str = Form(""),
+    deposit_amount: str = Form(""), bank_account_id: str = Form("0"),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     shift = get_open_shift(db, user.id)
     if not shift:
         return RedirectResponse("/shifts/open", status_code=302)
 
-    form = await request.form()
-    counted = form.get("counted_cash")
+    counted = counted_cash
     if counted is None or str(counted).strip() == "":
         accounts = db.query(models.BankAccount).filter(models.BankAccount.is_active.is_(True)).order_by(models.BankAccount.name).all()
         running = shift.opening_amount + expected_cash_for(db, user.id, shift.opened_at, _now())
@@ -183,10 +188,10 @@ async def close_shift(request: Request, db: Session = Depends(get_db), user=Depe
     shift.variance = counted - expected
     shift.closed_at = now
     shift.status = "closed"
-    shift.notes = (form.get("notes") or "").strip() or None
+    shift.notes = (notes or "").strip() or None
 
-    deposit_amount = _dec(form.get("deposit_amount"))
-    account_id = int(form.get("bank_account_id") or 0)
+    deposit_amount = _dec(deposit_amount)
+    account_id = int(bank_account_id or 0)
     if deposit_amount > 0 and account_id:
         account = db.get(models.BankAccount, account_id)
         if account:

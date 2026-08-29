@@ -5,7 +5,7 @@ from decimal import Decimal
 import openpyxl
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -38,7 +38,7 @@ def get_or_create_customer(db: Session, name: str):
 
 
 @router.post("/customers/quick")
-async def quick_customer(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def quick_customer(data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Create (or update) a customer straight from POS, without leaving the
     sale — same idea as /suppliers/quick on the Purchases form. Unlike that
     one, an existing match by name gets its details UPDATED here rather than
@@ -51,7 +51,6 @@ async def quick_customer(request: Request, db: Session = Depends(get_db), user=D
     if not is_staff(user):
         return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
 
-    data = await request.json()
     name = (data.get("name") or "").strip()
     if not name:
         return JSONResponse({"ok": False, "error": "Customer name is required."}, status_code=400)
@@ -390,12 +389,16 @@ def export_customer_history_pdf(customer_id: int, db: Session = Depends(get_db),
 
 
 @router.post("/customers")
-async def create_customer(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def create_customer(
+    request: Request,
+    back: str = Form(""), name: str = Form(""), tin: str = Form(""),
+    address: str = Form(""), credit_days: str = Form("15"),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    form = await request.form()
-    back = safe_back_url(form.get("back") or "", "/customers")
-    name = (form.get("name") or "").strip()
+    back = safe_back_url(back or "", "/customers")
+    name = (name or "").strip()
     if not name:
         return templates.TemplateResponse(
             "customers/form.html",
@@ -404,9 +407,9 @@ async def create_customer(request: Request, db: Session = Depends(get_db), user=
         )
     cust = models.Customer(
         name=name,
-        tin=(form.get("tin") or "").strip() or None,
-        address=(form.get("address") or "").strip() or None,
-        credit_days=int(form.get("credit_days") or 15),
+        tin=(tin or "").strip() or None,
+        address=(address or "").strip() or None,
+        credit_days=int(credit_days or 15),
     )
     db.add(cust)
     db.commit()
@@ -414,15 +417,19 @@ async def create_customer(request: Request, db: Session = Depends(get_db), user=
 
 
 @router.post("/customers/{customer_id:int}")
-async def update_customer(customer_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def update_customer(
+    customer_id: int, request: Request,
+    back: str = Form(""), name: str = Form(""), tin: str = Form(""),
+    address: str = Form(""), credit_days: str = Form("15"),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     customer = db.get(models.Customer, customer_id)
     if not customer:
         return RedirectResponse("/customers", status_code=302)
-    form = await request.form()
-    back = safe_back_url(form.get("back") or "", "/customers")
-    name = (form.get("name") or "").strip()
+    back = safe_back_url(back or "", "/customers")
+    name = (name or "").strip()
     if not name:
         return templates.TemplateResponse(
             "customers/form.html",
@@ -430,10 +437,10 @@ async def update_customer(customer_id: int, request: Request, db: Session = Depe
              "error": "Customer name is required.", "back": back},
         )
     customer.name = name
-    customer.tin = (form.get("tin") or "").strip() or None
-    customer.address = (form.get("address") or "").strip() or None
+    customer.tin = (tin or "").strip() or None
+    customer.address = (address or "").strip() or None
     try:
-        customer.credit_days = int(form.get("credit_days") or 15)
+        customer.credit_days = int(credit_days or 15)
     except (TypeError, ValueError):
         customer.credit_days = 15
     db.commit()

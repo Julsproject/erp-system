@@ -186,7 +186,7 @@ def list_sale_drafts(db: Session = Depends(get_db), user=Depends(get_current_use
 
 
 @router.post("/pos/drafts")
-async def save_sale_draft(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def save_sale_draft(data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Park the POS screen's current state so the till can be freed up.
 
     Nothing is validated the way a real checkout is — that's the point: a
@@ -196,7 +196,6 @@ async def save_sale_draft(request: Request, db: Session = Depends(get_db), user=
     """
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-    data = await request.json()
     payload = data.get("payload")
     if not isinstance(payload, dict) or not (payload.get("cart") or []):
         return JSONResponse({"ok": False, "error": "Nothing to save — add at least one item first."}, status_code=400)
@@ -428,7 +427,7 @@ def pos_product(product_id: int, db: Session = Depends(get_db), user=Depends(get
 
 
 @router.post("/pos/quick-product")
-async def pos_quick_product(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def pos_quick_product(data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Create a product that isn't in inventory yet, straight from the POS
     screen — cashiers use this too, so it deliberately has no selling-price
     fields (that's the owner's call, not shown here). It's added to the cart
@@ -437,7 +436,6 @@ async def pos_quick_product(request: Request, db: Session = Depends(get_db), use
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
 
-    data = await request.json()
     name = (data.get("name") or "").strip()
     if not name:
         return JSONResponse({"ok": False, "error": "Product name is required."}, status_code=400)
@@ -688,11 +686,10 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
 
 
 @router.post("/pos/checkout")
-async def pos_checkout(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def pos_checkout(data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
 
-    data = await request.json()
     lines = data.get("lines") or []
     if not lines:
         return JSONResponse({"ok": False, "error": "Cart is empty."}, status_code=400)
@@ -1063,10 +1060,9 @@ def pos_lookup(invoice: str = "", receipt_type: str = "", db: Session = Depends(
 
 
 @router.post("/pos/refund")
-async def pos_refund(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def pos_refund(data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-    data = await request.json()
     orig = db.get(models.Sale, int(data.get("sale_id") or 0)) if data.get("sale_id") else None
     items = data.get("items") or []
     if not items:
@@ -1189,10 +1185,9 @@ async def pos_refund(request: Request, db: Session = Depends(get_db), user=Depen
 
 
 @router.post("/pos/exchange")
-async def pos_exchange(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def pos_exchange(data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-    data = await request.json()
     orig = db.get(models.Sale, int(data.get("sale_id") or 0)) if data.get("sale_id") else None
     returned = data.get("returned_items") or []
     new_lines = data.get("new_lines") or []
@@ -1817,7 +1812,12 @@ def edit_sale_date(
 
 
 @router.post("/pos/receipt/{sale_id:int}/edit-payment")
-async def edit_sale_payment_method(sale_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def edit_sale_payment_method(
+    sale_id: int, request: Request,
+    new_method: str = Form(""),
+    customer_name: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     """Correct the payment method on an already-finalized sale — e.g. the
     cashier rang it up as Cash by mistake when the customer actually paid
     GCash, or a walk-in cash sale actually needs to go on the customer's
@@ -1854,8 +1854,7 @@ async def edit_sale_payment_method(sale_id: int, request: Request, db: Session =
     if not is_staff(user):
         return _back("denied")
 
-    form = await request.form()
-    new_method = (form.get("new_method") or "").strip().lower()
+    new_method = (new_method or "").strip().lower()
     is_currently_credit = (sale.receivable_amount or 0) > 0
 
     if is_currently_credit and new_method != "receivable":
@@ -1909,7 +1908,7 @@ async def edit_sale_payment_method(sale_id: int, request: Request, db: Session =
             return _back(block_reason)
         customer_id = sale.customer_id
         if not customer_id:
-            typed_name = (form.get("customer_name") or "").strip()
+            typed_name = (customer_name or "").strip()
             if not typed_name:
                 return _back("needs_customer")
             customer = get_or_create_customer(db, typed_name)
@@ -2015,7 +2014,7 @@ def edit_sale_items_form(sale_id: int, request: Request, db: Session = Depends(g
 # the ledger currently does NOT get a correcting entry when items are edited,
 # so a sale corrected here will disagree with its own journal entry until this
 # is extended to post a delta (or edits are blocked once a sale has posted).
-async def edit_sale_items(sale_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     sale = db.get(models.Sale, sale_id)
@@ -2027,7 +2026,6 @@ async def edit_sale_items(sale_id: int, request: Request, db: Session = Depends(
     if block_reason:
         return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS[block_reason]}, status_code=400)
 
-    data = await request.json()
     new_lines = data.get("lines") or []
     if not new_lines:
         return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS["empty"]}, status_code=400)

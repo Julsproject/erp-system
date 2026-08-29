@@ -505,14 +505,13 @@ def _product_payload(p: models.Product) -> dict:
 
 
 @router.post("/purchases/quick-product")
-async def quick_product(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def quick_product(data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Create a product that isn't in inventory yet, straight from the purchase form."""
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     if not is_floor_staff(user):
         return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
 
-    data = await request.json()
     name = (data.get("name") or "").strip()
     if not name:
         return JSONResponse({"ok": False, "error": "Product name is required."}, status_code=400)
@@ -551,13 +550,12 @@ async def quick_product(request: Request, db: Session = Depends(get_db), user=De
 
 
 @router.post("/purchases")
-async def create_purchase(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def create_purchase(data: dict, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     if not is_floor_staff(user):
         return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
 
-    data = await request.json()
     lines = data.get("lines") or []
     if not lines:
         return JSONResponse({"ok": False, "error": "Add at least one item."}, status_code=400)
@@ -773,7 +771,12 @@ async def create_purchase(request: Request, db: Session = Depends(get_db), user=
 
 
 @router.post("/purchases/{purchase_id:int}/pay")
-async def settle_purchase_pay(purchase_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def settle_purchase_pay(
+    purchase_id: int, request: Request,
+    method: str = Form("cash"), amount: str = Form(""),
+    cheque_date: str = Form(""), bank: str = Form(""), cheque_no: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     """Settle a payable — in full or in part. Stock and cost already moved
     when the purchase was created; this only closes out what's owed, same
     partial-payment idea as a customer's credit (see sales.settle_pay)."""
@@ -787,11 +790,10 @@ async def settle_purchase_pay(purchase_id: int, request: Request, db: Session = 
 
     settled = _settled_for_purchases(db, [purchase.id])
     outstanding = _purchase_outstanding(purchase, settled)
-    form = await request.form()
-    method = (form.get("method") or "cash").strip().lower()
+    method = (method or "cash").strip().lower()
     if method not in dict(PAYMENT_METHODS):
         method = "cash"
-    amount = _dec(form.get("amount"))
+    amount = _dec(amount)
 
     def back_with_error(error):
         return RedirectResponse(
@@ -806,16 +808,16 @@ async def settle_purchase_pay(purchase_id: int, request: Request, db: Session = 
     if method == "cheque":
         # A post-dated cheque doesn't settle anything yet — same as the AR
         # side, it just goes into the PDC register until the bank honors it.
-        raw_date = (form.get("cheque_date") or "").strip()
+        raw_date = (cheque_date or "").strip()
         try:
-            cheque_date = date.fromisoformat(raw_date)
+            cheque_date_val = date.fromisoformat(raw_date)
         except ValueError:
             return back_with_error("Enter+a+valid+cheque+date+%28the+date+printed+on+the+cheque%29.")
         pdc = models.PostDatedCheque(
             direction="issued", amount=_money(amount),
-            bank=(form.get("bank") or "").strip() or None,
-            cheque_no=(form.get("cheque_no") or "").strip() or None,
-            cheque_date=cheque_date,
+            bank=(bank or "").strip() or None,
+            cheque_no=(cheque_no or "").strip() or None,
+            cheque_date=cheque_date_val,
             purchase_id=purchase.id, supplier_id=purchase.supplier_id,
             created_by=user.id,
         )
@@ -985,7 +987,10 @@ def view_purchase(
 
 
 @router.post("/purchases/{purchase_id:int}/change-payment-method")
-async def change_payment_method(purchase_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def change_payment_method(
+    purchase_id: int, request: Request, method: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     """Correct a payment method picked by mistake (e.g. clicked Cash instead
     of Payable/Credit) — reverses the original receive posting and re-posts
     it under the corrected method, flipping paid/payable status to match.
@@ -1005,8 +1010,7 @@ async def change_payment_method(purchase_id: int, request: Request, db: Session 
     if block_reason:
         return RedirectResponse(f"/purchases/{purchase_id}?edit_payment_error={block_reason}", status_code=302)
 
-    form = await request.form()
-    raw_method = (form.get("method") or "").strip().lower()
+    raw_method = (method or "").strip().lower()
     is_payable = raw_method == "payable"
     new_method = None if is_payable else raw_method
     if not is_payable and new_method not in dict(PAYMENT_METHODS):
@@ -1154,7 +1158,7 @@ def edit_purchase_items_form(purchase_id: int, request: Request, db: Session = D
 # are edited, so a purchase corrected here will disagree with its own journal
 # entry until this is extended to post a delta (or edits are blocked once a
 # purchase has posted). Same known gap as pos.edit_sale_items.
-async def edit_purchase_items(purchase_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     purchase = db.get(models.Purchase, purchase_id)
@@ -1166,7 +1170,6 @@ async def edit_purchase_items(purchase_id: int, request: Request, db: Session = 
     if block_reason:
         return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS[block_reason]}, status_code=400)
 
-    data = await request.json()
     new_lines = data.get("lines") or []
     if not new_lines:
         return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS["empty"]}, status_code=400)

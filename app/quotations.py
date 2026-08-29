@@ -93,11 +93,10 @@ def _apply_lines(quote: models.Quotation, db: Session, lines: list, discount_tot
 
 
 @router.post("/quotations")
-async def create_quotation(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def create_quotation(data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
 
-    data = await request.json()
     lines = data.get("lines") or []
     if not lines:
         return JSONResponse({"ok": False, "error": "Add at least one item."}, status_code=400)
@@ -121,8 +120,8 @@ async def create_quotation(request: Request, db: Session = Depends(get_db), user
 
 
 @router.post("/quotations/{quote_id:int}/update")
-async def update_quotation_items(
-    quote_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)
+def update_quotation_items(
+    quote_id: int, data: dict, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)
 ):
     """Add/remove items on a quotation the customer hasn't confirmed yet.
 
@@ -138,7 +137,6 @@ async def update_quotation_items(
     if quote.status != "pending":
         return JSONResponse({"ok": False, "error": "Only a pending quotation can be edited."}, status_code=400)
 
-    data = await request.json()
     lines = data.get("lines") or []
     if not lines:
         return JSONResponse({"ok": False, "error": "A quotation needs at least one item — cancel it instead if none are wanted."}, status_code=400)
@@ -352,9 +350,9 @@ def reopen_quotation(quote_id: int, db: Session = Depends(get_db), user=Depends(
 
 
 @router.post("/quotations/{quote_id:int}/convert")
-async def convert_quotation(
+def convert_quotation(
     quote_id: int,
-    request: Request,
+    data: dict,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -370,7 +368,6 @@ async def convert_quotation(
     if not quote or quote.status not in ("pending", "confirmed"):
         return JSONResponse({"ok": False, "error": "This quotation can no longer be converted."}, status_code=400)
 
-    data = await request.json()
     invoice_no = (data.get("invoice_no") or "").strip()
     payments = data.get("payments") or []
 

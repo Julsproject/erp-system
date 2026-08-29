@@ -6,9 +6,10 @@ contact / TIN / footer. Also a convenience "change my password" form.
 Infrastructure config (DATABASE_URL, SECRET_KEY) stays in `.env`; it is not
 editable here on purpose.
 """
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from . import audit, settings_store
 from .auth import hash_password, verify_password
@@ -56,52 +57,64 @@ async def save_settings(request: Request, db: Session = Depends(get_db), user=De
         return RedirectResponse("/pos", status_code=302)
 
     form = await request.form()
-    if not (form.get("business_name") or "").strip():
-        return _render(request, db, user, error="Business name can't be empty.")
 
-    raw_margin = (form.get("min_margin_pct") or "").strip()
-    if raw_margin:
-        try:
-            margin_val = float(raw_margin)
-        except ValueError:
-            return _render(request, db, user, error="Minimum margin must be a number, or left blank to disable.")
-        if margin_val < 0 or margin_val >= 100:
-            return _render(request, db, user, error="Minimum margin must be between 0 and 99.")
+    # Field keys come from the module-level FIELDS list rather than fixed
+    # Form(...) params, so a future field added there doesn't also need a
+    # matching param here — the DB work runs off the event loop via
+    # run_in_threadpool instead, same effect as a plain `def` route.
+    def _do():
+        if not (form.get("business_name") or "").strip():
+            return _render(request, db, user, error="Business name can't be empty.")
 
-    raw_low_stock = (form.get("default_low_stock_pct") or "").strip()
-    if raw_low_stock:
-        try:
-            low_stock_val = float(raw_low_stock)
-        except ValueError:
-            return _render(request, db, user, error="Default low-stock % must be a number, or left blank to disable.")
-        if low_stock_val <= 0 or low_stock_val >= 100:
-            return _render(request, db, user, error="Default low-stock % must be between 0 and 100.")
+        raw_margin = (form.get("min_margin_pct") or "").strip()
+        if raw_margin:
+            try:
+                margin_val = float(raw_margin)
+            except ValueError:
+                return _render(request, db, user, error="Minimum margin must be a number, or left blank to disable.")
+            if margin_val < 0 or margin_val >= 100:
+                return _render(request, db, user, error="Minimum margin must be between 0 and 99.")
 
-    before = settings_store.get_all(db)
-    for key, _label, maxlen in FIELDS:
-        value = (form.get(key) or "").strip()[:maxlen]
-        settings_store.set_setting(db, key, value)
-    settings_store.set_setting(db, "min_margin_pct", raw_margin)
-    settings_store.set_setting(db, "default_low_stock_pct", raw_low_stock)
-    settings_store.set_setting(db, "cashier_can_void", "1" if form.get("cashier_can_void") else "")
-    db.flush()
-    after = settings_store.get_all(db)
-    changes = audit.diff(before, after)
-    if changes:
-        audit.record(
-            db, user=user, request=request, action="settings_change", entity_type="setting",
-            entity_label="Business settings", summary="Updated business/receipt settings", changes=changes,
-        )
-    db.commit()
+        raw_low_stock = (form.get("default_low_stock_pct") or "").strip()
+        if raw_low_stock:
+            try:
+                low_stock_val = float(raw_low_stock)
+            except ValueError:
+                return _render(request, db, user, error="Default low-stock % must be a number, or left blank to disable.")
+            if low_stock_val <= 0 or low_stock_val >= 100:
+                return _render(request, db, user, error="Default low-stock % must be between 0 and 100.")
 
-    # The business name drives app.title, which every page and receipt reads —
-    # update it in place so the change shows immediately, no restart needed.
-    request.app.title = settings_store.get_setting(db, "business_name")
-    return _render(request, db, user, saved="Settings saved.")
+        before = settings_store.get_all(db)
+        for key, _label, maxlen in FIELDS:
+            value = (form.get(key) or "").strip()[:maxlen]
+            settings_store.set_setting(db, key, value)
+        settings_store.set_setting(db, "min_margin_pct", raw_margin)
+        settings_store.set_setting(db, "default_low_stock_pct", raw_low_stock)
+        settings_store.set_setting(db, "cashier_can_void", "1" if form.get("cashier_can_void") else "")
+        db.flush()
+        after = settings_store.get_all(db)
+        changes = audit.diff(before, after)
+        if changes:
+            audit.record(
+                db, user=user, request=request, action="settings_change", entity_type="setting",
+                entity_label="Business settings", summary="Updated business/receipt settings", changes=changes,
+            )
+        db.commit()
+
+        # The business name drives app.title, which every page and receipt reads —
+        # update it in place so the change shows immediately, no restart needed.
+        request.app.title = settings_store.get_setting(db, "business_name")
+        return _render(request, db, user, saved="Settings saved.")
+
+    return await run_in_threadpool(_do)
 
 
 @router.post("/settings/password")
-async def change_password(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def change_password(
+    request: Request,
+    current_password: str = Form(""), new_password: str = Form(""), confirm_password: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     # Changing your OWN password is personal, not administrative — every
@@ -109,10 +122,9 @@ async def change_password(request: Request, db: Session = Depends(get_db), user=
     if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
-    form = await request.form()
-    current = form.get("current_password") or ""
-    new = form.get("new_password") or ""
-    confirm = form.get("confirm_password") or ""
+    current = current_password or ""
+    new = new_password or ""
+    confirm = confirm_password or ""
 
     if not verify_password(current, user.password_hash):
         return _render(request, db, user, pw_error="Current password is incorrect.")

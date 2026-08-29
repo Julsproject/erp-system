@@ -14,7 +14,7 @@ from decimal import Decimal, InvalidOperation
 import openpyxl
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
-from fastapi import APIRouter, Depends, Request, UploadFile, status
+from fastapi import APIRouter, Depends, Form, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
@@ -106,26 +106,30 @@ def new_account(request: Request, db: Session = Depends(get_db), user=Depends(ge
 
 
 @router.post("/banking/accounts")
-async def create_account(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def create_account(
+    request: Request,
+    name: str = Form(""), gl_account_id: str = Form(""), account_kind: str = Form("bank"),
+    bank_name: str = Form(""), account_no: str = Form(""), opening_balance: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
-    form = await request.form()
-    name = (form.get("name") or "").strip()
+    name = (name or "").strip()
     if not name:
         return _render_account_form(request, db, user, error="Account name is required.")
     if db.query(models.BankAccount).filter(func.lower(models.BankAccount.name) == name.lower()).first():
         return _render_account_form(request, db, user, error=f"An account named '{name}' already exists.")
-    gl_account_id = (form.get("gl_account_id") or "").strip()
-    account_kind = (form.get("account_kind") or "bank").strip()
+    gl_account_id = (gl_account_id or "").strip()
+    account_kind = (account_kind or "bank").strip()
     if account_kind not in dict(ACCOUNT_KINDS):
         account_kind = "bank"
     account = models.BankAccount(
         name=name,
-        bank_name=(form.get("bank_name") or "").strip() or None,
-        account_no=(form.get("account_no") or "").strip() or None,
-        opening_balance=_dec(form.get("opening_balance")),
+        bank_name=(bank_name or "").strip() or None,
+        account_no=(account_no or "").strip() or None,
+        opening_balance=_dec(opening_balance),
         gl_account_id=int(gl_account_id) if gl_account_id else None,
         account_kind=account_kind,
     )
@@ -153,7 +157,13 @@ def edit_account(account_id: int, request: Request, db: Session = Depends(get_db
 
 
 @router.post("/banking/accounts/{account_id:int}")
-async def update_account(account_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def update_account(
+    account_id: int, request: Request,
+    name: str = Form(""), bank_name: str = Form(""), account_no: str = Form(""),
+    opening_balance: str = Form(""), status: str = Form("active"),
+    gl_account_id: str = Form(""), account_kind: str = Form("bank"),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -161,8 +171,7 @@ async def update_account(account_id: int, request: Request, db: Session = Depend
     account = db.get(models.BankAccount, account_id)
     if not account:
         return RedirectResponse("/banking", status_code=302)
-    form = await request.form()
-    name = (form.get("name") or "").strip()
+    name = (name or "").strip()
     if not name:
         return _render_account_form(request, db, user, account=account, error="Account name is required.")
     clash = db.query(models.BankAccount).filter(func.lower(models.BankAccount.name) == name.lower(), models.BankAccount.id != account.id).first()
@@ -170,13 +179,13 @@ async def update_account(account_id: int, request: Request, db: Session = Depend
         return _render_account_form(request, db, user, account=account, error=f"An account named '{name}' already exists.")
     before = audit.snapshot(account, ["name", "bank_name", "account_no", "opening_balance", "is_active", "account_kind"])
     account.name = name
-    account.bank_name = (form.get("bank_name") or "").strip() or None
-    account.account_no = (form.get("account_no") or "").strip() or None
-    account.opening_balance = _dec(form.get("opening_balance"))
-    account.is_active = (form.get("status") or "active") == "active"
-    gl_account_id = (form.get("gl_account_id") or "").strip()
+    account.bank_name = (bank_name or "").strip() or None
+    account.account_no = (account_no or "").strip() or None
+    account.opening_balance = _dec(opening_balance)
+    account.is_active = (status or "active") == "active"
+    gl_account_id = (gl_account_id or "").strip()
     account.gl_account_id = int(gl_account_id) if gl_account_id else None
-    account_kind = (form.get("account_kind") or "bank").strip()
+    account_kind = (account_kind or "bank").strip()
     account.account_kind = account_kind if account_kind in dict(ACCOUNT_KINDS) else "bank"
     db.flush()
     after = audit.snapshot(account, ["name", "bank_name", "account_no", "opening_balance", "is_active", "account_kind"])
@@ -279,7 +288,12 @@ def new_transaction(
 
 
 @router.post("/banking/accounts/{account_id:int}/transactions")
-async def create_transaction(account_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def create_transaction(
+    account_id: int, request: Request,
+    txn_type: str = Form(""), amount: str = Form(""), contra_account_id: str = Form(""),
+    txn_date: str = Form(""), description: str = Form(""), reference_no: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -287,24 +301,23 @@ async def create_transaction(account_id: int, request: Request, db: Session = De
     account = db.get(models.BankAccount, account_id)
     if not account:
         return RedirectResponse("/banking", status_code=302)
-    form = await request.form()
-    txn_type = (form.get("txn_type") or "").strip().lower()
+    txn_type = (txn_type or "").strip().lower()
     if txn_type not in TXN_LABELS:
         txn_type = "deposit"
-    amount = _dec(form.get("amount"))
+    amount = _dec(amount)
     if amount <= 0:
         return RedirectResponse(
             f"/banking/accounts/{account_id}/transactions/new?txn_type={txn_type}&error=Enter+an+amount+greater+than+zero.",
             status_code=302,
         )
-    contra_account_id = (form.get("contra_account_id") or "").strip()
+    contra_account_id = (contra_account_id or "").strip()
     txn = models.BankTransaction(
         account_id=account.id,
         txn_type=txn_type,
         amount=amount,
-        txn_date=_parse_date((form.get("txn_date") or "").strip()) or date.today(),
-        description=(form.get("description") or "").strip() or None,
-        reference_no=(form.get("reference_no") or "").strip() or None,
+        txn_date=_parse_date((txn_date or "").strip()) or date.today(),
+        description=(description or "").strip() or None,
+        reference_no=(reference_no or "").strip() or None,
         contra_account_id=int(contra_account_id) if contra_account_id else None,
         created_by=user.id,
     )
@@ -395,7 +408,11 @@ def reconcile_account(
 
 
 @router.post("/banking/accounts/{account_id:int}/reconcile")
-async def reconcile_submit(account_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def reconcile_submit(
+    account_id: int, request: Request,
+    txn_id: list[str] = Form([]), statement_balance: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -404,9 +421,7 @@ async def reconcile_submit(account_id: int, request: Request, db: Session = Depe
     if not account:
         return RedirectResponse("/banking", status_code=302)
 
-    form = await request.form()
-    txn_ids = [int(v) for v in form.getlist("txn_id")]
-    statement_balance = form.get("statement_balance", "")
+    txn_ids = [int(v) for v in txn_id]
     if txn_ids:
         now = datetime.now(timezone.utc)
         (
@@ -511,7 +526,7 @@ def _find_col(fieldnames, candidates):
 
 
 @router.post("/banking/accounts/{account_id:int}/reconcile/import", response_class=HTMLResponse)
-async def import_statement(
+def import_statement(
     account_id: int, request: Request, statement_file: UploadFile,
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
@@ -523,7 +538,7 @@ async def import_statement(
     if not account:
         return RedirectResponse("/banking", status_code=302)
 
-    raw = (await statement_file.read()).decode("utf-8-sig", errors="replace")
+    raw = statement_file.file.read().decode("utf-8-sig", errors="replace")
     reader = csv.DictReader(io.StringIO(raw))
     fieldnames = reader.fieldnames or []
     date_col = _find_col(fieldnames, _DATE_HEADERS)

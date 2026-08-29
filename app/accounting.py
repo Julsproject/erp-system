@@ -1320,20 +1320,28 @@ def journal_entry_new(request: Request, error: str = "", db: Session = Depends(g
 
 
 @router.post("/accounting/journal-entries")
-async def journal_entry_create(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def journal_entry_create(
+    txn_date: str = Form(""),
+    description: str = Form(""),
+    reference_no: str = Form(""),
+    account_id: list[str] = Form([]),
+    side: list[str] = Form([]),
+    amount: list[str] = Form([]),
+    memo: list[str] = Form([]),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
-    form = await request.form()
-    txn_date = _parse_date(form.get("txn_date", "")) or _today()
-    description = (form.get("description") or "").strip()
-    reference_no = (form.get("reference_no") or "").strip() or None
+    txn_date = _parse_date(txn_date) or _today()
+    description = (description or "").strip()
+    reference_no = (reference_no or "").strip() or None
 
-    account_ids = form.getlist("account_id")
-    sides = form.getlist("side")
-    amounts = form.getlist("amount")
-    memos = form.getlist("memo")
+    account_ids = account_id
+    sides = side
+    amounts = amount
+    memos = memo
 
     lines = []
     for account_id, side, amount, memo in zip(account_ids, sides, amounts, memos):

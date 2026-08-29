@@ -11,7 +11,7 @@ Purchasing or Suppliers.
 from datetime import date
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -160,45 +160,51 @@ def new_delivery(
 
 
 @router.post("/deliveries")
-async def create_delivery(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def create_delivery(
+    request: Request,
+    sale_id: str = Form("0"), is_cod: str = Form(""), collect_method: str = Form("cash"), collect_amount: str = Form(""),
+    recipient_name: str = Form(""), address: str = Form(""), contact_no: str = Form(""),
+    driver_name: str = Form(""), vehicle: str = Form(""), scheduled_date: str = Form(""), notes: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     """Logging a delivery IS marking it delivered — there's no separate
     dispatch/complete step. For COD, the amount collected is recorded right
     here too, in the same form."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    form = await request.form()
-    sale_id = int(form.get("sale_id") or 0)
+    sale_id = int(sale_id or 0)
     sale = db.get(models.Sale, sale_id) if sale_id else None
     if not sale or sale.txn_type == "refund":
         return RedirectResponse("/deliveries/new?error=Pick+a+valid+invoice+first.", status_code=302)
 
     # COD is only meaningful when the sale still has a balance to collect.
     outstanding = _outstanding(db, sale)
-    is_cod = bool(form.get("is_cod")) and outstanding > 0
+    is_cod = bool(is_cod) and outstanding > 0
 
     collected = ZERO
-    collect_method = None
     if is_cod:
-        collect_method = (form.get("collect_method") or "cash").strip().lower()
+        collect_method = (collect_method or "cash").strip().lower()
         if collect_method not in dict(COD_METHODS):
             collect_method = "cash"
-        collected = _dec(form.get("collect_amount"))
+        collected = _dec(collect_amount)
         if collected <= 0:
             return RedirectResponse(
                 "/deliveries/new?error=Enter+the+amount+collected+for+this+COD+delivery.", status_code=302
             )
         if collected > outstanding:
             collected = outstanding  # never collect more than is owed
+    else:
+        collect_method = None
 
     delivery = models.Delivery(
         sale_id=sale.id,
-        recipient_name=(form.get("recipient_name") or sale.customer_name or "").strip() or None,
-        address=(form.get("address") or "").strip() or None,
-        contact_no=(form.get("contact_no") or "").strip() or None,
-        driver_name=(form.get("driver_name") or "").strip() or None,
-        vehicle=(form.get("vehicle") or "").strip() or None,
-        scheduled_date=_parse_date((form.get("scheduled_date") or "").strip()),
-        notes=(form.get("notes") or "").strip() or None,
+        recipient_name=(recipient_name or sale.customer_name or "").strip() or None,
+        address=(address or "").strip() or None,
+        contact_no=(contact_no or "").strip() or None,
+        driver_name=(driver_name or "").strip() or None,
+        vehicle=(vehicle or "").strip() or None,
+        scheduled_date=_parse_date((scheduled_date or "").strip()),
+        notes=(notes or "").strip() or None,
         is_cod=is_cod,
         cod_amount=outstanding if is_cod else ZERO,
         status="delivered",
@@ -266,20 +272,24 @@ def edit_delivery(delivery_id: int, request: Request, db: Session = Depends(get_
 
 
 @router.post("/deliveries/{delivery_id:int}")
-async def update_delivery(delivery_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def update_delivery(
+    delivery_id: int,
+    recipient_name: str = Form(""), address: str = Form(""), contact_no: str = Form(""),
+    driver_name: str = Form(""), vehicle: str = Form(""), scheduled_date: str = Form(""), notes: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     delivery = db.get(models.Delivery, delivery_id)
     if not delivery or delivery.status == "cancelled":
         return RedirectResponse(f"/deliveries/{delivery_id}", status_code=302)
-    form = await request.form()
-    delivery.recipient_name = (form.get("recipient_name") or "").strip() or None
-    delivery.address = (form.get("address") or "").strip() or None
-    delivery.contact_no = (form.get("contact_no") or "").strip() or None
-    delivery.driver_name = (form.get("driver_name") or "").strip() or None
-    delivery.vehicle = (form.get("vehicle") or "").strip() or None
-    delivery.scheduled_date = _parse_date((form.get("scheduled_date") or "").strip())
-    delivery.notes = (form.get("notes") or "").strip() or None
+    delivery.recipient_name = (recipient_name or "").strip() or None
+    delivery.address = (address or "").strip() or None
+    delivery.contact_no = (contact_no or "").strip() or None
+    delivery.driver_name = (driver_name or "").strip() or None
+    delivery.vehicle = (vehicle or "").strip() or None
+    delivery.scheduled_date = _parse_date((scheduled_date or "").strip())
+    delivery.notes = (notes or "").strip() or None
     db.commit()
     return RedirectResponse(f"/deliveries/{delivery_id}", status_code=status.HTTP_302_FOUND)
 

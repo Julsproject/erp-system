@@ -16,7 +16,7 @@ from decimal import Decimal
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -223,7 +223,7 @@ def clear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user
 
 
 @router.post("/pdc/{pdc_id:int}/bounce")
-async def bounce_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def bounce_pdc(pdc_id: int, request: Request, notes: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     """The bank rejected it. Received: nothing to undo. Issued: stays unpaid."""
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -233,8 +233,7 @@ async def bounce_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db
     if not pdc or pdc.status not in ("pending", "deposited"):
         return RedirectResponse(f"/pdc/{pdc_id}", status_code=302)
 
-    form = await request.form()
-    note = (form.get("notes") or "").strip()
+    note = (notes or "").strip()
     if note:
         pdc.notes = note
     pdc.status = "bounced"
@@ -352,18 +351,23 @@ def new_pdc(
 
 
 @router.post("/pdc/new")
-async def create_pdc(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def create_pdc(
+    request: Request,
+    direction: str = Form(""), customer_id: str = Form("0"), supplier_id: str = Form("0"),
+    bank: str = Form(""), cheque_no: str = Form(""), cheque_date: str = Form(""),
+    apply_id: list[str] = Form([]), apply_amount: list[str] = Form([]),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
-    form = await request.form()
-    direction = "issued" if form.get("direction") == "issued" else "received"
-    customer_id = int(form.get("customer_id") or 0) or None
-    supplier_id = int(form.get("supplier_id") or 0) or None
-    bank = (form.get("bank") or "").strip() or None
-    cheque_no = (form.get("cheque_no") or "").strip() or None
-    raw_date = (form.get("cheque_date") or "").strip()
+    direction = "issued" if direction == "issued" else "received"
+    customer_id = int(customer_id or 0) or None
+    supplier_id = int(supplier_id or 0) or None
+    bank = (bank or "").strip() or None
+    cheque_no = (cheque_no or "").strip() or None
+    raw_date = (cheque_date or "").strip()
 
     def back_with_error(msg):
         qs = f"direction={direction}&customer_id={customer_id or ''}&supplier_id={supplier_id or ''}"
@@ -374,8 +378,8 @@ async def create_pdc(request: Request, db: Session = Depends(get_db), user=Depen
     except ValueError:
         return back_with_error("Enter a valid cheque date (the date printed on the cheque).")
 
-    ids = form.getlist("apply_id")
-    amounts = form.getlist("apply_amount")
+    ids = apply_id
+    amounts = apply_amount
     applications = []
     total = Decimal("0")
     for raw_id, raw_amount in zip(ids, amounts):

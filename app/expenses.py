@@ -7,7 +7,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -177,7 +177,7 @@ def download_attachment(expense_id: int, db: Session = Depends(get_db), user=Dep
     return FileResponse(path, filename=expense.attachment_path.split("_", 1)[-1])
 
 
-async def _save_attachment(form):
+def _save_attachment(form):
     """Saves an uploaded receipt/invoice file to UPLOADS_DIR and returns the
     path to store (relative to UPLOADS_DIR), or None if no file was chosen —
     an edit form re-submitting without picking a new file shouldn't clear
@@ -188,7 +188,7 @@ async def _save_attachment(form):
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", file.filename)[:100]
     dest_name = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{safe_name}"
-    content = await file.read()
+    content = file.file.read()
     (UPLOADS_DIR / dest_name).write_bytes(content)
     return dest_name
 
@@ -211,19 +211,33 @@ def _apply_form(expense: models.Expense, db: Session, form):
 
 
 @router.post("/expenses")
-async def create_expense(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def create_expense(
+    request: Request,
+    category: str = Form(""), payee: str = Form(""), description: str = Form(""),
+    amount: str = Form(""), vat_amount: str = Form(""), expense_date: str = Form(""),
+    payment_method: str = Form("cash"), paid_from_account_id: str = Form(""),
+    reference_no: str = Form(""), receipt_no: str = Form(""), notes: str = Form(""),
+    attachment: UploadFile | None = File(None),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
-    form = await request.form()
+    form = {
+        "category": category, "payee": payee, "description": description,
+        "amount": amount, "vat_amount": vat_amount, "expense_date": expense_date,
+        "payment_method": payment_method, "paid_from_account_id": paid_from_account_id,
+        "reference_no": reference_no, "receipt_no": receipt_no, "notes": notes,
+        "attachment": attachment,
+    }
     if _dec(form.get("amount")) <= 0:
         return _render_form(request, db, user, error="Enter an amount greater than zero.")
     expense = models.Expense(created_by=user.id)
     _apply_form(expense, db, form)
-    attachment = await _save_attachment(form)
-    if attachment:
-        expense.attachment_path = attachment
+    attachment_path = _save_attachment(form)
+    if attachment_path:
+        expense.attachment_path = attachment_path
     db.add(expense)
     db.flush()
     expense.ref_no = f"EXP-{expense.id:06d}"
@@ -243,7 +257,15 @@ async def create_expense(request: Request, db: Session = Depends(get_db), user=D
 @router.post("/expenses/{expense_id:int}")
 # TODO(accounting): editing an expense after it posted doesn't repost a
 # correction — same known gap as pos.py's edit_sale_items.
-async def update_expense(expense_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def update_expense(
+    expense_id: int, request: Request,
+    category: str = Form(""), payee: str = Form(""), description: str = Form(""),
+    amount: str = Form(""), vat_amount: str = Form(""), expense_date: str = Form(""),
+    payment_method: str = Form("cash"), paid_from_account_id: str = Form(""),
+    reference_no: str = Form(""), receipt_no: str = Form(""), notes: str = Form(""),
+    attachment: UploadFile | None = File(None),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -251,14 +273,20 @@ async def update_expense(expense_id: int, request: Request, db: Session = Depend
     expense = db.get(models.Expense, expense_id)
     if not expense:
         return RedirectResponse("/expenses", status_code=302)
-    form = await request.form()
+    form = {
+        "category": category, "payee": payee, "description": description,
+        "amount": amount, "vat_amount": vat_amount, "expense_date": expense_date,
+        "payment_method": payment_method, "paid_from_account_id": paid_from_account_id,
+        "reference_no": reference_no, "receipt_no": receipt_no, "notes": notes,
+        "attachment": attachment,
+    }
     if _dec(form.get("amount")) <= 0:
         return _render_form(request, db, user, expense=expense, error="Enter an amount greater than zero.")
     before = audit.snapshot(expense, ["amount", "payee", "description", "expense_date", "payment_method", "reference_no"])
     _apply_form(expense, db, form)
-    attachment = await _save_attachment(form)
-    if attachment:
-        expense.attachment_path = attachment
+    attachment_path = _save_attachment(form)
+    if attachment_path:
+        expense.attachment_path = attachment_path
     db.flush()
     after = audit.snapshot(expense, ["amount", "payee", "description", "expense_date", "payment_method", "reference_no"])
     changes = audit.diff(before, after)

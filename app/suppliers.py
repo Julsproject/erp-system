@@ -2,7 +2,7 @@
 from datetime import date
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -45,14 +45,13 @@ def search_suppliers(q: str = "", db: Session = Depends(get_db), user=Depends(ge
 
 
 @router.post("/suppliers/quick")
-async def quick_supplier(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def quick_supplier(data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Create a supplier that isn't on file yet, straight from the purchase form."""
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     if not is_staff(user):
         return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
 
-    data = await request.json()
     name = (data.get("name") or "").strip()
     if not name:
         return JSONResponse({"ok": False, "error": "Supplier name is required."}, status_code=400)
@@ -184,15 +183,25 @@ def _apply_form(supplier: models.Supplier, form):
 
 
 @router.post("/suppliers")
-async def create_supplier(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def create_supplier(
+    request: Request,
+    name: str = Form(""), code: str = Form(""), contact_person: str = Form(""), mobile: str = Form(""),
+    telephone: str = Form(""), email: str = Form(""), address: str = Form(""), tin: str = Form(""),
+    payment_terms: str = Form(""), payment_days: str = Form("30"), status_field: str = Form("active", alias="status"),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
-    form = await request.form()
-    if not (form.get("name") or "").strip():
+    form = {
+        "name": name, "contact_person": contact_person, "mobile": mobile, "telephone": telephone,
+        "email": email, "address": address, "tin": tin, "payment_terms": payment_terms,
+        "payment_days": payment_days, "status": status_field,
+    }
+    if not (name or "").strip():
         return _render_form(request, user, error="Supplier name is required.")
-    code = (form.get("code") or "").strip()
+    code = (code or "").strip()
     if code and db.query(models.Supplier).filter(models.Supplier.code == code).first():
         return _render_form(request, user, error=f"Supplier code '{code}' is already used.")
     supplier = models.Supplier(code=code or _next_code(db))
@@ -203,7 +212,13 @@ async def create_supplier(request: Request, db: Session = Depends(get_db), user=
 
 
 @router.post("/suppliers/{supplier_id:int}")
-async def update_supplier(supplier_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def update_supplier(
+    supplier_id: int, request: Request,
+    name: str = Form(""), code: str = Form(""), contact_person: str = Form(""), mobile: str = Form(""),
+    telephone: str = Form(""), email: str = Form(""), address: str = Form(""), tin: str = Form(""),
+    payment_terms: str = Form(""), payment_days: str = Form("30"), status_field: str = Form("active", alias="status"),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -211,10 +226,14 @@ async def update_supplier(supplier_id: int, request: Request, db: Session = Depe
     supplier = db.get(models.Supplier, supplier_id)
     if not supplier:
         return RedirectResponse("/suppliers", status_code=302)
-    form = await request.form()
-    if not (form.get("name") or "").strip():
+    form = {
+        "name": name, "contact_person": contact_person, "mobile": mobile, "telephone": telephone,
+        "email": email, "address": address, "tin": tin, "payment_terms": payment_terms,
+        "payment_days": payment_days, "status": status_field,
+    }
+    if not (name or "").strip():
         return _render_form(request, user, supplier=supplier, error="Supplier name is required.")
-    code = (form.get("code") or "").strip()
+    code = (code or "").strip()
     if code and code != (supplier.code or ""):
         clash = db.query(models.Supplier).filter(models.Supplier.code == code, models.Supplier.id != supplier.id).first()
         if clash:
@@ -334,7 +353,11 @@ def supplier_pay_full_form(supplier_id: int, request: Request, db: Session = Dep
 
 
 @router.post("/suppliers/{supplier_id:int}/pay-full")
-async def supplier_pay_full_submit(supplier_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def supplier_pay_full_submit(
+    supplier_id: int, request: Request,
+    method: str = Form("cash"), cheque_date: str = Form(""), bank: str = Form(""), cheque_no: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -345,8 +368,7 @@ async def supplier_pay_full_submit(supplier_id: int, request: Request, db: Sessi
     owed = _outstanding_purchases(db, supplier_id)
     total = sum((o for _, o in owed), Decimal("0"))
 
-    form = await request.form()
-    method = (form.get("method") or "cash").strip().lower()
+    method = (method or "cash").strip().lower()
     if method not in dict(PAYMENT_METHODS):
         method = "cash"
 
@@ -362,11 +384,11 @@ async def supplier_pay_full_submit(supplier_id: int, request: Request, db: Sessi
     if not owed:
         return RedirectResponse(f"/suppliers/{supplier_id}/history", status_code=status.HTTP_302_FOUND)
 
-    cheque_date = None
+    cheque_date_val = None
     if method == "cheque":
-        raw_date = (form.get("cheque_date") or "").strip()
+        raw_date = (cheque_date or "").strip()
         try:
-            cheque_date = date.fromisoformat(raw_date)
+            cheque_date_val = date.fromisoformat(raw_date)
         except ValueError:
             return rerender("Enter a valid cheque date (the date printed on the cheque).")
 
@@ -378,9 +400,9 @@ async def supplier_pay_full_submit(supplier_id: int, request: Request, db: Sessi
     if method == "cheque":
         pdc = models.PostDatedCheque(
             direction="issued", amount=total,
-            bank=(form.get("bank") or "").strip() or None,
-            cheque_no=(form.get("cheque_no") or "").strip() or None,
-            cheque_date=cheque_date,
+            bank=(bank or "").strip() or None,
+            cheque_no=(cheque_no or "").strip() or None,
+            cheque_date=cheque_date_val,
             supplier_id=supplier.id,
             created_by=user.id,
         )

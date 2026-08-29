@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import openpyxl
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
@@ -508,7 +508,12 @@ def settle_form(sale_id: int, request: Request, from_page: str = "", db: Session
 
 
 @router.post("/sales/receivables/{sale_id:int}/pay")
-async def settle_pay(sale_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def settle_pay(
+    sale_id: int, request: Request,
+    method: str = Form("cash"), amount: str = Form(""), ref_no: str = Form(""), from_page: str = Form(""),
+    payment_date: str = Form(""), cheque_date: str = Form(""), bank: str = Form(""), cheque_no: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -519,11 +524,10 @@ async def settle_pay(sale_id: int, request: Request, db: Session = Depends(get_d
 
     settled = _settled_map(db)
     outstanding = _outstanding(sale, settled)
-    form = await request.form()
-    method = (form.get("method") or "cash").strip().lower()
-    amount = _dec(form.get("amount"))
-    ref_no = (form.get("ref_no") or "").strip() or None
-    from_page = (form.get("from_page") or "").strip()
+    method = (method or "cash").strip().lower()
+    amount = _dec(amount)
+    ref_no = (ref_no or "").strip() or None
+    from_page = (from_page or "").strip()
 
     def rerender(error):
         return templates.TemplateResponse(
@@ -531,7 +535,7 @@ async def settle_pay(sale_id: int, request: Request, db: Session = Depends(get_d
             {"request": request, "app_name": request.app.title, "user": user,
              "sale": sale, "outstanding": outstanding, "methods": SETTLE_METHODS, "error": error,
              "back_url": _back_url(user, sale, from_page), "from_page": from_page,
-             "payment_date": form.get("payment_date") or "",
+             "payment_date": payment_date or "",
              "today_iso": datetime.now(MANILA).date().isoformat()},
         )
 
@@ -540,23 +544,23 @@ async def settle_pay(sale_id: int, request: Request, db: Session = Depends(get_d
     if amount > outstanding:
         amount = outstanding  # never collect more than owed
 
-    payment_dt, date_err = _resolve_settlement_datetime(form.get("payment_date"))
+    payment_dt, date_err = _resolve_settlement_datetime(payment_date)
     if date_err:
         return rerender(date_err)
 
     if method == "cheque":
         # A post-dated cheque doesn't settle anything yet — it just goes into
         # the PDC register until the bank actually honors it.
-        raw_date = (form.get("cheque_date") or "").strip()
+        raw_date = (cheque_date or "").strip()
         try:
-            cheque_date = date.fromisoformat(raw_date)
+            cheque_date_val = date.fromisoformat(raw_date)
         except ValueError:
             return rerender("Enter a valid cheque date (the date printed on the cheque).")
         pdc = models.PostDatedCheque(
             direction="received", amount=amount,
-            bank=(form.get("bank") or "").strip() or None,
-            cheque_no=(form.get("cheque_no") or "").strip() or None,
-            cheque_date=cheque_date,
+            bank=(bank or "").strip() or None,
+            cheque_no=(cheque_no or "").strip() or None,
+            cheque_date=cheque_date_val,
             sale_id=sale.id, customer_id=sale.customer_id,
             created_by=user.id,
         )
