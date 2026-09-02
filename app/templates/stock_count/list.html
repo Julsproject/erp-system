@@ -28,7 +28,17 @@
 <div class="alert" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">Enter a valid date.</div>
 {% endif %}
 
+{% if is_admin_user and missing_effective_count %}
+<div class="pill-filter-bar">
+  <a class="cat-pill {{ 'active' if not missing_effective }}" href="/stock-count">All counts</a>
+  <a class="cat-pill {{ 'active' if missing_effective }}" href="/stock-count?missing_effective=1">
+    Missing Effective Date <span class="cat-pill-count">{{ missing_effective_count }}</span>
+  </a>
+</div>
+{% endif %}
+
 <form id="bulkEffForm" method="post" action="/stock-count/bulk-set-effective-date">
+  {% if missing_effective %}<input type="hidden" name="missing_effective" value="1">{% endif %}
 <div class="table-wrap">
   <table class="grid">
     <thead>
@@ -114,10 +124,11 @@ function submitBulkEff() {
 {% endif %}
 
 {% if pages > 1 %}
+{% set page_qs = '&missing_effective=1' if missing_effective else '' %}
 <div class="pager">
-  {% if page > 1 %}<a class="btn-secondary" href="/stock-count?page={{ page - 1 }}">← Prev</a>{% endif %}
+  {% if page > 1 %}<a class="btn-secondary" href="/stock-count?page={{ page - 1 }}{{ page_qs }}">← Prev</a>{% endif %}
   <span class="muted">Page {{ page }} of {{ pages }} · {{ total }} count{{ 's' if total != 1 }}</span>
-  {% if page < pages %}<a class="btn-secondary" href="/stock-count?page={{ page + 1 }}">Next →</a>{% endif %}
+  {% if page < pages %}<a class="btn-secondary" href="/stock-count?page={{ page + 1 }}{{ page_qs }}">Next →</a>{% endif %}
 </div>
 {% endif %}
 {% endblock %}

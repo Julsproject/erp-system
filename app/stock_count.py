@@ -406,6 +406,7 @@ def _uncounted_negatives(db: Session, count: models.StockCount):
 @router.get("/stock-count", response_class=HTMLResponse)
 def stock_count_list(
     request: Request, page: int = 1, bulk_msg: int = 0, bulk_error: str = "",
+    missing_effective: int = 0,
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -414,7 +415,18 @@ def stock_count_list(
         return RedirectResponse("/pos", status_code=302)
     page = max(page, 1)
     open_count = db.query(models.StockCount).filter(models.StockCount.status == "open").first()
-    past_q = db.query(models.StockCount).filter(models.StockCount.status != "open").order_by(models.StockCount.id.desc())
+    past_q = db.query(models.StockCount).filter(models.StockCount.status != "open")
+    # Completed counts with no Effective Date set yet — nothing will ever
+    # move their Actual Beginning until someone (admin/manager) picks a
+    # date, so this is the "still needs attention" view of the same list.
+    missing_effective_count = past_q.filter(
+        models.StockCount.status == "completed", models.StockCount.effective_date.is_(None)
+    ).count()
+    if missing_effective:
+        past_q = past_q.filter(
+            models.StockCount.status == "completed", models.StockCount.effective_date.is_(None)
+        )
+    past_q = past_q.order_by(models.StockCount.id.desc())
     total = past_q.count()
     pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
     page = min(page, pages)
@@ -423,7 +435,8 @@ def stock_count_list(
         "stock_count/list.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "open_count": open_count, "past": past, "page": page, "pages": pages, "total": total,
-         "bulk_msg": bulk_msg, "bulk_error": bulk_error},
+         "bulk_msg": bulk_msg, "bulk_error": bulk_error,
+         "missing_effective": missing_effective, "missing_effective_count": missing_effective_count},
     )
 
 
@@ -566,6 +579,7 @@ def stock_count_set_effective_date(
 @router.post("/stock-count/bulk-set-effective-date")
 def stock_count_bulk_set_effective_date(
     request: Request, count_ids: list[str] = Form([]), effective_date: str = Form(""),
+    missing_effective: int = Form(0),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """Same rule and permission as the single set-effective-date route,
@@ -578,10 +592,11 @@ def stock_count_bulk_set_effective_date(
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/stock-count", status_code=302)
+    filter_qs = "&missing_effective=1" if missing_effective else ""
     try:
         new_date = date.fromisoformat((effective_date or "").strip())
     except ValueError:
-        return RedirectResponse("/stock-count?bulk_error=invalid", status_code=302)
+        return RedirectResponse(f"/stock-count?bulk_error=invalid{filter_qs}", status_code=302)
 
     updated = 0
     for cid in {int(i) for i in count_ids if i.isdigit()}:
@@ -600,7 +615,7 @@ def stock_count_bulk_set_effective_date(
             updated += 1
     if updated:
         db.commit()
-    return RedirectResponse(f"/stock-count?bulk_msg={updated}", status_code=302)
+    return RedirectResponse(f"/stock-count?bulk_msg={updated}{filter_qs}", status_code=302)
 
 
 @router.post("/stock-count/{count_id:int}/scan")
