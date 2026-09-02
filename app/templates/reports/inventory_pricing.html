@@ -16,10 +16,18 @@
 <form class="toolbar" method="get" action="/reports/inventory-pricing">
   {% if category_id %}<input type="hidden" name="category_id" value="{{ category_id }}">{% endif %}
   {% if shelf_id %}<input type="hidden" name="shelf_id" value="{{ shelf_id }}">{% endif %}
-  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search product name…" autofocus>
+  <input class="search" type="search" name="q" id="qSearch" value="{{ q }}" placeholder="Search product name…" autofocus>
   <button class="btn-secondary" type="submit">Search</button>
   {% if q or category_id or shelf_id %}<a class="btn-link" href="/reports/inventory-pricing">Clear</a>{% endif %}
 </form>
+<script>
+  // See products/list.html for why: autofocus on a pre-filled box can put
+  // the mobile caret at position 0 instead of the end.
+  (function() {
+    var box = document.getElementById('qSearch');
+    if (box && box.value) { box.focus(); var end = box.value.length; box.setSelectionRange(end, end); }
+  })();
+</script>
 
 {% set qs_base = ('q=' ~ q ~ '&' if q) %}
 <div class="pill-filter-bar">

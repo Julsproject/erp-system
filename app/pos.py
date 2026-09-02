@@ -113,6 +113,30 @@ def _add_stock(product: models.Product, base_qty: Decimal):
     product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
 
 
+def _apply_stock_count_correction(product: models.Product, variance: Decimal):
+    """Apply a Stock Count's counted-vs-system variance to on-hand, using the
+    same "Actual Beginning first" rule sales already follow via _deduct_stock
+    — a shortfall (counted < system) drains Beginning first, floored at 0; a
+    surplus (counted > system) heals a negative Beginning back toward 0
+    first, before the remainder goes to Stocks Qty.
+
+    Without this, a Beginning that had already gone negative (most commonly
+    from Month-End Rollover folding a negative Stocks Qty into it — see
+    _run_month_end_rollover) could never be corrected: a count used to only
+    ever touch Stocks Qty, so a negative Beginning just sat there permanently
+    once created, no matter how many counts happened afterward."""
+    if variance < 0:
+        _deduct_stock(product, -variance)
+    elif variance > 0:
+        beginning = product.beginning_stock or Decimal("0")
+        deficit = max(-beginning, Decimal("0"))
+        heal = min(variance, deficit)
+        product.beginning_stock = beginning + heal
+        remainder = variance - heal
+        if remainder > 0:
+            product.stock_qty = (product.stock_qty or Decimal("0")) + remainder
+
+
 def _can_void_sale(user) -> bool:
     """Admin/Manager can always void; a cashier only if the owner has
     explicitly turned that on in Settings (off by default)."""

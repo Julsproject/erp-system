@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from . import audit, models
 from .database import get_db
 from .deps import get_current_user, is_floor_staff
+from .pos import _apply_stock_count_correction
 from .products import ADJUSTMENT_REASON_LABELS, ADJUSTMENT_REASONS, _parse_upload
 from .search_utils import multi_word_ilike
 from .templating import templates
@@ -41,12 +42,13 @@ PAGE_SIZE = 15
 HEADER_MAP_COUNT = {
     "barcode": "barcode", "bar code": "barcode", "upc": "barcode", "ean": "barcode",
     "product name": "name", "name": "name", "product": "name",
+    "rename to": "rename_to", "renamed to": "rename_to", "new name": "rename_to", "rename": "rename_to",
     "counted qty": "counted", "counted": "counted", "count": "counted", "qty": "counted", "quantity": "counted",
     "unit": "unit_label", "base unit": "unit_label",
     "system qty (reference only)": "system_ref", "system qty": "system_ref", "system": "system_ref",
 }
-FIELDS_COUNT = ["barcode", "name", "counted", "unit_label", "system_ref"]
-BASE_HEADERS_COUNT = ["Barcode", "Product Name", "Unit", "System Qty (reference only)", "Counted Qty"]
+FIELDS_COUNT = ["barcode", "name", "rename_to", "counted", "unit_label", "system_ref"]
+BASE_HEADERS_COUNT = ["Barcode", "Product Name", "Rename To", "Unit", "System Qty (reference only)", "Counted Qty"]
 
 
 # Cells the count sheet writes as "not applicable" for a unit this product
@@ -157,6 +159,31 @@ def _classify_count_import_rows(db: Session, count: models.StockCount, numbered_
             })
             continue
 
+        # Optional "Rename To" column — a counter walking the shelf can fix a
+        # typo or naming-convention slip right on the sheet instead of a
+        # separate trip to Inventory. Blank (or absent, on an older sheet
+        # downloaded before this column existed — see FIELDS_COUNT/cell()
+        # returning "" for a missing column) just means no rename requested.
+        rename_to = (record.get("rename_to") or "").strip()
+        if rename_to and rename_to.lower() == product.name.strip().lower():
+            rename_to = ""  # retyped the same name — nothing to do
+        if rename_to:
+            clash = (
+                db.query(models.Product.id)
+                .filter(
+                    models.Product.is_active.is_(True),
+                    func.lower(models.Product.name) == rename_to.lower(),
+                    models.Product.id != product.id,
+                )
+                .first()
+            )
+            if clash:
+                classified.append({
+                    "line_no": line_no, "name": product.name, "action": "error",
+                    "message": f"Can't rename to “{rename_to}” — another active product already has that name.",
+                })
+                continue
+
         base_name = product.unit_type.name if product.unit_type else "unit"
         factor_by_key = {base_name.strip().lower(): (base_name, Decimal("1"))}
         for u in product.units:
@@ -194,7 +221,7 @@ def _classify_count_import_rows(db: Session, count: models.StockCount, numbered_
 
         classified.append({
             "line_no": line_no, "name": product.name, "action": "set",
-            "product": product, "counted": total,
+            "product": product, "counted": total, "rename_to": rename_to or None,
             # Only worth recording a breakdown when more than the base unit was
             # used — a plain number stays a plain number, same as a typed edit.
             "breakdown": breakdown if len(breakdown) > 1 or (breakdown and base_name not in breakdown) else None,
@@ -203,7 +230,7 @@ def _classify_count_import_rows(db: Session, count: models.StockCount, numbered_
     return classified
 
 
-def _run_count_import(db: Session, count: models.StockCount, classified, assign_shelf=None):
+def _run_count_import(db: Session, count: models.StockCount, classified, assign_shelf=None, user=None, request=None):
     """Apply each matched row's Counted Qty as a line's new count — same
     effect as typing it into the Counted field by hand. A later row for the
     same product in the same file simply overwrites an earlier one.
@@ -213,7 +240,7 @@ def _run_count_import(db: Session, count: models.StockCount, classified, assign_
     for exactly this workflow: download the count sheet for one shelf,
     walk it, count everything including items that were never assigned a
     shelf before, and have counting them also be what puts them on the map."""
-    applied = skipped = shelved = 0
+    applied = skipped = shelved = renamed = 0
     errors = []
     lines_by_product = {}
     for item in classified:
@@ -225,6 +252,17 @@ def _run_count_import(db: Session, count: models.StockCount, classified, assign_
             errors.append({"row": line_no, "name": name, "message": item["message"]})
             continue
         product = item["product"]
+        rename_to = item.get("rename_to")
+        if rename_to:
+            old_name = product.name
+            product.name = rename_to
+            audit.record(
+                db, user=user, request=request, action="update", entity_type="product",
+                entity_id=product.id, entity_label=product.name,
+                summary=f"Renamed “{old_name}” → “{rename_to}” (via stock count import)",
+                changes={"name": [old_name, rename_to]},
+            )
+            renamed += 1
         line = lines_by_product.get(product.id) or item["line"]
         if not line:
             line = models.StockCountLine(
@@ -232,6 +270,8 @@ def _run_count_import(db: Session, count: models.StockCount, classified, assign_
                 system_qty=Decimal(str(product.total_qty or 0)), counted_qty=Decimal("0"),
             )
             db.add(line)
+        else:
+            line.product_name = product.name
         line.counted_qty = item["counted"]
         line.unit_breakdown = json.dumps(item["breakdown"]) if item.get("breakdown") else None
         lines_by_product[product.id] = line
@@ -241,7 +281,7 @@ def _run_count_import(db: Session, count: models.StockCount, classified, assign_
         applied += 1
     db.commit()
     return {
-        "applied": applied, "skipped": skipped, "errors": errors, "shelved": shelved,
+        "applied": applied, "skipped": skipped, "errors": errors, "shelved": shelved, "renamed": renamed,
         "assign_shelf_name": assign_shelf.name if assign_shelf else None,
         "total": len(classified),
     }
@@ -543,12 +583,14 @@ def stock_count_import_upload(
 
     assign_shelf = db.get(models.Shelf, assign_shelf_id) if assign_shelf_id else None
     classified = _classify_count_import_rows(db, count, list(enumerate(rows, start=2)))
-    result = _run_count_import(db, count, classified, assign_shelf=assign_shelf)
+    result = _run_count_import(db, count, classified, assign_shelf=assign_shelf, user=user, request=request)
     result["filename"] = file.filename
     if result["applied"]:
         summary = f"Stock count {count.ref_no}: bulk import from “{file.filename}” set {result['applied']} line(s)"
         if result["shelved"]:
             summary += f", assigned {result['shelved']} product(s) to shelf “{result['assign_shelf_name']}”"
+        if result["renamed"]:
+            summary += f", renamed {result['renamed']} product(s)"
         audit.record(
             db, user=user, request=request, action="stock_count", entity_type="stock_count",
             entity_id=count.id, entity_label=count.ref_no, summary=summary,
@@ -617,14 +659,14 @@ def stock_count_import_template(count_id: int, shelf_id: int = 0, db: Session = 
             base_cell = breakdown.get(base_name, "")
         else:
             base_cell = float(line.counted_qty) if line else ""
-        row = [p.barcode or "", p.name, base_name, float(p.total_qty or 0), base_cell]
+        row = [p.barcode or "", p.name, "", base_name, float(p.total_qty or 0), base_cell]
         own_units = {(u.name or "").strip().lower() for u in p.units}
         for label in unit_headers:
             key = label.lower()
             row.append(breakdown.get(label, "") if key in own_units else "—")
         ws.append(row)
 
-    widths = [18, 32, 12, 22, 14] + [12] * len(unit_headers)
+    widths = [18, 32, 22, 12, 22, 14] + [12] * len(unit_headers)
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.freeze_panes = "C2"
@@ -738,18 +780,24 @@ def stock_count_complete(count_id: int, request: Request, reason: str = Form("co
         product = db.get(models.Product, line.product_id, with_for_update=True)
         if not product:
             continue
-        before_qty = Decimal(str(product.stock_qty or 0))
-        product.stock_qty = before_qty + variance
+        before_beginning = Decimal(str(product.beginning_stock or 0))
+        before_stock = Decimal(str(product.stock_qty or 0))
+        _apply_stock_count_correction(product, variance)
         unit_cost = Decimal(str(product.cost_price or 0))
         db.add(models.StockMovement(
             product_id=product.id, qty_base=variance, reason="stock_count", ref=count.ref_no,
             unit_cost=unit_cost, value=variance * unit_cost, note=reason_label,
         ))
+        changes = {}
+        if product.beginning_stock != before_beginning:
+            changes["beginning_stock"] = [str(before_beginning), str(product.beginning_stock)]
+        if product.stock_qty != before_stock:
+            changes["stock_qty"] = [str(before_stock), str(product.stock_qty)]
         audit.record(
             db, user=user, request=request, action="stock_count", entity_type="product",
             entity_id=product.id, entity_label=product.name,
             summary=f"Stock count {count.ref_no}: counted {line.counted_qty:g}, system said {line.system_qty:g}",
-            changes={"stock_qty": [str(before_qty), str(product.stock_qty)]},
+            changes=changes,
         )
 
     count.status = "completed"

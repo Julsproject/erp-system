@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Find Duplicates · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Find Duplicates</h1>
+    <p class="muted">
+      Scanned {{ scanned }} active product{{ '' if scanned == 1 else 's' }} —
+      {{ groups|length }} possible duplicate group{{ '' if groups|length == 1 else 's' }} found.
+      Nothing merges until you pick a keeper and confirm.
+    </p>
+  </div>
+  <a class="btn-link" href="/products">← Back to Inventory</a>
+</div>
+
+<div id="dupMsg" class="alert" style="display:none;margin-bottom:16px;"></div>
+
+{% if not groups %}
+<div class="card" style="text-align:center;padding:40px 20px;color:var(--muted);">
+  No likely duplicates found — every product name looks distinct. 🎉
+</div>
+{% else %}
+<div class="dup-groups">
+  {% for g in groups %}
+  <div class="card dup-group" data-group-index="{{ loop.index0 }}">
+    <div class="dup-group-head">
+      {% if g.kind == 'exact' %}
+      <span class="txn" style="background:#fef2f2;color:#b91c1c;">Exact match</span>
+      {% else %}
+      <span class="txn" style="background:#fffbeb;color:#92400e;">Likely match · {{ (g.score * 100)|round|int }}%</span>
+      {% endif %}
+      <span class="muted" style="font-size:12.5px;">{{ g.products|length }} products</span>
+    </div>
+    <div class="table-wrap" style="margin-top:10px;">
+      <table class="grid dup-table">
+        <thead>
+          <tr><th style="width:34px;">Keep</th><th>Product</th><th>Barcode</th><th>Category</th><th class="num">Qty</th><th class="num">Cost</th></tr>
+        </thead>
+        <tbody>
+          {% set gi = loop.index0 %}
+          {% for p in g.products %}
+          <tr>
+            <td><input type="radio" name="dupKeep{{ gi }}" class="dupKeepRadio" value="{{ p.id }}" {{ 'checked' if loop.first }}></td>
+            <td class="strong dupName">{{ p.name }}</td>
+            <td>{{ p.barcode or '—' }}</td>
+            <td>{{ p.category }}</td>
+            <td class="num">{{ p.qty|qty }}</td>
+            <td class="num">₱{{ '%.2f'|format(p.cost_price) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="form-actions" style="margin-top:12px;">
+      <button type="button" class="btn" onclick="mergeDupGroup(this)">Merge into selected</button>
+      <span class="muted dup-group-status" style="font-size:12.5px;"></span>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<style>
+  .dup-groups { display: flex; flex-direction: column; gap: 14px; }
+  .dup-group-head { display: flex; align-items: center; gap: 10px; }
+  .dup-table .dupKeepRadio { width: 16px; height: 16px; }
+</style>
+
+<script>
+  function dupEscape(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+
+  async function mergeDupGroup(btn) {
+    const card = btn.closest('.dup-group');
+    const radios = Array.from(card.querySelectorAll('.dupKeepRadio'));
+    const checked = card.querySelector('.dupKeepRadio:checked');
+    const statusEl = card.querySelector('.dup-group-status');
+    if (!checked) { alert('Pick which product to keep first.'); return; }
+    const keepId = checked.value;
+    const keepName = checked.closest('tr').querySelector('.dupName').textContent;
+    const others = radios.filter(r => r.value !== keepId);
+    if (!others.length) return;
+
+    if (!confirm('Merge ' + others.length + ' product(s) into "' + keepName + '"? ' +
+                 'Their stock and history move over and they get archived. This can\'t be undone in bulk.')) return;
+
+    btn.disabled = true;
+    btn.textContent = 'Merging…';
+    let ok = 0, failMsg = '';
+    for (const r of others) {
+      const dupName = r.closest('tr').querySelector('.dupName').textContent;
+      try {
+        const body = new URLSearchParams({ keep_id: keepId, merge_id: r.value });
+        const res = await fetch('/products/merge', {
+          method: 'POST', body,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        });
+        if (res.url && res.url.includes('merge_error')) {
+          const err = decodeURIComponent((res.url.split('merge_error=')[1] || '').split('&')[0]).replace(/\+/g, ' ');
+          failMsg = 'Couldn\'t merge “' + dupName + '”: ' + (err || 'unknown error');
+          break;
+        }
+        ok++;
+      } catch (e) {
+        failMsg = 'Network error merging “' + dupName + '”.';
+        break;
+      }
+    }
+
+    if (failMsg) {
+      statusEl.textContent = failMsg + (ok ? (' (' + ok + ' merged before this)') : '');
+      statusEl.style.color = 'var(--danger, #dc2626)';
+      btn.disabled = false;
+      btn.textContent = 'Merge into selected';
+      return;
+    }
+
+    const msg = document.getElementById('dupMsg');
+    msg.style.display = 'block';
+    msg.style.background = '#f0fdf4'; msg.style.borderColor = '#bbf7d0'; msg.style.color = '#15803d';
+    msg.textContent = 'Merged ' + ok + ' product(s) into “' + keepName + '”. Refreshing…';
+    setTimeout(() => window.location.reload(), 900);
+  }
+</script>
+{% endblock %}

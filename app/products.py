@@ -7,8 +7,10 @@ import base64
 import csv
 import io
 import json
+import re
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from difflib import SequenceMatcher
 from zoneinfo import ZoneInfo
 
 import barcode as barcode_lib
@@ -68,6 +70,16 @@ def _run_month_end_rollover(db: Session, period: str) -> int:
     shelf becomes next month's opening balance, and Stocks Qty starts fresh
     for the new month's purchases. total_qty (and therefore stock valuation)
     is unchanged, so this is a reclassification, not a StockMovement/adjustment.
+
+    Only a POSITIVE Stocks Qty gets folded in. A negative Stocks Qty (an
+    oversold backlog that hasn't been reconciled by a Stock Count yet) is
+    left exactly where it is instead of being carried into Actual Beginning
+    — Beginning is meant to be a clean opening balance, and once a negative
+    amount lands there it used to be permanent (a Stock Count only ever
+    corrected Stocks Qty, never Beginning — see _apply_stock_count_correction
+    for the fix on that side). Leaving it in Stocks Qty keeps it exactly as
+    reachable for reconciliation as it always was.
+
     One MonthEndRolloverLine per product is recorded so the exact amount
     that moved is traceable later (see /reports/month-end-rollover), plus
     one audit summary row for the Activity Log."""
@@ -75,15 +87,17 @@ def _run_month_end_rollover(db: Session, period: str) -> int:
     rolled = 0
     for p in products:
         old_beginning = Decimal(str(p.beginning_stock or 0))
-        qty_moved = Decimal(str(p.stock_qty or 0))
-        total = old_beginning + qty_moved
-        if old_beginning != total or qty_moved != 0:
-            p.beginning_stock = total
-            p.stock_qty = Decimal("0")
+        old_stock = Decimal(str(p.stock_qty or 0))
+        qty_moved = max(old_stock, Decimal("0"))
+        new_beginning = old_beginning + qty_moved
+        new_stock = old_stock - qty_moved
+        if new_beginning != old_beginning or new_stock != old_stock:
+            p.beginning_stock = new_beginning
+            p.stock_qty = new_stock
             rolled += 1
             db.add(models.MonthEndRolloverLine(
                 product_id=p.id, product_name=p.name, period=period,
-                qty_moved=qty_moved, old_beginning=old_beginning, new_beginning=total,
+                qty_moved=qty_moved, old_beginning=old_beginning, new_beginning=new_beginning,
             ))
     if rolled:
         audit.record(
@@ -291,6 +305,13 @@ def low_stock_expr(default_pct):
     return or_(own_threshold, fallback_threshold)
 
 
+SORTABLE_COLUMNS = {
+    "beginning_stock": models.Product.beginning_stock,
+    "stock_qty": models.Product.stock_qty,
+    "total_qty": models.Product.beginning_stock + models.Product.stock_qty,
+}
+
+
 @router.get("/products", response_class=HTMLResponse)
 def list_products(
     request: Request,
@@ -300,6 +321,8 @@ def list_products(
     category_id: int = 0,
     subcategory_id: int = 0,
     shelf_id: int = 0,
+    sort: str = "",
+    sort_dir: str = "asc",
     bulk_msg: str = "",
     deleted: int = 0,
     delete_blocked: int = 0,
@@ -314,6 +337,7 @@ def list_products(
 
     q = (q or "").strip()
     page = max(page, 1)
+    sort_dir = "desc" if sort_dir == "desc" else "asc"
 
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
@@ -347,8 +371,16 @@ def list_products(
     total_cost_value = Decimal(str(total_cost_value or 0))
     total_retail_value = Decimal(str(total_retail_value or 0))
 
+    sort_col = SORTABLE_COLUMNS.get(sort)
+    if sort_col is not None:
+        # Name as a tiebreaker keeps ties (e.g. a bunch of zero-stock
+        # products) in a stable, predictable order instead of shuffling on
+        # every page load.
+        order = (sort_col.desc() if sort_dir == "desc" else sort_col.asc(), models.Product.name)
+    else:
+        order = (models.Product.name,)
     products = (
-        query.order_by(models.Product.name)
+        query.order_by(*order)
         .offset((page - 1) * PAGE_SIZE)
         .limit(PAGE_SIZE)
         .all()
@@ -444,6 +476,8 @@ def list_products(
             "shelves": shelves,
             "shelf_counts": shelf_counts,
             "no_shelf_count": no_shelf_count,
+            "sort": sort,
+            "sort_dir": sort_dir,
             "last_rollover_period": settings_store.get_setting(db, MONTH_END_SETTING_KEY, ""),
         },
     )
@@ -999,6 +1033,146 @@ def delete_product(product_id: int, request: Request, db: Session = Depends(get_
     db.delete(product)
     db.commit()
     return RedirectResponse("/products?deleted=1", status_code=status.HTTP_302_FOUND)
+
+
+_DUP_PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
+_DUP_WS_RE = re.compile(r"\s+")
+DUPLICATE_SIMILARITY_THRESHOLD = 0.92
+
+
+def _normalize_dup_name(name: str) -> str:
+    """Lowercased, punctuation stripped to spaces, whitespace collapsed —
+    "Coke 1.5L" and "coke 1.5 l" normalize to the same string, so a straight
+    equality check catches spacing/punctuation/case variants of the same
+    typed name without any similarity math needed."""
+    s = (name or "").lower()
+    s = _DUP_PUNCT_RE.sub(" ", s)
+    s = _DUP_WS_RE.sub(" ", s).strip()
+    return s
+
+
+def _find_duplicate_groups(products: list):
+    """Groups active products that look like the same item entered more than
+    once. Two passes, cheapest first:
+
+    1. Exact match on the normalized name — spacing/punctuation/case is the
+       only difference, so these are near-certain duplicates.
+    2. Everything left over is bucketed by its first normalized word (a
+       cheap, near-free grouping step), and only products sharing that first
+       word are ever compared to each other with difflib — comparing every
+       product against every other product would be ~2,000,000 comparisons
+       at 1,000 products; bucketing first keeps each comparison set small.
+
+    Returns a list of {"kind": "exact"|"near", "score": float, "products": [...]}
+    dicts, one per group of 2+ products — singletons (nothing looks like a
+    duplicate) are never included."""
+    by_norm: dict[str, list] = {}
+    for p in products:
+        by_norm.setdefault(_normalize_dup_name(p.name), []).append(p)
+
+    groups = []
+    used_ids = set()
+    for norm, members in by_norm.items():
+        if len(members) > 1 and norm:
+            groups.append({"kind": "exact", "score": 1.0, "products": members})
+            used_ids.update(p.id for p in members)
+
+    buckets: dict[str, list] = {}
+    for p in products:
+        if p.id in used_ids:
+            continue
+        norm = _normalize_dup_name(p.name)
+        if not norm:
+            continue
+        first_word = norm.split(" ", 1)[0]
+        buckets.setdefault(first_word, []).append((p, norm))
+
+    for bucket in buckets.values():
+        if len(bucket) < 2:
+            continue
+        n = len(bucket)
+        parent = list(range(n))
+
+        def find(i):
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        def union(i, j):
+            ri, rj = find(i), find(j)
+            if ri != rj:
+                parent[ri] = rj
+
+        pair_scores = {}
+        for i in range(n):
+            for j in range(i + 1, n):
+                ratio = SequenceMatcher(None, bucket[i][1], bucket[j][1]).ratio()
+                if ratio >= DUPLICATE_SIMILARITY_THRESHOLD:
+                    union(i, j)
+                    pair_scores[(i, j)] = ratio
+
+        clusters: dict[int, list] = {}
+        for i in range(n):
+            clusters.setdefault(find(i), []).append(i)
+
+        for idxs in clusters.values():
+            if len(idxs) < 2:
+                continue
+            idx_set = set(idxs)
+            scores = [s for (i, j), s in pair_scores.items() if i in idx_set and j in idx_set]
+            groups.append({
+                "kind": "near",
+                "score": min(scores) if scores else DUPLICATE_SIMILARITY_THRESHOLD,
+                "products": [bucket[i][0] for i in idxs],
+            })
+
+    groups.sort(key=lambda g: (-len(g["products"]), -g["score"]))
+    return groups
+
+
+@router.get("/products/duplicates", response_class=HTMLResponse)
+def find_duplicates(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Scans every active product for likely duplicates (same item typed in
+    more than once under a slightly different name/spacing) so reviewing a
+    ~1,000-product catalogue for dupes is a short candidate list instead of a
+    name-by-name manual search. Purely a report — nothing merges until the
+    admin picks a keeper and confirms, via the same /products/merge endpoint
+    Merge Duplicates already uses."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
+
+    products = (
+        db.query(models.Product)
+        .filter(models.Product.is_active.is_(True))
+        .order_by(models.Product.name)
+        .all()
+    )
+    groups = [
+        {
+            "kind": g["kind"],
+            "score": g["score"],
+            "products": [
+                {
+                    "id": p.id, "name": p.name, "barcode": p.barcode or "",
+                    "category": p.category.name if p.category else "Uncategorized",
+                    "qty": float(p.total_qty or 0),
+                    "cost_price": float(p.cost_price or 0),
+                }
+                for p in g["products"]
+            ],
+        }
+        for g in _find_duplicate_groups(products)
+    ]
+    return templates.TemplateResponse(
+        "products/duplicates.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "groups": groups, "scanned": len(products),
+        },
+    )
 
 
 @router.get("/products/merge/search")

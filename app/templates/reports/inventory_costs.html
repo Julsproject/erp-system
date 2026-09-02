@@ -14,10 +14,18 @@
 </div>
 
 <form class="toolbar" method="get" action="/reports/inventory-costs">
-  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search product name…" autofocus>
+  <input class="search" type="search" name="q" id="qSearch" value="{{ q }}" placeholder="Search product name…" autofocus>
   <button class="btn-secondary" type="submit">Search</button>
   {% if q %}<a class="btn-link" href="/reports/inventory-costs">Clear</a>{% endif %}
 </form>
+<script>
+  // See products/list.html for why: autofocus on a pre-filled box can put
+  // the mobile caret at position 0 instead of the end.
+  (function() {
+    var box = document.getElementById('qSearch');
+    if (box && box.value) { box.focus(); var end = box.value.length; box.setSelectionRange(end, end); }
+  })();
+</script>
 
 <div class="table-wrap">
   <table class="grid">

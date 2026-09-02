@@ -146,6 +146,28 @@
   </table>
 </div>
 
+{# These two are used by controls that render for BOTH open and completed
+   counts (the shelf filter, the per-unit "▾" toggle on any line that has a
+   unit ladder) — so they live in their own always-rendered script, not the
+   one below that's wrapped in {% if count.status == 'open' %} and never
+   reaches a completed count's page at all. #}
+<script>
+function filterByShelf(shelfName) {
+  document.querySelectorAll('#linesTable tbody tr[data-line-id]').forEach(function (row) {
+    const match = !shelfName || row.dataset.shelf === shelfName;
+    row.style.display = match ? '' : 'none';
+    const unitRow = document.getElementById('unitRow' + row.getAttribute('data-line-id'));
+    if (unitRow && !match) unitRow.style.display = 'none';
+  });
+}
+function toggleUnitRow(lineId) {
+  const el = document.getElementById('unitRow' + lineId);
+  if (!el) return;
+  const open = el.style.display !== 'none';
+  el.style.display = open ? 'none' : 'table-row';
+}
+</script>
+
 {% if count.status == 'open' %}
 <div class="head-actions" style="margin-top:18px;align-items:flex-end;">
   <form method="post" action="/stock-count/{{ count.id }}/cancel" onsubmit="return confirm('Cancel this count? Nothing counted so far will be applied.');" style="display:inline;">
@@ -255,13 +277,6 @@ function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
   });
-}
-
-function toggleUnitRow(lineId) {
-  const el = document.getElementById('unitRow' + lineId);
-  if (!el) return;
-  const open = el.style.display !== 'none';
-  el.style.display = open ? 'none' : 'table-row';
 }
 
 async function setUnitQty(lineId) {
@@ -390,15 +405,6 @@ async function assignShelf() {
     ? data.assigned + ' item(s) now on ' + data.shelf + '.'
     : 'Every counted item already has a shelf.';
   select.value = '';
-}
-
-function filterByShelf(shelfName) {
-  document.querySelectorAll('#linesTable tbody tr[data-line-id]').forEach(function (row) {
-    const match = !shelfName || row.dataset.shelf === shelfName;
-    row.style.display = match ? '' : 'none';
-    const unitRow = document.getElementById('unitRow' + row.getAttribute('data-line-id'));
-    if (unitRow && !match) unitRow.style.display = 'none';
-  });
 }
 
 updateStats();

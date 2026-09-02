@@ -19,6 +19,9 @@
       {% if result.assign_shelf_name %}
       <div class="stat ok"><span class="num">{{ result.shelved }}</span><span>Newly assigned to “{{ result.assign_shelf_name }}”</span></div>
       {% endif %}
+      {% if result.renamed %}
+      <div class="stat ok"><span class="num">{{ result.renamed }}</span><span>Renamed</span></div>
+      {% endif %}
     </div>
     {% if result.errors %}
     <table class="grid" style="margin-top:16px;">
@@ -86,9 +89,14 @@
     </div>
 
     <div class="hint-box">
-      <strong>Columns:</strong> Barcode, Product Name (required), Unit, System Qty, Counted Qty.
+      <strong>Columns:</strong> Barcode, Product Name (required), Rename To, Unit, System Qty, Counted Qty.
       Each row is matched to a product by Barcode first, falling back to an exact Product Name match if the
       barcode is blank. A row that matches nothing becomes an error instead of silently being skipped.
+      <br><br>
+      <strong>Rename To</strong> is optional — fill it in only for a row where you want to fix the product's name
+      (a typo, a naming-convention correction) while you're already looking right at it during the count. Leave it
+      blank to leave the name alone. It's ignored entirely on an older sheet downloaded before this column existed —
+      nothing breaks if you upload one of those.
       <br><br>
       <strong>Counted Qty</strong> is in the product's base unit — the one shown in the <strong>Unit</strong> column.
       It replaces whatever this session already has for that product, same as typing a new number into the

@@ -17,10 +17,18 @@
 <form class="card form" method="get" action="/pdc/new">
   <input type="hidden" name="direction" value="{{ direction }}">
   <label class="full">{{ 'Find customer' if direction == 'received' else 'Find supplier' }}
-    <input type="search" name="q" value="{{ q }}" placeholder="Type a name…" autofocus>
+    <input type="search" name="q" id="qSearch" value="{{ q }}" placeholder="Type a name…" autofocus>
   </label>
   <div class="form-actions full"><button class="btn" type="submit">Search</button></div>
 </form>
+<script>
+  // See products/list.html for why: autofocus on a pre-filled box can put
+  // the mobile caret at position 0 instead of the end.
+  (function() {
+    var box = document.getElementById('qSearch');
+    if (box && box.value) { box.focus(); var end = box.value.length; box.setSelectionRange(end, end); }
+  })();
+</script>
 
 {% if matches %}
 <div class="table-wrap" style="margin-top:14px;">
