@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Stock Count · {{ app_name }}{% endblock %}
 {% block content %}
+{% set is_admin_user = (user.role or '')|lower in ('admin', 'manager') %}
 <div class="page-head">
   <div>
     <h1 class="page-title">Stock Count</h1>
@@ -20,16 +21,38 @@
 </div>
 {% endif %}
 
+{% if bulk_msg %}
+<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;">Effective date set on {{ bulk_msg }} count{{ '' if bulk_msg == 1 else 's' }}.</div>
+{% endif %}
+{% if bulk_error %}
+<div class="alert" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">Enter a valid date.</div>
+{% endif %}
+
+<form id="bulkEffForm" method="post" action="/stock-count/bulk-set-effective-date">
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Ref #</th><th>Count Date</th><th>Started</th><th>Completed</th><th>Status</th><th class="num">Lines</th><th></th></tr>
+      <tr>
+        {% if is_admin_user %}<th><input type="checkbox" id="selectAllChk" onchange="toggleAllChk(this)"></th>{% endif %}
+        <th>Ref #</th><th>Count Date</th><th>Effective Date</th><th>Started</th><th>Completed</th><th>Status</th><th class="num">Lines</th><th></th>
+      </tr>
     </thead>
     <tbody>
       {% for c in past %}
       <tr>
+        {% if is_admin_user %}
+        <td>
+          {% if c.status == 'completed' and not c.effective_applied_at %}
+          <input type="checkbox" class="rowChk" name="count_ids" value="{{ c.id }}" onchange="updateBulkBar()">
+          {% endif %}
+        </td>
+        {% endif %}
         <td class="strong">{{ c.ref_no }}</td>
         <td>{{ c.count_date.strftime('%b %d, %Y') if c.count_date else '—' }}</td>
+        <td>
+          {{ c.effective_date.strftime('%b %d, %Y') if c.effective_date else '—' }}
+          {% if c.effective_applied_at %}<span class="warn-tag" style="background:#f0fdf4;color:#15803d;" title="Applied {{ c.effective_applied_at.strftime('%b %d, %Y %I:%M %p') }}">✓ applied</span>{% endif %}
+        </td>
         <td>{{ c.created_at.strftime('%b %d, %Y %I:%M %p') if c.created_at else '—' }}</td>
         <td>{{ c.completed_at.strftime('%b %d, %Y %I:%M %p') if c.completed_at else '—' }}</td>
         <td>
@@ -40,11 +63,55 @@
         <td class="row-actions"><a class="btn-link" href="/stock-count/{{ c.id }}">View</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="empty">No past counts yet.</td></tr>
+      <tr><td colspan="{{ 9 if is_admin_user else 8 }}" class="empty">No past counts yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
+</form>
+
+{% if is_admin_user %}
+<div class="bulk-bar" id="bulkBar" style="display:none;">
+  <span><strong id="bulkCount">0</strong> selected</span>
+  <label style="margin:0;font-size:13px;">Set Effective Date to
+    <input type="date" id="bulkEffDate" style="margin-left:6px;padding:4px 8px;font-size:13px;">
+  </label>
+  <button type="button" class="btn-secondary" onclick="submitBulkEff()">Apply</button>
+  <button type="button" class="btn-link" onclick="clearAllChk()">Clear selection</button>
+</div>
+<script>
+function updateBulkBar() {
+  const n = document.querySelectorAll('.rowChk:checked').length;
+  document.getElementById('bulkCount').textContent = n;
+  document.getElementById('bulkBar').style.display = n ? 'flex' : 'none';
+  const all = document.querySelectorAll('.rowChk');
+  const selectAll = document.getElementById('selectAllChk');
+  if (selectAll) selectAll.checked = all.length > 0 && n === all.length;
+}
+function toggleAllChk(box) {
+  document.querySelectorAll('.rowChk').forEach(c => c.checked = box.checked);
+  updateBulkBar();
+}
+function clearAllChk() {
+  document.querySelectorAll('.rowChk').forEach(c => c.checked = false);
+  const selectAll = document.getElementById('selectAllChk');
+  if (selectAll) selectAll.checked = false;
+  updateBulkBar();
+}
+function submitBulkEff() {
+  const date = document.getElementById('bulkEffDate').value;
+  if (!date) { alert('Pick a date first.'); return; }
+  const n = document.querySelectorAll('.rowChk:checked').length;
+  if (!n) return;
+  if (!confirm('Set Effective Date to ' + date + ' for ' + n + ' count(s)?')) return;
+  const form = document.getElementById('bulkEffForm');
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden'; hidden.name = 'effective_date'; hidden.value = date;
+  form.appendChild(hidden);
+  form.submit();
+}
+</script>
+{% endif %}
 
 {% if pages > 1 %}
 <div class="pager">

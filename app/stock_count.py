@@ -404,7 +404,10 @@ def _uncounted_negatives(db: Session, count: models.StockCount):
 
 
 @router.get("/stock-count", response_class=HTMLResponse)
-def stock_count_list(request: Request, page: int = 1, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def stock_count_list(
+    request: Request, page: int = 1, bulk_msg: int = 0, bulk_error: str = "",
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_floor_staff(user):
@@ -419,7 +422,8 @@ def stock_count_list(request: Request, page: int = 1, db: Session = Depends(get_
     return templates.TemplateResponse(
         "stock_count/list.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "open_count": open_count, "past": past, "page": page, "pages": pages, "total": total},
+         "open_count": open_count, "past": past, "page": page, "pages": pages, "total": total,
+         "bulk_msg": bulk_msg, "bulk_error": bulk_error},
     )
 
 
@@ -557,6 +561,46 @@ def stock_count_set_effective_date(
         )
         db.commit()
     return RedirectResponse(f"/stock-count/{count_id}", status_code=302)
+
+
+@router.post("/stock-count/bulk-set-effective-date")
+def stock_count_bulk_set_effective_date(
+    request: Request, count_ids: list[str] = Form([]), effective_date: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    """Same rule and permission as the single set-effective-date route,
+    applied to many completed counts in one go — a shop that runs several
+    count sessions (one per shelf/area, say) covering one period shouldn't
+    have to open each one individually just to point them at the same
+    Effective Date. Silently skips anything not eligible (not completed yet,
+    or already applied) rather than erroring the whole batch out."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/stock-count", status_code=302)
+    try:
+        new_date = date.fromisoformat((effective_date or "").strip())
+    except ValueError:
+        return RedirectResponse("/stock-count?bulk_error=invalid", status_code=302)
+
+    updated = 0
+    for cid in {int(i) for i in count_ids if i.isdigit()}:
+        count = db.get(models.StockCount, cid)
+        if not count or count.status != "completed" or count.effective_applied_at:
+            continue
+        old_date = count.effective_date
+        if new_date != old_date:
+            count.effective_date = new_date
+            audit.record(
+                db, user=user, request=request, action="update", entity_type="stock_count",
+                entity_id=count.id, entity_label=count.ref_no,
+                summary=f"Changed effective date for {count.ref_no}: {old_date or '—'} → {new_date}",
+                changes={"effective_date": [str(old_date) if old_date else None, str(new_date)]},
+            )
+            updated += 1
+    if updated:
+        db.commit()
+    return RedirectResponse(f"/stock-count?bulk_msg={updated}", status_code=302)
 
 
 @router.post("/stock-count/{count_id:int}/scan")
