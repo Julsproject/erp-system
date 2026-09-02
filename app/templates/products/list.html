@@ -208,6 +208,10 @@
           {% if is_admin_user %}
           <button type="button" class="btn-link rename-btn" onclick="startRename({{ p.id }})" title="Rename this product">✎</button>
           {% endif %}
+          {% if p.id in dd_flags %}
+          <button type="button" class="btn-link dd-flag-btn" onclick="openDD({{ p.id }}, '{{ p.name|e }}')"
+                  title="{{ dd_flags[p.id].count }} past sale(s) may have already been reflected in a Stock Count — deducted twice. Click to review.">⚠ {{ dd_flags[p.id].count }}</button>
+          {% endif %}
           {% if p.cost_price and p.cost_price > 0 %}
             {% if not p.selling_price or p.selling_price <= 0 %}
             <span class="warn-tag" title="No selling price set">⚠ no price</span>
@@ -471,6 +475,8 @@ function startRename(id) {
   .sort-th:hover { text-decoration:underline; }
   .sort-th.sort-active { color:var(--brand); }
   .sort-arrow { font-size:13px; color:var(--brand); font-weight:900; }
+  .dd-flag-btn { color:#b45309; font-weight:700; font-size:12px; margin-left:4px; }
+  .dd-flag-btn:hover { text-decoration:underline; }
 </style>
 
 <script>
@@ -591,6 +597,104 @@ function startRename(id) {
     document.getElementById('mergeKeepId').value = mergeKeeper;
     document.getElementById('mergeMergeId').value = dup.id;
     document.getElementById('mergeForm').submit();
+  }
+</script>
+
+<div id="ddOverlay" class="modal-overlay" style="display:none;" onclick="if (event.target === this) closeDD();">
+  <div class="modal-box np-panel" style="max-width:640px;">
+    <h3 class="np-title">Review Double-Deductions — <span id="ddProdName"></span></h3>
+    <p class="muted" style="margin:-6px 0 14px;font-size:13px;">
+      These sale(s) were entered after a Stock Count that already covers their date — meaning that
+      count's number likely already reflected this item being gone, so deducting it again on top
+      double-counted it. Pick the date range to fix and confirm — the exact quantity gets added back.
+    </p>
+    <div id="ddList" class="table-wrap" style="max-height:260px;overflow-y:auto;"></div>
+    <div style="display:flex;gap:12px;margin-top:14px;align-items:flex-end;flex-wrap:wrap;">
+      <label>From<br><input type="date" id="ddFrom"></label>
+      <label>To<br><input type="date" id="ddTo"></label>
+      <span class="muted" id="ddMatchCount" style="font-size:12.5px;"></span>
+    </div>
+    <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
+      <button type="button" class="btn-secondary" onclick="closeDD()">Cancel</button>
+      <button type="button" class="btn" id="ddConfirmBtn" onclick="submitDD()" disabled>Void Selected Range</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  let ddProductId = null, ddCandidates = [];
+  function ddEscape(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+
+  async function openDD(id, name) {
+    ddProductId = id;
+    document.getElementById('ddProdName').textContent = name;
+    document.getElementById('ddList').innerHTML = '<p class="muted">Loading…</p>';
+    document.getElementById('ddConfirmBtn').disabled = true;
+    document.getElementById('ddOverlay').style.display = 'flex';
+    const res = await fetch('/products/' + id + '/double-deductions');
+    const data = await res.json();
+    ddCandidates = data.candidates || [];
+    renderDDList();
+    if (ddCandidates.length) {
+      const dates = ddCandidates.map(c => c.sale_date).sort();
+      document.getElementById('ddFrom').value = dates[0];
+      document.getElementById('ddTo').value = dates[dates.length - 1];
+    } else {
+      document.getElementById('ddFrom').value = '';
+      document.getElementById('ddTo').value = '';
+    }
+    updateDDMatch();
+  }
+  function closeDD() { document.getElementById('ddOverlay').style.display = 'none'; }
+
+  function renderDDList() {
+    const box = document.getElementById('ddList');
+    if (!ddCandidates.length) {
+      box.innerHTML = '<p class="muted">Nothing left to review for this item — it may already have been corrected.</p>';
+      return;
+    }
+    let html = '<table class="grid"><thead><tr><th>Invoice</th><th>Sale Date</th><th class="num">Qty</th><th>Already Counted In</th></tr></thead><tbody>';
+    ddCandidates.forEach(c => {
+      html += '<tr><td>' + ddEscape(c.invoice_no) + '</td><td>' + ddEscape(c.sale_date) + '</td><td class="num">' +
+        ddEscape(String(Math.abs(c.qty_base))) + '</td><td>' + ddEscape(c.count_ref) + ' (' + ddEscape(c.count_date) + ')</td></tr>';
+    });
+    html += '</tbody></table>';
+    box.innerHTML = html;
+  }
+
+  function updateDDMatch() {
+    const from = document.getElementById('ddFrom').value;
+    const to = document.getElementById('ddTo').value;
+    const n = ddCandidates.filter(c => (!from || c.sale_date >= from) && (!to || c.sale_date <= to)).length;
+    document.getElementById('ddMatchCount').textContent = n + ' sale(s) in this range will be corrected.';
+    document.getElementById('ddConfirmBtn').disabled = n === 0;
+  }
+  document.getElementById('ddFrom').addEventListener('change', updateDDMatch);
+  document.getElementById('ddTo').addEventListener('change', updateDDMatch);
+
+  async function submitDD() {
+    const from = document.getElementById('ddFrom').value;
+    const to = document.getElementById('ddTo').value;
+    if (!from || !to) return;
+    if (!confirm('Add back the deducted quantity for the matching sale(s) in this range? This will be logged and cannot be un-done from this screen.')) return;
+    document.getElementById('ddConfirmBtn').disabled = true;
+    try {
+      const res = await fetch('/products/' + ddProductId + '/void-deductions', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ from_date: from, to_date: to }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        alert('Corrected ' + data.corrected + ' sale(s) — added back ' + data.qty_restored + ' unit(s) total.');
+        window.location.reload();
+      } else {
+        alert(data.error || 'Could not apply the correction.');
+        document.getElementById('ddConfirmBtn').disabled = false;
+      }
+    } catch (e) {
+      alert('Network error — nothing was changed.');
+      document.getElementById('ddConfirmBtn').disabled = false;
+    }
   }
 </script>
 {% endif %}

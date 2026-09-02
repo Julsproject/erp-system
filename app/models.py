@@ -801,6 +801,10 @@ class StockMovement(Base):
     value = Column(Numeric(14, 2), nullable=True)
     note = Column(String(255), nullable=True)           # reason code, e.g. "Damage / breakage"
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # Set only on a correction movement (reason="correction") that reverses a
+    # specific past sale-deduction found to be a double-deduction — see
+    # app/double_deductions.py. Lets the finder skip anything already fixed.
+    corrects_movement_id = Column(Integer, ForeignKey("stock_movements.id"), nullable=True)
 
 
 class MonthEndRolloverLine(Base):
@@ -839,6 +843,25 @@ class StockCount(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_by = Column(Integer, ForeignKey("users.id"))
     completed_at = Column(DateTime(timezone=True))
+    # The date the physical count actually happened — distinct from
+    # completed_at, which is whenever the session got marked done *in the
+    # system* and can lag days behind a shop that counts on paper first and
+    # types it in later. Defaults to today when the count is started;
+    # editable afterward (see /stock-count/{id}/set-count-date) since the
+    # real date is often only known — or corrected — after the fact.
+    count_date = Column(Date)
+    # The date Accounting picks for when this count's result becomes the new
+    # Actual Beginning — separate from count_date (when it was physically
+    # counted). Until this date arrives, Actual Beginning for this count's
+    # products stays exactly as it was; sales and this count's own variance
+    # correction only ever move Stocks Qty in the meantime. Defaults to the
+    # 1st of the month after count_date when the count completes; editable
+    # afterward by admin/manager — see /stock-count/{id}/set-effective-date.
+    effective_date = Column(Date, nullable=True)
+    # When the Actual Beginning fold for effective_date actually ran (see
+    # stock_count._apply_effective_date_rebase) — set once, so it can never
+    # double-apply, and effective_date can no longer be edited afterward.
+    effective_applied_at = Column(DateTime(timezone=True), nullable=True)
 
     lines = relationship("StockCountLine", back_populates="stock_count", cascade="all, delete-orphan")
 

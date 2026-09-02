@@ -12,6 +12,34 @@
       Started {{ count.created_at.strftime('%b %d, %Y %I:%M %p') if count.created_at else '' }}
       {% if count.completed_at %} · {{ 'Completed' if count.status == 'completed' else 'Cancelled' }} {{ count.completed_at.strftime('%b %d, %Y %I:%M %p') }}{% endif %}
     </p>
+    <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;">
+      <span class="muted" style="font-size:13px;">Count date (when this was physically counted, not when it was finished in the system):</span>
+      {% if can_edit_count_date %}
+      <form method="post" action="/stock-count/{{ count.id }}/set-count-date" style="display:flex;align-items:center;gap:6px;">
+        <input type="date" name="count_date" value="{{ count.count_date.isoformat() if count.count_date else '' }}" max="{{ today_iso }}" style="padding:4px 8px;font-size:13px;">
+        <button class="btn-link" type="submit" style="font-size:13px;">Save</button>
+      </form>
+      {% else %}
+      <strong>{{ count.count_date.strftime('%b %d, %Y') if count.count_date else '—' }}</strong>
+      {% endif %}
+    </div>
+    {% if count.status == 'completed' %}
+    <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap;">
+      <span class="muted" style="font-size:13px;">Effective date (when this count's result becomes the new Actual Beginning):</span>
+      {% if can_edit_effective_date %}
+      <form method="post" action="/stock-count/{{ count.id }}/set-effective-date" style="display:flex;align-items:center;gap:6px;">
+        <input type="date" name="effective_date" value="{{ count.effective_date.isoformat() if count.effective_date else '' }}" style="padding:4px 8px;font-size:13px;">
+        <button class="btn-link" type="submit" style="font-size:13px;">Save</button>
+      </form>
+      {% else %}
+      <strong>{{ count.effective_date.strftime('%b %d, %Y') if count.effective_date else '—' }}</strong>
+      {% endif %}
+      {% if count.effective_applied_at %}
+      <span class="warn-tag" style="background:#f0fdf4;color:#15803d;" title="Applied {{ count.effective_applied_at.strftime('%b %d, %Y %I:%M %p') }}">✓ applied</span>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if date_error %}<p class="alert" style="margin-top:6px;font-size:13px;padding:6px 10px;display:inline-block;">{{ date_error }}</p>{% endif %}
   </div>
   <div class="head-actions">
     {% if count.status == 'open' %}

@@ -27,6 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from . import audit, models, pricing, settings_store
 from .database import SessionLocal, get_db
 from .deps import get_current_user, is_staff, safe_back_url
+from .double_deductions import find_double_deduction_candidates
 from .search_utils import multi_word_ilike
 from .templating import templates
 
@@ -386,6 +387,21 @@ def list_products(
         .all()
     )
 
+    # Which of these products (only this page's worth — cheap) have a past
+    # sale that likely double-deducted stock already reflected in a
+    # completed Stock Count. Admin/manager only, since only they can void one.
+    dd_flags = {}
+    if is_staff(user):
+        dd_map = find_double_deduction_candidates(db, [p.id for p in products])
+        dd_flags = {
+            pid: {
+                "count": len(rows),
+                "min_date": min(r["sale_date"] for r in rows).date().isoformat(),
+                "max_date": max(r["sale_date"] for r in rows).date().isoformat(),
+            }
+            for pid, rows in dd_map.items()
+        }
+
     # Quick-filter pills: only categories actually in use, with a live count
     # each, computed against the current search/alert filter (not the
     # category filter itself) so switching pills reflects what's really there.
@@ -478,6 +494,7 @@ def list_products(
             "no_shelf_count": no_shelf_count,
             "sort": sort,
             "sort_dir": sort_dir,
+            "dd_flags": dd_flags,
             "last_rollover_period": settings_store.get_setting(db, MONTH_END_SETTING_KEY, ""),
         },
     )
@@ -631,6 +648,89 @@ def rename_product(product_id: int, data: dict, request: Request, db: Session = 
         )
         db.commit()
     return {"ok": True, "name": product.name}
+
+
+@router.get("/products/{product_id:int}/double-deductions")
+def product_double_deductions(product_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Candidate list for the ⚠ flag on the Inventory row — the actual sales
+    behind that product's flag, for the review modal to show and pre-fill a
+    From/To range from."""
+    if not user or not is_staff(user):
+        return JSONResponse({"candidates": []}, status_code=403)
+    rows = find_double_deduction_candidates(db, [product_id]).get(product_id, [])
+    return JSONResponse({
+        "candidates": [
+            {
+                "movement_id": r["movement_id"],
+                "qty_base": r["qty_base"],
+                "invoice_no": r["invoice_no"],
+                "sale_date": r["sale_date"].date().isoformat(),
+                "count_ref": r["count_ref"],
+                "count_date": r["count_date"].isoformat(),
+            }
+            for r in rows
+        ],
+    })
+
+
+@router.post("/products/{product_id:int}/void-deductions")
+def void_double_deductions(product_id: int, data: dict, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Reverses the stock effect of past sale(s) that likely double-deducted
+    this product's counted stock (see app/double_deductions.py) — adds the
+    exact quantity back, healing a negative Actual Beginning first the same
+    way a Stock Count correction does. Recomputes the candidate list itself
+    rather than trusting whatever the client sends, filtered to the chosen
+    date range — so this can only ever touch real, still-open evidence, never
+    something already corrected or no longer valid by the time it's clicked."""
+    if not user:
+        return JSONResponse({"ok": False, "error": "Please sign in again."}, status_code=401)
+    if not is_staff(user):
+        return JSONResponse({"ok": False, "error": "You don't have permission to do this."}, status_code=403)
+    product = db.get(models.Product, product_id)
+    if not product:
+        return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
+
+    try:
+        from_date = date.fromisoformat((data.get("from_date") or "").strip())
+        to_date = date.fromisoformat((data.get("to_date") or "").strip())
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "Pick a valid date range."}, status_code=400)
+    if from_date > to_date:
+        return JSONResponse({"ok": False, "error": "From date must be on or before To date."}, status_code=400)
+
+    candidates = [
+        r for r in find_double_deduction_candidates(db, [product_id]).get(product_id, [])
+        if from_date <= r["sale_date"].date() <= to_date
+    ]
+    if not candidates:
+        return JSONResponse({"ok": False, "error": "No matching sale(s) found in that date range."}, status_code=400)
+
+    from .pos import _apply_stock_count_correction
+    total_qty = Decimal("0")
+    for c in candidates:
+        qty = Decimal(str(abs(c["qty_base"])))
+        _apply_stock_count_correction(product, qty)
+        db.add(models.StockMovement(
+            product_id=product.id,
+            qty_base=qty,
+            reason="correction",
+            ref=c["invoice_no"],
+            note=f"Double-deduction void — {c['invoice_no']} ({c['sale_date'].date().isoformat()}), already reflected in {c['count_ref']}",
+            corrects_movement_id=c["movement_id"],
+        ))
+        total_qty += qty
+
+    audit.record(
+        db, user=user, request=request, action="void_double_deduction", entity_type="product",
+        entity_id=product.id, entity_label=product.name,
+        summary=f"Voided {len(candidates)} double-deducted sale(s) dated {from_date}–{to_date}, restored {total_qty} unit(s)",
+        changes={"corrected": [
+            {"movement_id": c["movement_id"], "invoice_no": c["invoice_no"], "qty": c["qty_base"], "count_ref": c["count_ref"]}
+            for c in candidates
+        ]},
+    )
+    db.commit()
+    return JSONResponse({"ok": True, "corrected": len(candidates), "qty_restored": float(total_qty)})
 
 
 def _save_from_form(product: models.Product, db: Session, form):
@@ -1559,6 +1659,7 @@ MOVEMENT_LABELS = {
     "purchase": "Purchase received", "purchase-return": "Purchase return",
     "adjustment": "Manual adjustment", "void": "Sale voided",
     "sale-edit-reverse": "Item correction (reversed)",
+    "correction": "Double-deduction void",
 }
 
 

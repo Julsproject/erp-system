@@ -429,6 +429,7 @@
 </div>
 
 <script>
+const IS_STAFF_USER = {{ 'true' if (user.role or '')|lower in ('admin', 'manager') else 'false' }};
 const peso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const VAT_DIV = 1.12, VAT_RATE = 0.12;
 const METHODS = [['cash','Cash'],['bank_transfer','Bank Transfer'],['receivable','Credits'],['gcash','GCash'],['maya','Maya'],['other_ewallet','Other E-Wallet'],['cheque','Cheque']];
@@ -1456,6 +1457,41 @@ async function checkout() {
                  tier: unit.tier || '' };
       })
     };
+    // A backdated sale for an item a Stock Count already physically counted
+    // (on or after this sale's date) has that item's absence already baked
+    // into that count's number — so by default (see pos._finalize_sale)
+    // the server just skips the stock effect for those specific line(s)
+    // automatically, no decision needed here. The sale itself still records
+    // completely normally either way; this is purely an FYI so whoever's
+    // ringing it up isn't surprised later, plus (staff only) a way to force
+    // the deduction anyway for the rare case it's genuinely needed.
+    if (payload.txn_date) {
+      const ids = [...new Set(payload.lines.map(l => l.product_id))].join(',');
+      try {
+        const chk = await fetch('/pos/backdated-conflicts?txn_date=' + encodeURIComponent(payload.txn_date) + '&product_ids=' + ids);
+        const chkData = await chk.json();
+        const conflicts = chkData.conflicts || [];
+        if (conflicts.length) {
+          const list = conflicts.map(c => '• ' + c.name + ' — counted in ' + c.count_ref + ' (' + c.count_date + ')').join('\n');
+          if (IS_STAFF_USER) {
+            const force = confirm(
+              conflicts.length + ' item(s) in this sale were already physically counted, on or after ' +
+              payload.txn_date + ':\n\n' + list +
+              '\n\nBy default these will NOT deduct stock (that count already reflects them being gone) — ' +
+              'the sale itself still records normally either way.\n\n' +
+              'Click OK to force-deduct stock for these item(s) anyway, or Cancel to leave them un-deducted (recommended).'
+            );
+            payload.force_stock_deduction = force;
+          } else {
+            alert(
+              'Note: ' + conflicts.length + ' item(s) in this sale won\'t affect stock — already counted ' +
+              'on or after ' + payload.txn_date + ':\n\n' + list +
+              '\n\nThe sale itself will still be recorded normally.'
+            );
+          }
+        }
+      } catch (e) { /* check failed (offline?) — don't block checkout over it */ }
+    }
     try {
       const res = await fetch('/pos/checkout', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
       const data = await res.json();

@@ -125,11 +125,19 @@ def notif_unread_count() -> int:
 
 def check_month_end_rollover() -> str:
     """Fires the throttled month-end rollover check on page load — see
-    products.maybe_run_month_end_rollover. Returns '' (nothing to render);
-    called for its side effect only. Imported lazily; never raises."""
+    products.maybe_run_month_end_rollover — plus the per-Stock-Count
+    Effective Date rebase check (see stock_count.maybe_apply_effective_date_rebases),
+    piggybacked here too since it's the same "cheap check on every page load"
+    pattern. Returns '' (nothing to render); called for its side effect
+    only. Imported lazily; never raises."""
     try:
         from .products import maybe_run_month_end_rollover
         maybe_run_month_end_rollover()
+    except Exception:
+        pass
+    try:
+        from .stock_count import maybe_apply_effective_date_rebases
+        maybe_apply_effective_date_rebases()
     except Exception:
         pass
     return ""

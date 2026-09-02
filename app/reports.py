@@ -1194,6 +1194,63 @@ def month_end_rollover_history(
     )
 
 
+BACKDATED_CONFLICTS_PAGE_SIZE = 25
+
+
+@router.get("/reports/backdated-conflicts", response_class=HTMLResponse)
+def backdated_conflicts(
+    request: Request, page: int = 1, db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    """Every backdated sale POS flagged as possibly double-counted: the
+    product(s) on it were already physically counted in a Stock Count that
+    completed AFTER the sale's date, so that count's number may already
+    reflect them being gone — deducting the sale on top may have double-
+    subtracted. POS logs this automatically (see pos._finalize_sale) with
+    the real clock, not the sale's backdated date, so this list is reliable
+    even though the sale record itself can't be trusted to say when it was
+    actually entered. Purely informational — nothing here auto-corrects
+    anything; each row is a candidate for a human to look at and decide
+    whether a follow-up stock adjustment is actually warranted."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+
+    page = max(page, 1)
+    query = db.query(models.AuditLog).filter(models.AuditLog.action == "stock_conflict")
+    total = query.count()
+    pages = max((total + BACKDATED_CONFLICTS_PAGE_SIZE - 1) // BACKDATED_CONFLICTS_PAGE_SIZE, 1)
+    page = min(page, pages)
+    entries = (
+        query.order_by(models.AuditLog.created_at.desc())
+        .offset((page - 1) * BACKDATED_CONFLICTS_PAGE_SIZE)
+        .limit(BACKDATED_CONFLICTS_PAGE_SIZE)
+        .all()
+    )
+    rows = []
+    for e in entries:
+        try:
+            parsed = json.loads(e.changes) if e.changes else {}
+        except (ValueError, TypeError):
+            parsed = {}
+        rows.append({
+            "created_at": e.created_at, "username": e.username, "sale_id": e.entity_id,
+            "invoice_no": e.entity_label, "conflicts": parsed.get("conflicts", []),
+            # Older rows (logged before the skip-by-default behavior existed)
+            # have no stock_effect at all — they're all from when everything
+            # still deducted regardless, so "deducted" is the accurate label.
+            "stock_effect": parsed.get("stock_effect", "deducted"),
+        })
+
+    return templates.TemplateResponse(
+        "reports/backdated_conflicts.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "rows": rows, "total": total, "page": page, "pages": pages,
+        },
+    )
+
+
 def _week_bounds(today: date) -> tuple[date, date]:
     """Monday..Sunday of the week containing `today`."""
     monday = today - timedelta(days=today.weekday())

@@ -137,6 +137,46 @@ def _apply_stock_count_correction(product: models.Product, variance: Decimal):
             product.stock_qty = (product.stock_qty or Decimal("0")) + remainder
 
 
+def _find_backdated_stock_conflicts(db: Session, backdated, product_ids: list):
+    """For a backdated transaction, which of these products were already
+    physically counted in a Stock Count whose count_date (the date the
+    physical count actually happened, not whenever it got marked done in
+    the system — see that column's comment on the model) is on or after the
+    backdated date — meaning that count's number may already reflect this
+    item's absence, and deducting it again here would double it.
+
+    This can't be reconstructed reliably after the fact (backdating
+    overwrites the only timestamp a Sale has, so there's no way to later
+    tell "entered before/after that count" apart from "dated before/after
+    it" — see the Activity Log entry _finalize_sale adds when this fires,
+    which IS reliable since it's written with the real clock at the moment
+    of entry). This helper is only ever meant to be called right at entry
+    time, either to warn the person entering it (POS's pre-checkout check)
+    or to log what was true at that moment (_finalize_sale) — never as a
+    retroactive scan over old data."""
+    if not backdated or not product_ids:
+        return []
+    backdated_date = backdated.date() if hasattr(backdated, "date") else backdated
+    rows = (
+        db.query(models.Product.id, models.Product.name, models.StockCount.ref_no, models.StockCount.count_date)
+        .join(models.StockCountLine, models.StockCountLine.product_id == models.Product.id)
+        .join(models.StockCount, models.StockCount.id == models.StockCountLine.stock_count_id)
+        .filter(
+            models.Product.id.in_(product_ids),
+            models.StockCount.status == "completed",
+            models.StockCount.count_date.isnot(None),
+            models.StockCount.count_date >= backdated_date,
+        )
+        .order_by(models.StockCount.count_date.desc())
+        .all()
+    )
+    seen = {}
+    for pid, name, ref_no, count_date in rows:
+        if pid not in seen:  # most recent count per product only (query is already sorted desc)
+            seen[pid] = {"product_id": pid, "name": name, "count_ref": ref_no, "count_date": count_date}
+    return list(seen.values())
+
+
 def _can_void_sale(user) -> bool:
     """Admin/Manager can always void; a cashier only if the owner has
     explicitly turned that on in Settings (off by default)."""
@@ -491,7 +531,7 @@ def pos_quick_product(data: dict, db: Session = Depends(get_db), user=Depends(ge
     return {"ok": True, "existed": False, "product": _product_payload_for_pos(product)}
 
 
-def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied, discount_total, lines, payments, txn_date=None, receipt_type=None, encoded_by_id=None, delivery_address=None, notes=None):
+def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied, discount_total, lines, payments, txn_date=None, receipt_type=None, encoded_by_id=None, delivery_address=None, notes=None, force_stock_deduction=False):
     """Create and commit a real Sale from line items + payments.
 
     Shared by POS checkout and by quotations converting to a paid sale, so the
@@ -531,6 +571,23 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
                 "A sale dated today still works normally."
             )
 
+    # Which of this sale's products were already physically counted in a
+    # completed Stock Count that covers this backdated date — see
+    # _find_backdated_stock_conflicts. Their stock effect is skipped below by
+    # default (that count's number already reflects them being gone; a sale
+    # dated after the count deducts completely normally, same as always).
+    # force_stock_deduction is an admin/manager-only escape hatch for the
+    # rare case someone genuinely needs it deducted anyway — checked here,
+    # not trusted from the caller, since a plain cashier could otherwise pass
+    # it straight through the API.
+    conflicting_ids = set()
+    if backdated:
+        conflicts = _find_backdated_stock_conflicts(
+            db, backdated, [int(ln["product_id"]) for ln in lines if ln.get("product_id")]
+        )
+        conflicting_ids = {c["product_id"] for c in conflicts}
+    force_stock_deduction = bool(force_stock_deduction) and is_staff(user)
+
     customer_name = (customer_name or "").strip()
     vat_applied = bool(vat_applied)
     encoded_by_id = int(encoded_by_id) if encoded_by_id else None
@@ -568,19 +625,31 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
         subtotal += line_total
 
         base_qty = qty * factor
-        # Deliberately no insufficient-stock guard: the shop encodes a backlog
-        # of past sales before its opening stock is ever loaded, so on-hand is
-        # routinely 0 (or already negative) for items that genuinely sold. A
-        # hard block would make that backlog impossible to enter. Stock is
-        # allowed to go negative and the next Stock Count reconciles it to the
-        # real shelf count — see _deduct_stock, and the "over stock" badge the
-        # POS already shows on these lines.
-        _deduct_stock(product, base_qty)
         sale_unit_cost = Decimal(str(product.cost_price or 0))
-        db.add(models.StockMovement(
-            product_id=product.id, qty_base=-base_qty, reason="sale",
-            unit_cost=sale_unit_cost, value=-base_qty * sale_unit_cost, ref=_display_invoice(sale),
-        ))
+        if product.id in conflicting_ids and not force_stock_deduction:
+            # Already physically counted in a completed Stock Count that
+            # covers this date — that count's number already reflects this
+            # item being gone, so deducting again here would double it.
+            # No stock effect; the sale itself is still recorded normally
+            # (see the audit entry added below for the full detail).
+            db.add(models.StockMovement(
+                product_id=product.id, qty_base=Decimal("0"), reason="sale",
+                unit_cost=sale_unit_cost, value=Decimal("0"), ref=_display_invoice(sale),
+                note="No stock effect — already reflected in a stock count covering this sale's date.",
+            ))
+        else:
+            # Deliberately no insufficient-stock guard: the shop encodes a backlog
+            # of past sales before its opening stock is ever loaded, so on-hand is
+            # routinely 0 (or already negative) for items that genuinely sold. A
+            # hard block would make that backlog impossible to enter. Stock is
+            # allowed to go negative and the next Stock Count reconciles it to the
+            # real shelf count — see _deduct_stock, and the "over stock" badge the
+            # POS already shows on these lines.
+            _deduct_stock(product, base_qty)
+            db.add(models.StockMovement(
+                product_id=product.id, qty_base=-base_qty, reason="sale",
+                unit_cost=sale_unit_cost, value=-base_qty * sale_unit_cost, ref=_display_invoice(sale),
+            ))
 
         sale.lines.append(models.SaleLine(
             product_id=product.id,
@@ -684,6 +753,33 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
     )
 
     db.flush()  # need sale.id / sale.customer_id before creating the cheque records below
+
+    # Logged here (with the real clock, not the sale's possibly-backdated
+    # date) so it's a reliable trail for /reports/backdated-conflicts to
+    # review later — same conflicts computed above, reused rather than
+    # queried again, so this always matches what actually happened to stock.
+    if conflicting_ids:
+        skipped = not force_stock_deduction
+        audit.record(
+            db, user=user, action="stock_conflict", entity_type="sale",
+            entity_id=sale.id, entity_label=sale.invoice_no,
+            summary=(
+                f"Backdated sale {sale.invoice_no}: {len(conflicts)} item(s) already counted in a stock "
+                f"count covering this date — stock effect was "
+                + ("skipped for those item(s) automatically." if skipped
+                   else f"force-deducted anyway by {user.username} (admin override).")
+            ),
+            # Structured, not squeezed into the 300-char summary — the
+            # report table reads this directly instead of parsing text.
+            changes={
+                "conflicts": [
+                    {"product_id": c["product_id"], "product": c["name"], "count_ref": c["count_ref"]}
+                    for c in conflicts
+                ],
+                "stock_effect": "forced" if force_stock_deduction else "skipped",
+            },
+        )
+
     for row in cheque_rows:
         pdc = models.PostDatedCheque(
             direction="received", amount=_money(row["amount"]),
@@ -709,6 +805,34 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
     return True, sale
 
 
+@router.get("/pos/backdated-conflicts")
+def pos_backdated_conflicts(
+    txn_date: str = "", product_ids: str = "", db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    """Pre-checkout check for the POS "heads up" dialog — see
+    _find_backdated_stock_conflicts. product_ids is a comma-separated list
+    (from the cart currently on screen)."""
+    if not user:
+        return JSONResponse({"conflicts": []}, status_code=401)
+    backdated, err = _resolve_txn_datetime(txn_date)
+    if err or not backdated:
+        return {"conflicts": []}
+    try:
+        ids = [int(x) for x in product_ids.split(",") if x.strip()]
+    except ValueError:
+        return {"conflicts": []}
+    conflicts = _find_backdated_stock_conflicts(db, backdated, ids)
+    return {
+        "conflicts": [
+            {
+                "product_id": c["product_id"], "name": c["name"], "count_ref": c["count_ref"],
+                "count_date": c["count_date"].strftime("%b %d, %Y") if c["count_date"] else "",
+            }
+            for c in conflicts
+        ]
+    }
+
+
 @router.post("/pos/checkout")
 def pos_checkout(data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
@@ -731,6 +855,7 @@ def pos_checkout(data: dict, db: Session = Depends(get_db), user=Depends(get_cur
         encoded_by_id=data.get("encoded_by_id"),
         delivery_address=data.get("delivery_address"),
         notes=data.get("notes"),
+        force_stock_deduction=data.get("force_stock_deduction"),
     )
     if not ok:
         return JSONResponse({"ok": False, "error": result}, status_code=400)

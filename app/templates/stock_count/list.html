@@ -23,12 +23,13 @@
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Ref #</th><th>Started</th><th>Completed</th><th>Status</th><th class="num">Lines</th><th></th></tr>
+      <tr><th>Ref #</th><th>Count Date</th><th>Started</th><th>Completed</th><th>Status</th><th class="num">Lines</th><th></th></tr>
     </thead>
     <tbody>
       {% for c in past %}
       <tr>
         <td class="strong">{{ c.ref_no }}</td>
+        <td>{{ c.count_date.strftime('%b %d, %Y') if c.count_date else '—' }}</td>
         <td>{{ c.created_at.strftime('%b %d, %Y %I:%M %p') if c.created_at else '—' }}</td>
         <td>{{ c.completed_at.strftime('%b %d, %Y %I:%M %p') if c.completed_at else '—' }}</td>
         <td>
@@ -39,7 +40,7 @@
         <td class="row-actions"><a class="btn-link" href="/stock-count/{{ c.id }}">View</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="empty">No past counts yet.</td></tr>
+      <tr><td colspan="7" class="empty">No past counts yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

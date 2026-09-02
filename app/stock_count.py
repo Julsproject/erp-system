@@ -22,8 +22,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from . import audit, models
-from .database import get_db
-from .deps import get_current_user, is_floor_staff
+from .database import SessionLocal, get_db
+from .deps import get_current_user, is_floor_staff, is_staff
 from .pos import _apply_stock_count_correction
 from .products import ADJUSTMENT_REASON_LABELS, ADJUSTMENT_REASONS, _parse_upload
 from .search_utils import multi_word_ilike
@@ -32,6 +32,96 @@ from .templating import templates
 router = APIRouter()
 
 PAGE_SIZE = 15
+
+# Throttles the effective-date rebase check to at most once per real day per
+# process — same pattern as products._last_rollover_check_day. Not
+# persisted; a restart just means the next request re-checks, which is
+# harmless since _apply_effective_date_rebase only ever runs once per count
+# (guarded by effective_applied_at, not by this).
+_last_effective_date_check_day = None
+
+
+def _default_effective_date(from_date: date) -> date:
+    """The 1st of the month after from_date — the default Effective Date
+    offered when a count completes, editable by admin/manager before or
+    after."""
+    if from_date.month == 12:
+        return date(from_date.year + 1, 1, 1)
+    return date(from_date.year, from_date.month + 1, 1)
+
+
+def _apply_effective_date_rebase(db: Session, count: models.StockCount) -> int:
+    """Folds each of this count's covered products' current Stocks Qty (the
+    full net movement since the count — sales, purchases, the count's own
+    variance correction, whatever ran up since then, positive or negative)
+    into Actual Beginning, and resets Stocks Qty to 0 — exactly what
+    Month-End Rollover already does for every product on the calendar
+    boundary (see products._run_month_end_rollover), just scoped to this
+    count's products and triggered on the date Accounting chose for it
+    instead. This is what makes Actual Beginning move at all — nothing else
+    (not a sale, not the count's own completion) ever touches it directly."""
+    product_ids = {l.product_id for l in count.lines}
+    rolled = 0
+    for pid in product_ids:
+        product = db.get(models.Product, pid, with_for_update=True)
+        if not product:
+            continue
+        old_beginning = Decimal(str(product.beginning_stock or 0))
+        old_stock = Decimal(str(product.stock_qty or 0))
+        if old_stock == 0:
+            continue
+        new_beginning = old_beginning + old_stock
+        product.beginning_stock = new_beginning
+        product.stock_qty = Decimal("0")
+        rolled += 1
+        db.add(models.MonthEndRolloverLine(
+            product_id=product.id, product_name=product.name,
+            period=count.effective_date.strftime("%Y-%m"),
+            qty_moved=old_stock, old_beginning=old_beginning, new_beginning=new_beginning,
+        ))
+    count.effective_applied_at = func.now()
+    if rolled:
+        audit.record(
+            db, action="update", entity_type="stock_count", entity_id=count.id,
+            entity_label=count.ref_no,
+            summary=f"Effective-date rebase for {count.ref_no} ({count.effective_date}): "
+                    f"{rolled} product(s) — Stocks Qty folded into Actual Beginning",
+        )
+    return rolled
+
+
+def maybe_apply_effective_date_rebases() -> None:
+    """Piggybacked on normal page loads (see products.maybe_run_month_end_rollover
+    for the same pattern) — applies any completed Stock Count whose
+    Effective Date has arrived. Cheap in-memory guard skips the DB check
+    after the first hit each day; the real once-ever-per-count guard is
+    effective_applied_at, so this can never double-apply even across
+    restarts or multiple app instances."""
+    global _last_effective_date_check_day
+    today = date.today()
+    if _last_effective_date_check_day == today:
+        return
+    _last_effective_date_check_day = today
+    db = SessionLocal()
+    try:
+        due = (
+            db.query(models.StockCount)
+            .filter(
+                models.StockCount.status == "completed",
+                models.StockCount.effective_date.isnot(None),
+                models.StockCount.effective_date <= today,
+                models.StockCount.effective_applied_at.is_(None),
+            )
+            .all()
+        )
+        for count in due:
+            _apply_effective_date_rebase(db, count)
+        if due:
+            db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
 
 # --- Bulk import (Excel / CSV) — fill in a count sheet instead of scanning
 # every item by hand. Columns read by header name, like the Products import.
@@ -342,7 +432,7 @@ def stock_count_start(db: Session = Depends(get_db), user=Depends(get_current_us
     existing = db.query(models.StockCount).filter(models.StockCount.status == "open").first()
     if existing:
         return RedirectResponse(f"/stock-count/{existing.id}", status_code=302)
-    count = models.StockCount(status="open", created_by=user.id)
+    count = models.StockCount(status="open", created_by=user.id, count_date=date.today())
     db.add(count)
     db.flush()
     count.ref_no = f"SC-{count.id:06d}"
@@ -351,7 +441,10 @@ def stock_count_start(db: Session = Depends(get_db), user=Depends(get_current_us
 
 
 @router.get("/stock-count/{count_id:int}", response_class=HTMLResponse)
-def stock_count_view(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def stock_count_view(
+    count_id: int, request: Request, date_error: str = "",
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_floor_staff(user):
@@ -369,13 +462,101 @@ def stock_count_view(count_id: int, request: Request, db: Session = Depends(get_
     variance_count = sum(1 for l in lines if l["counted_qty"] != l["system_qty"])
     shelves = db.query(models.Shelf).order_by(models.Shelf.name).all()
     missing_negatives = _uncounted_negatives(db, count) if count.status == "open" else []
+    date_error_msg = (
+        "Enter a valid date." if date_error == "invalid"
+        else "Count date can't be in the future." if date_error == "future"
+        else "That count's effective date has already been applied — it can't be changed anymore." if date_error == "applied"
+        else ""
+    )
+    can_edit_count_date = is_floor_staff(user) if count.status == "open" else is_staff(user)
+    can_edit_effective_date = (
+        count.status == "completed" and not count.effective_applied_at and is_staff(user)
+    )
     return templates.TemplateResponse(
         "stock_count/session.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "count": count, "lines": lines, "variance_count": variance_count,
          "adjustment_reasons": ADJUSTMENT_REASONS, "shelves": shelves,
-         "missing_negatives": missing_negatives},
+         "missing_negatives": missing_negatives, "date_error": date_error_msg,
+         "can_edit_count_date": can_edit_count_date,
+         "can_edit_effective_date": can_edit_effective_date,
+         "today_iso": date.today().isoformat()},
     )
+
+
+@router.post("/stock-count/{count_id:int}/set-count-date")
+def stock_count_set_date(
+    count_id: int, request: Request, count_date: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    """The date the physical count actually happened — see the count_date
+    column comment on the model. Settable by anyone who can work an open
+    count (same as counting itself); once the count is completed or
+    cancelled, the number it corrected is already final, so re-attributing
+    which date that correction belongs to is admin/manager territory, and
+    logged either way."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    count = db.get(models.StockCount, count_id)
+    if not count:
+        return RedirectResponse("/stock-count", status_code=302)
+    allowed = is_floor_staff(user) if count.status == "open" else is_staff(user)
+    if not allowed:
+        return RedirectResponse(f"/stock-count/{count_id}", status_code=302)
+    try:
+        new_date = date.fromisoformat((count_date or "").strip())
+    except ValueError:
+        return RedirectResponse(f"/stock-count/{count_id}?date_error=invalid", status_code=302)
+    if new_date > date.today():
+        return RedirectResponse(f"/stock-count/{count_id}?date_error=future", status_code=302)
+    old_date = count.count_date
+    if new_date != old_date:
+        count.count_date = new_date
+        audit.record(
+            db, user=user, request=request, action="update", entity_type="stock_count",
+            entity_id=count.id, entity_label=count.ref_no,
+            summary=f"Changed count date for {count.ref_no}: {old_date or '—'} → {new_date}",
+            changes={"count_date": [str(old_date) if old_date else None, str(new_date)]},
+        )
+        db.commit()
+    return RedirectResponse(f"/stock-count/{count_id}", status_code=302)
+
+
+@router.post("/stock-count/{count_id:int}/set-effective-date")
+def stock_count_set_effective_date(
+    count_id: int, request: Request, effective_date: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    """When this count's result becomes the new Actual Beginning — see the
+    effective_date column comment on the model. Admin/manager only (this
+    decides the exact date Actual Beginning moves, which is Accounting's
+    call), and only while the count is completed but not yet applied — once
+    the fold has actually run (effective_applied_at set), changing the date
+    here wouldn't undo or redo it, so editing is blocked past that point."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse(f"/stock-count/{count_id}", status_code=302)
+    count = db.get(models.StockCount, count_id)
+    if not count or count.status != "completed":
+        return RedirectResponse("/stock-count", status_code=302)
+    if count.effective_applied_at:
+        return RedirectResponse(f"/stock-count/{count_id}?date_error=applied", status_code=302)
+    try:
+        new_date = date.fromisoformat((effective_date or "").strip())
+    except ValueError:
+        return RedirectResponse(f"/stock-count/{count_id}?date_error=invalid", status_code=302)
+    old_date = count.effective_date
+    if new_date != old_date:
+        count.effective_date = new_date
+        audit.record(
+            db, user=user, request=request, action="update", entity_type="stock_count",
+            entity_id=count.id, entity_label=count.ref_no,
+            summary=f"Changed effective date for {count.ref_no}: {old_date or '—'} → {new_date}",
+            changes={"effective_date": [str(old_date) if old_date else None, str(new_date)]},
+        )
+        db.commit()
+    return RedirectResponse(f"/stock-count/{count_id}", status_code=302)
 
 
 @router.post("/stock-count/{count_id:int}/scan")
@@ -803,6 +984,7 @@ def stock_count_complete(count_id: int, request: Request, reason: str = Form("co
     count.status = "completed"
     count.completed_by = user.id
     count.completed_at = func.now()
+    count.effective_date = _default_effective_date(count.count_date or date.today())
     db.commit()
     return RedirectResponse(f"/stock-count/{count.id}", status_code=302)
 

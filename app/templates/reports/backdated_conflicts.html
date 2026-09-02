@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Backdated Sale Conflicts · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Backdated Sale Conflicts</h1>
+    <p class="muted">
+      Backdated sales that included an item already physically counted in a Stock Count covering
+      that date. By default the stock effect for those item(s) is skipped automatically — that
+      count's number already reflects them being gone, so deducting again would double it. The
+      sale itself is always recorded normally either way. Rows marked <strong>force-deducted</strong>
+      are the exception — an admin/manager deliberately overrode the skip — those are the ones
+      worth a second look.
+    </p>
+  </div>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>Flagged sale{{ '' if total == 1 else 's' }}</span></div>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>When flagged</th><th>Sale</th><th>By</th><th>Item(s) already counted</th><th>Stock effect</th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="muted">{{ r.created_at.strftime('%b %d, %Y %I:%M %p') if r.created_at else '' }}</td>
+        <td class="strong">
+          {% if r.sale_id %}<a class="btn-link" href="/pos/receipt/{{ r.sale_id }}">{{ r.invoice_no }}</a>{% else %}{{ r.invoice_no }}{% endif %}
+        </td>
+        <td>{{ r.username or '—' }}</td>
+        <td>
+          {% for c in r.conflicts %}
+          <div>{{ c.product }} <span class="muted" style="font-size:12px;">— counted in {{ c.count_ref }}</span></div>
+          {% else %}
+          <span class="muted">—</span>
+          {% endfor %}
+        </td>
+        <td>
+          {% if r.stock_effect == 'forced' %}<span class="txn" style="background:#fef2f2;color:#b91c1c;">force-deducted</span>
+          {% elif r.stock_effect == 'skipped' %}<span class="txn" style="background:#f0fdf4;color:#15803d;">skipped</span>
+          {% else %}<span class="txn" style="background:#f1f5f9;color:#64748b;">deducted</span>{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="empty">Nothing flagged — no backdated sale has hit an already-counted item.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn-secondary" href="/reports/backdated-conflicts?page={{ page - 1 }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-secondary" href="/reports/backdated-conflicts?page={{ page + 1 }}">Next →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}
