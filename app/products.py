@@ -351,7 +351,9 @@ def list_products(
             models.Product.cost_price > 0,
             models.Product.selling_price <= models.Product.cost_price,
         )
-    if category_id:
+    if category_id == -1:  # sentinel for "No category" — a real Category.id is never negative
+        query = query.filter(models.Product.category_id.is_(None))
+    elif category_id:
         query = query.filter(models.Product.category_id == category_id)
     if subcategory_id:
         query = query.filter(models.Product.subcategory_id == subcategory_id)
@@ -427,6 +429,7 @@ def list_products(
         .order_by(models.Category.name)
         .all()
     ) if cat_counts else []
+    no_category_count = base_for_counts.filter(models.Product.category_id.is_(None)).count()
 
     # Sub Category pills: scoped to the selected Category (if any) — same
     # live-count-against-everything-but-itself idea as the Category pills.
@@ -462,6 +465,12 @@ def list_products(
     ) if shelf_counts else []
     no_shelf_count = base_for_counts.filter(models.Product.shelf_id.is_(None)).count()
 
+    # Full, unfiltered lists (not just the pills above, which only show
+    # categories currently in use) — for the inline "set category" editor's
+    # autocomplete, same "type or pick" datalist the Add/Edit form uses.
+    all_categories = db.query(models.Category).order_by(models.Category.name).all()
+    all_subcategories = db.query(models.SubCategory).order_by(models.SubCategory.name).all()
+
     return templates.TemplateResponse(
         "products/list.html",
         {
@@ -485,6 +494,9 @@ def list_products(
             "category_id": category_id,
             "categories": categories,
             "cat_counts": cat_counts,
+            "no_category_count": no_category_count,
+            "all_categories": all_categories,
+            "all_subcategories": all_subcategories,
             "subcategory_id": subcategory_id,
             "subcategories": subcategories,
             "subcat_counts": subcat_counts,
@@ -521,7 +533,9 @@ def export_products_excel(
         query = query.filter(multi_word_ilike(models.Product.name, q) | (models.Product.barcode == q))
     if alert:
         query = query.filter(models.Product.cost_price > 0, models.Product.selling_price <= models.Product.cost_price)
-    if category_id:
+    if category_id == -1:  # sentinel for "No category" — a real Category.id is never negative
+        query = query.filter(models.Product.category_id.is_(None))
+    elif category_id:
         query = query.filter(models.Product.category_id == category_id)
     if subcategory_id:
         query = query.filter(models.Product.subcategory_id == subcategory_id)
@@ -648,6 +662,37 @@ def rename_product(product_id: int, data: dict, request: Request, db: Session = 
         )
         db.commit()
     return {"ok": True, "name": product.name}
+
+
+@router.post("/products/{product_id:int}/set-category")
+def set_product_category(product_id: int, data: dict, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Set a product's Category/Sub Category straight from the Inventory
+    list — same "type or pick" fields as the Edit form, just without the
+    full find -> Edit page -> Save round trip. Meant for the common case of
+    quickly filling in a product that has no category at all yet."""
+    if not user:
+        return JSONResponse({"ok": False, "error": "Please sign in again."}, status_code=401)
+    if not is_staff(user):
+        return JSONResponse({"ok": False, "error": "You don't have permission to do this."}, status_code=403)
+    product = db.get(models.Product, product_id)
+    if not product:
+        return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
+
+    old_category = product.category.name if product.category else None
+    old_subcategory = product.subcategory.name if product.subcategory else None
+    product.category = _get_or_create_category(db, data.get("category"))
+    product.subcategory = _get_or_create_subcategory(db, data.get("subcategory"), product.category)
+    new_category = product.category.name if product.category else None
+    new_subcategory = product.subcategory.name if product.subcategory else None
+    if new_category != old_category or new_subcategory != old_subcategory:
+        audit.record(
+            db, user=user, request=request, action="update", entity_type="product",
+            entity_id=product.id, entity_label=product.name,
+            summary=f"Set category for “{product.name}”: {old_category or '—'} / {old_subcategory or '—'} → {new_category or '—'} / {new_subcategory or '—'}",
+            changes={"category": [old_category, new_category], "subcategory": [old_subcategory, new_subcategory]},
+        )
+        db.commit()
+    return JSONResponse({"ok": True, "category": new_category or "", "subcategory": new_subcategory or ""})
 
 
 @router.get("/products/{product_id:int}/double-deductions")

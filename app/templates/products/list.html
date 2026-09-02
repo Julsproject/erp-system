@@ -82,8 +82,8 @@
    ~ ('&subcategory_id=' ~ subcategory_id if subcategory_id else '')
    ~ ('&shelf_id=' ~ shelf_id if shelf_id else '') %}
 <div class="pill-filter-bar">
-  {% if categories %}
-  {% set current_cat = categories|selectattr('id', 'equalto', category_id)|map(attribute='name')|first if category_id else None %}
+  {% if categories or no_category_count %}
+  {% set current_cat = 'No category' if category_id == -1 else (categories|selectattr('id', 'equalto', category_id)|map(attribute='name')|first if category_id else None) %}
   <details class="filter-drop">
     <summary>{{ current_cat or 'All categories' }}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 9l6 6 6-6"/></svg>
@@ -91,6 +91,11 @@
     <div class="filter-panel pills-panel">
       <div class="cat-pills">
         <a class="cat-pill {{ 'active' if not category_id }}" href="/products?{{ qs_base }}category_id=0">All categories</a>
+        {% if no_category_count %}
+        <a class="cat-pill {{ 'active' if category_id == -1 }}" href="/products?{{ qs_base }}category_id=-1">
+          No category <span class="cat-pill-count">{{ no_category_count }}</span>
+        </a>
+        {% endif %}
         {% for c in categories %}
         <a class="cat-pill {{ 'active' if category_id == c.id }}" href="/products?{{ qs_base }}category_id={{ c.id }}">
           {{ c.name }} <span class="cat-pill-count">{{ cat_counts.get(c.id, 0) }}</span>
@@ -223,8 +228,13 @@
           {% endif %}
         </td>
         <td class="muted">{{ p.barcode or '—' }}</td>
-        <td>{{ p.category.name if p.category else '—' }}</td>
-        <td>{{ p.subcategory.name if p.subcategory else '—' }}</td>
+        <td id="catCell{{ p.id }}">
+          <span id="catText{{ p.id }}">{{ p.category.name if p.category else '—' }}</span>
+          {% if is_admin_user %}
+          <button type="button" class="btn-link rename-btn" onclick="startCategoryEdit({{ p.id }})" title="Set category">✎</button>
+          {% endif %}
+        </td>
+        <td id="subcatCell{{ p.id }}"><span id="subcatText{{ p.id }}">{{ p.subcategory.name if p.subcategory else '—' }}</span></td>
         <td>{{ p.unit_type.name if p.unit_type else '—' }}</td>
         <td>{{ p.shelf.name if p.shelf else '—' }}</td>
         <td class="num">
@@ -423,6 +433,103 @@ function startRename(id) {
   });
 }
 </script>
+
+{% if is_admin_user %}
+<datalist id="invCategoryList">
+  {% for c in all_categories %}<option value="{{ c.name }}">{% endfor %}
+</datalist>
+<datalist id="invSubcategoryList">
+  {% for sc in all_subcategories %}<option value="{{ sc.name }}">{% endfor %}
+</datalist>
+<script>
+// Set Category/Sub Category straight from the Inventory list — same "type
+// or pick" fields the Edit form uses, mainly for quickly filling in a
+// product that has no category at all yet without a full Edit round trip.
+function startCategoryEdit(id) {
+  const catCell = document.getElementById('catCell' + id);
+  const subcatCell = document.getElementById('subcatCell' + id);
+  const origCatHtml = catCell.innerHTML;
+  const origSubcatHtml = subcatCell.innerHTML;
+  const origCatText = document.getElementById('catText' + id).textContent;
+  const origSubcatText = document.getElementById('subcatText' + id).textContent;
+
+  const catInput = document.createElement('input');
+  catInput.type = 'text'; catInput.setAttribute('list', 'invCategoryList');
+  catInput.value = origCatText === '—' ? '' : origCatText;
+  catInput.placeholder = 'Category';
+  catInput.style.cssText = 'font-size:13px;padding:3px 6px;border:1px solid var(--brand);border-radius:6px;width:110px;';
+
+  const subInput = document.createElement('input');
+  subInput.type = 'text'; subInput.setAttribute('list', 'invSubcategoryList');
+  subInput.value = origSubcatText === '—' ? '' : origSubcatText;
+  subInput.placeholder = 'Sub category';
+  subInput.style.cssText = 'font-size:13px;padding:3px 6px;border:1px solid var(--brand);border-radius:6px;width:110px;';
+
+  const okBtn = document.createElement('button');
+  okBtn.type = 'button'; okBtn.textContent = '✓'; okBtn.title = 'Save';
+  okBtn.className = 'btn-link rename-btn'; okBtn.style.color = '#15803d'; okBtn.style.fontWeight = '700';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button'; cancelBtn.textContent = '✕'; cancelBtn.title = 'Cancel';
+  cancelBtn.className = 'btn-link danger rename-btn';
+
+  catCell.innerHTML = '';
+  catCell.append(catInput, okBtn, cancelBtn);
+  subcatCell.innerHTML = '';
+  subcatCell.appendChild(subInput);
+  catInput.focus();
+
+  function cancel() {
+    catCell.innerHTML = origCatHtml;
+    subcatCell.innerHTML = origSubcatHtml;
+  }
+
+  function renderResult(catName, subcatName) {
+    catCell.innerHTML = '';
+    const catSpan = document.createElement('span');
+    catSpan.id = 'catText' + id;
+    catSpan.textContent = catName || '—';
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button'; editBtn.className = 'btn-link rename-btn';
+    editBtn.title = 'Set category'; editBtn.textContent = '✎';
+    editBtn.onclick = () => startCategoryEdit(id);
+    catCell.append(catSpan, ' ', editBtn);
+
+    subcatCell.innerHTML = '';
+    const subSpan = document.createElement('span');
+    subSpan.id = 'subcatText' + id;
+    subSpan.textContent = subcatName || '—';
+    subcatCell.appendChild(subSpan);
+  }
+
+  async function save() {
+    catInput.disabled = true; subInput.disabled = true; okBtn.disabled = true; cancelBtn.disabled = true;
+    try {
+      const res = await fetch('/products/' + id + '/set-category', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ category: catInput.value.trim(), subcategory: subInput.value.trim() }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        renderResult(data.category, data.subcategory);
+      } else {
+        alert(data.error || 'Could not save.');
+        catInput.disabled = false; subInput.disabled = false; okBtn.disabled = false; cancelBtn.disabled = false;
+      }
+    } catch (e) {
+      alert('Network error — nothing was saved.');
+      catInput.disabled = false; subInput.disabled = false; okBtn.disabled = false; cancelBtn.disabled = false;
+    }
+  }
+
+  okBtn.onclick = save;
+  cancelBtn.onclick = cancel;
+  [catInput, subInput].forEach(inp => inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); save(); }
+    else if (e.key === 'Escape') cancel();
+  }));
+}
+</script>
+{% endif %}
 
 {% if is_admin_user %}
 <div id="mergeOverlay" class="modal-overlay" style="display:none;" onclick="if (event.target === this) closeMerge();">
