@@ -1552,6 +1552,7 @@ def pos_receipt(
     quote: int = 0,
     thermal: int = 0,
     void_error: str = "",
+    unvoid_error: str = "",
     edit_date_error: str = "",
     edit_items_error: str = "",
     edit_payment_error: str = "",
@@ -1601,6 +1602,7 @@ def pos_receipt(
          "sale": sale, "from": from_, "cust": cust, "quote": quote, "thermal": thermal,
          "linked": linked, "original": original, "credit_outstanding": credit_outstanding,
          "can_void": _can_void_sale(user), "void_error": VOID_ERRORS.get(void_error),
+         "can_unvoid": is_staff(user), "unvoid_error": UNVOID_ERRORS.get(unvoid_error),
          "can_edit_date": is_staff(user), "edit_date_error": EDIT_DATE_ERRORS.get(edit_date_error),
          "can_edit_invoice": is_staff(user), "edit_invoice_error": EDIT_INVOICE_ERRORS.get(edit_invoice_error),
          "can_edit_customer": is_staff(user), "edit_customer_error": EDIT_CUSTOMER_ERRORS.get(edit_customer_error),
@@ -1628,6 +1630,14 @@ VOID_ERRORS = {
     "linked": "This sale has a refund or exchange linked to it — void that first.",
     "pdc": "This sale has a post-dated cheque recorded against it.",
     "denied": "You don't have permission to void sales.",
+}
+
+UNVOID_ERRORS = {
+    "denied": "You don't have permission to restore a voided sale.",
+    "not_voided": "This sale isn't voided.",
+    "type": "Only a plain sale can be restored here — not a refund or exchange.",
+    "split": "This sale was paid with more than one method — the exact split can't be reconstructed reliably, so it can't be auto-restored.",
+    "linked": "A refund or exchange now points at this sale — it can't be restored as-is.",
 }
 
 EDIT_DATE_ERRORS = {
@@ -1794,6 +1804,84 @@ def void_sale(
         db, user=user, request=request, action="void", entity_type="sale",
         entity_id=sale.id, entity_label=sale.invoice_no,
         summary=f"Voided sale {sale.invoice_no}: {reason}",
+    )
+    db.commit()
+    return _back()
+
+
+@router.post("/pos/receipt/{sale_id:int}/unvoid")
+def unvoid_sale(
+    sale_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Restores a sale that was voided by mistake — the exact inverse of
+    void_sale: deducts the stock back out (mirroring the add-back void did),
+    recreates its Payment row (void_sale hard-deletes those; sale.payment_method
+    and sale.amount_tendered are untouched by voiding, so they're reliable
+    enough to rebuild a single-method payment from), reverses the reversing
+    journal entry (see accounting.restore_sale_posting), and clears the
+    voided flags.
+
+    Admin/manager only — undoing a void without oversight is exactly the
+    kind of accidental-click risk this guards against. Refuses a split
+    payment (e.g. "Cash + GCash"): the sale only remembers the combined
+    total, not each method's share, so reconstructing it exactly isn't
+    reliable enough to do silently — and refuses if a refund/exchange now
+    points at this sale, same as void_sale's own "linked" check."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    sale = db.get(models.Sale, sale_id)
+    if not sale:
+        return RedirectResponse("/pos", status_code=302)
+
+    def _back(err=None):
+        suffix = f"&unvoid_error={err}" if err else ""
+        return RedirectResponse(f"/pos/receipt/{sale_id}?from=sales{suffix}", status_code=302)
+
+    if not is_staff(user):
+        return _back("denied")
+    if not sale.is_voided:
+        return _back("not_voided")
+    if sale.txn_type != "sale":
+        return _back("type")
+    if " + " in (sale.payment_method or ""):
+        return _back("split")
+    linked_exists = db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id).first()
+    if linked_exists:
+        return _back("linked")
+
+    for line in sale.lines:
+        if not line.product_id:
+            continue
+        product = db.get(models.Product, line.product_id, with_for_update=True)
+        if not product:
+            continue
+        base_qty = Decimal(str(line.qty or 0)) * Decimal(str(line.unit_factor or 1))
+        _deduct_stock(product, base_qty)
+        unit_cost = Decimal(str(line.unit_cost or 0))
+        db.add(models.StockMovement(
+            product_id=product.id, qty_base=-base_qty, reason="unvoid",
+            ref=_display_invoice(sale), unit_cost=unit_cost, value=-base_qty * unit_cost,
+            note="Restored (un-voided)",
+        ))
+
+    method_code = next((code for code, label in METHOD_LABELS.items() if label == sale.payment_method), None)
+    if method_code:
+        db.add(models.Payment(sale_id=sale.id, method=method_code, amount=sale.amount_tendered))
+
+    sale.is_voided = False
+    sale.void_reason = None
+    sale.voided_at = None
+    sale.voided_by_id = None
+
+    accounting.restore_sale_posting(db, sale, reason="Restored (un-voided)", entered_by_id=user.id)
+
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="sale",
+        entity_id=sale.id, entity_label=sale.invoice_no,
+        summary=f"Restored voided sale {sale.invoice_no}",
     )
     db.commit()
     return _back()

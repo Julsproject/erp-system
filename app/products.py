@@ -1826,6 +1826,7 @@ MOVEMENT_LABELS = {
     "adjustment": "Manual adjustment", "void": "Sale voided",
     "sale-edit-reverse": "Item correction (reversed)",
     "correction": "Double-deduction void",
+    "unvoid": "Sale restored",
 }
 
 

@@ -256,6 +256,31 @@ def reverse_sale_posting(db: Session, sale: models.Sale, *, reason: str, entered
     return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id)
 
 
+def restore_sale_posting(db: Session, sale: models.Sale, *, reason: str, entered_by_id: int = None):
+    """Called from pos.py's unvoid_sale (restoring an accidentally-voided
+    sale). Finds the reversing entry reverse_sale_posting posted at void
+    time and reverses THAT — a mirror of a mirror, landing back at the
+    sale's original net effect — rather than posting a brand new entry, so
+    nothing here is ever mutated or deleted, same as every other journal
+    entry (see reverse_journal). No-op if the sale never had a journal
+    entry, or was never actually reversed."""
+    original = (
+        db.query(models.JournalEntry)
+        .filter(models.JournalEntry.source_type == "sale", models.JournalEntry.source_id == sale.id)
+        .first()
+    )
+    if not original or original.status != "reversed":
+        return None
+    reversal = (
+        db.query(models.JournalEntry)
+        .filter(models.JournalEntry.source_type == "reversal", models.JournalEntry.is_reversal_of_id == original.id)
+        .first()
+    )
+    if not reversal:
+        return None
+    return reverse_journal(db, reversal, reason=reason, entered_by_id=entered_by_id)
+
+
 def post_receivable_settlement(db: Session, sale: models.Sale, *, amount: Decimal, method: str, entered_by_id: int = None, txn_date=None):
     """Called from sales.py's settle_pay and credits.py's pay_full_submit —
     a customer paying down what they owe on a credit sale. Dr the mapped

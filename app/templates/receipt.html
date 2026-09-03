@@ -147,6 +147,9 @@
     {% if void_error %}
     <div class="void-error">⚠ {{ void_error }}</div>
     {% endif %}
+    {% if unvoid_error %}
+    <div class="void-error">⚠ {{ unvoid_error }}</div>
+    {% endif %}
     {% if edit_date_error %}
     <div class="void-error">⚠ {{ edit_date_error }}</div>
     {% endif %}
@@ -247,6 +250,9 @@
     <div class="r-link voided">
       ⊘ VOIDED{% if sale.voided_at %} — {{ sale.voided_at.strftime('%b %d, %Y %I:%M %p') }}{% endif %}{% if sale.voided_by %} by {{ sale.voided_by.full_name or sale.voided_by.username }}{% endif %}
       {% if sale.void_reason %}<br><span style="font-weight:400;">Reason: {{ sale.void_reason }}</span>{% endif %}
+      {% if can_unvoid and sale.txn_type == 'sale' %}
+      <br><button type="button" class="btn void" style="margin-top:8px;" onclick="unvoidSale()">↺ Restore this sale</button>
+      {% endif %}
     </div>
     {% endif %}
 
@@ -411,6 +417,16 @@
       if (!reason.trim()) { alert("A reason is required to void a sale."); return; }
       document.getElementById('voidReason').value = reason.trim();
       document.getElementById('voidForm').submit();
+    }
+  </script>
+  {% endif %}
+
+  {% if can_unvoid and sale.is_voided and sale.txn_type == 'sale' %}
+  <form id="unvoidForm" method="post" action="/pos/receipt/{{ sale.id }}/unvoid" style="display:none;"></form>
+  <script>
+    function unvoidSale() {
+      if (!confirm("Restore invoice {{ display_invoice }}? This re-applies its stock deduction and payment, and un-does the void everywhere in the system.")) return;
+      document.getElementById('unvoidForm').submit();
     }
   </script>
   {% endif %}
