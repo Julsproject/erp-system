@@ -124,6 +124,24 @@
     <small class="hint">Manual for now — from Supplier tab later.</small>
   </label>
 
+  {% if product and product.units %}
+  <div class="full quick-add-unit">
+    <label style="font-size:12.5px;color:var(--muted);font-weight:600;">Quick add by unit</label>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:4px;flex-wrap:wrap;">
+      <select id="quickAddUnit" style="max-width:170px;">
+        <option value="1">{{ product.unit_type.name if product.unit_type else 'base unit' }} (base)</option>
+        {% for u in product.units %}
+        <option value="{{ u.factor_to_base }}">{{ u.name }} (= {{ u.factor_to_base|qty }} {{ product.unit_type.name if product.unit_type else 'base' }})</option>
+        {% endfor %}
+      </select>
+      <input type="number" id="quickAddQty" placeholder="qty" step="0.0001" min="0" style="max-width:100px;"
+             onkeydown="if (event.key === 'Enter') { event.preventDefault(); quickAddStock(); }">
+      <button type="button" class="btn-secondary" onclick="quickAddStock()">+ Add to Stocks Qty</button>
+    </div>
+    <small class="hint">e.g. counted 5 boxes? Pick "Box", type 5, click Add — it converts and adds straight into Stocks Qty above, no manual math.</small>
+  </div>
+  {% endif %}
+
   <label>Total Qty
     <input id="total" type="text" value="0" readonly class="readonly">
     <small class="hint">Beginning + Stocks (auto).</small>
@@ -225,6 +243,21 @@
       var origS = parseFloat(stocksEl.dataset.original) || 0;
       fields.style.display = (b !== origB || s !== origS) ? 'block' : 'none';
     }
+  }
+
+  function quickAddStock() {
+    var select = document.getElementById('quickAddUnit');
+    if (!select) return;
+    var factor = parseFloat(select.value) || 1;
+    var qtyEl = document.getElementById('quickAddQty');
+    var qty = parseFloat(qtyEl.value);
+    if (!qty || qty <= 0) { qtyEl.focus(); return; }
+    var baseQty = qty * factor;
+    var stocksEl = document.getElementById('stocks');
+    var current = parseFloat(stocksEl.value) || 0;
+    stocksEl.value = (Math.round((current + baseQty) * 10000) / 10000).toString();
+    qtyEl.value = '';
+    calcTotal();
   }
 
   function updateBaseLabels() {
