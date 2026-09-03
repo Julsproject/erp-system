@@ -65,19 +65,23 @@
 {% endif %}
 
 <div class="tabs">
-  <a class="tab active" href="/products">All Products</a>
+  <a class="tab {{ 'active' if not flag }}" href="/products">All Products</a>
   {% if is_admin_user %}
   <a class="tab" href="/products/pricing">Selling Price{% if price_alert_count() %} <span class="warn-tag">{{ price_alert_count() }}</span>{% endif %}</a>
+  {% if void_count %}
+  <a class="tab {{ 'active' if flag == 'void' }}" href="/products?flag=void">Void <span class="warn-tag">{{ void_count }}</span></a>
+  {% endif %}
   {% endif %}
 </div>
 
-{% set qs_base = ('q=' ~ q ~ '&' if q) ~ ('alert=1&' if alert) ~ ('sort=' ~ sort ~ '&sort_dir=' ~ sort_dir ~ '&' if sort) %}
+{% set qs_base = ('q=' ~ q ~ '&' if q) ~ ('alert=1&' if alert) ~ ('flag=' ~ flag ~ '&' if flag) ~ ('sort=' ~ sort ~ '&sort_dir=' ~ sort_dir ~ '&' if sort) %}
 {# This exact list view — search, filters and page — handed to row links so
    Back/Cancel/after-save returns here instead of dumping the user on an
    unfiltered page 1 and making them search all over again. #}
 {% set cur_url = '/products?page=' ~ page
    ~ ('&q=' ~ q if q else '')
    ~ ('&alert=1' if alert else '')
+   ~ ('&flag=' ~ flag if flag else '')
    ~ ('&category_id=' ~ category_id if category_id else '')
    ~ ('&subcategory_id=' ~ subcategory_id if subcategory_id else '')
    ~ ('&shelf_id=' ~ shelf_id if shelf_id else '') %}
@@ -152,6 +156,7 @@
 
 <form class="toolbar" method="get" action="/products">
   {% if alert %}<input type="hidden" name="alert" value="1">{% endif %}
+  {% if flag %}<input type="hidden" name="flag" value="{{ flag }}">{% endif %}
   {% if category_id %}<input type="hidden" name="category_id" value="{{ category_id }}">{% endif %}
   {% if subcategory_id %}<input type="hidden" name="subcategory_id" value="{{ subcategory_id }}">{% endif %}
   {% if shelf_id %}<input type="hidden" name="shelf_id" value="{{ shelf_id }}">{% endif %}
@@ -177,6 +182,20 @@
   })();
 </script>
 
+{% if flag == 'void' and is_admin_user %}
+<div class="card" style="margin-bottom:18px;">
+  <h3 style="margin-top:0;font-size:15px;">Void by invoice</h3>
+  <p class="muted" style="font-size:13px;margin:-4px 0 12px;">
+    Search a specific invoice # to see and correct every double-deducted line on it at once, across every product it touched.
+  </p>
+  <div style="display:flex;gap:8px;">
+    <input type="text" id="voidInvoiceInput" class="search" placeholder="e.g. DRS1265" style="max-width:280px;" autocomplete="off">
+    <button type="button" class="btn-secondary" onclick="searchInvoiceVoid()">Search invoice</button>
+  </div>
+  <div id="voidInvoiceResults" style="margin-top:14px;"></div>
+</div>
+{% endif %}
+
 <form id="bulkForm" method="post">
 <div class="table-wrap">
   <table class="grid">
@@ -191,7 +210,7 @@
         <th>Shelf</th>
         <th class="num">Cost of Sales</th>
         <th class="num">Selling Price</th>
-        {% set base_qs = 'q=' ~ q ~ '&category_id=' ~ category_id ~ '&subcategory_id=' ~ subcategory_id ~ '&shelf_id=' ~ shelf_id ~ '&alert=' ~ (1 if alert else 0) %}
+        {% set base_qs = 'q=' ~ q ~ '&category_id=' ~ category_id ~ '&subcategory_id=' ~ subcategory_id ~ '&shelf_id=' ~ shelf_id ~ '&alert=' ~ (1 if alert else 0) ~ ('&flag=' ~ flag if flag else '') %}
         {% set beg_next = 'desc' if (sort == 'beginning_stock' and sort_dir == 'asc') else 'asc' %}
         <th class="num"><a class="sort-th{{ ' sort-active' if sort == 'beginning_stock' }}" href="/products?{{ base_qs }}&sort=beginning_stock&sort_dir={{ beg_next }}">Actual Beginning{% if sort == 'beginning_stock' %}<span class="sort-arrow">{{ '▲' if sort_dir == 'asc' else '▼' }}</span>{% endif %}</a></th>
         {% set stk_next = 'desc' if (sort == 'stock_qty' and sort_dir == 'asc') else 'asc' %}
@@ -334,7 +353,7 @@ function submitRowAction(action, confirmText) {
 
 {% if pages > 1 %}
 <div class="pager">
-  {% set page_qs = ('&alert=1' if alert else '') ~ ('&category_id=' ~ category_id if category_id else '') ~ ('&subcategory_id=' ~ subcategory_id if subcategory_id else '') ~ ('&shelf_id=' ~ shelf_id if shelf_id else '') ~ ('&sort=' ~ sort ~ '&sort_dir=' ~ sort_dir if sort else '') %}
+  {% set page_qs = ('&alert=1' if alert else '') ~ ('&flag=' ~ flag if flag else '') ~ ('&category_id=' ~ category_id if category_id else '') ~ ('&subcategory_id=' ~ subcategory_id if subcategory_id else '') ~ ('&shelf_id=' ~ shelf_id if shelf_id else '') ~ ('&sort=' ~ sort ~ '&sort_dir=' ~ sort_dir if sort else '') %}
   {% if page > 1 %}<a class="btn-secondary" href="/products?page={{ page - 1 }}&q={{ q }}{{ page_qs }}">← Prev</a>{% endif %}
   <span class="muted">Page {{ page }} of {{ pages }}</span>
   {% if page < pages %}<a class="btn-secondary" href="/products?page={{ page + 1 }}&q={{ q }}{{ page_qs }}">Next →</a>{% endif %}
@@ -801,6 +820,62 @@ function startCategoryEdit(id) {
     } catch (e) {
       alert('Network error — nothing was changed.');
       document.getElementById('ddConfirmBtn').disabled = false;
+    }
+  }
+
+  // Void tab — find every double-deducted line on one invoice, across every
+  // product it touched, and correct whichever ones are checked. Reuses the
+  // same server-side reliability rule as the per-product ⚠ flag: nothing
+  // here is trusted from the browser beyond which movement ids to act on —
+  // /products/void-by-movements recomputes real candidates itself.
+  async function searchInvoiceVoid() {
+    const box = document.getElementById('voidInvoiceResults');
+    const invoice = document.getElementById('voidInvoiceInput').value.trim();
+    if (!invoice) { box.innerHTML = ''; return; }
+    box.innerHTML = '<p class="muted">Searching…</p>';
+    const res = await fetch('/products/void-invoice?invoice=' + encodeURIComponent(invoice));
+    const data = await res.json();
+    const items = data.items || [];
+    if (!items.length) {
+      box.innerHTML = '<p class="muted">No open double-deducted line(s) found for that invoice.</p>';
+      return;
+    }
+    let html = '<table class="grid"><thead><tr>' +
+      '<th><input type="checkbox" id="voidSelectAll" checked onchange="document.querySelectorAll(\'.voidLineChk\').forEach(c => c.checked = this.checked)"></th>' +
+      '<th>Product</th><th class="num">Qty</th><th>Sale Date</th><th>Already Counted In</th></tr></thead><tbody>';
+    items.forEach(it => {
+      html += '<tr><td><input type="checkbox" class="voidLineChk" data-movement-id="' + it.movement_id + '" checked></td>' +
+        '<td>' + ddEscape(it.product_name) + '</td><td class="num">' + ddEscape(String(Math.abs(it.qty_base))) + '</td>' +
+        '<td>' + ddEscape(it.sale_date) + '</td><td>' + ddEscape(it.count_ref) + ' (' + ddEscape(it.count_date) + ')</td></tr>';
+    });
+    html += '</tbody></table><div style="margin-top:10px;"><button type="button" class="btn" onclick="voidCheckedInvoice()">Void checked items</button></div>';
+    box.innerHTML = html;
+  }
+  const voidInvoiceInput = document.getElementById('voidInvoiceInput');
+  if (voidInvoiceInput) {
+    voidInvoiceInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); searchInvoiceVoid(); }
+    });
+  }
+
+  async function voidCheckedInvoice() {
+    const ids = Array.from(document.querySelectorAll('.voidLineChk:checked')).map(c => Number(c.dataset.movementId));
+    if (!ids.length) { alert('Nothing checked.'); return; }
+    if (!confirm('Add back the deducted quantity for ' + ids.length + ' checked line(s)? This will be logged and cannot be un-done from this screen.')) return;
+    try {
+      const res = await fetch('/products/void-by-movements', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ movement_ids: ids }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        alert('Corrected ' + data.corrected + ' line(s) — added back ' + data.qty_restored + ' unit(s) total.');
+        window.location.reload();
+      } else {
+        alert(data.error || 'Could not apply the correction.');
+      }
+    } catch (e) {
+      alert('Network error — nothing was changed.');
     }
   }
 </script>

@@ -124,3 +124,21 @@ def find_double_deduction_candidates(db: Session, product_ids: list) -> dict:
     for pid in results:
         results[pid].sort(key=lambda r: r["sale_date"])
     return results
+
+
+def find_all_double_deduction_candidates(db: Session) -> dict:
+    """Same as find_double_deduction_candidates, but scoped to every product
+    that appears in at least one completed, dated Stock Count — i.e. every
+    product that could possibly have a candidate, store-wide. Used by the
+    Inventory Void tab (the ⚠ flag/count and invoice search both need the
+    full picture, not just the current page), so callers should compute this
+    once per request and reuse it rather than calling either function again."""
+    product_ids = [
+        row[0] for row in db.query(models.StockCountLine.product_id.distinct())
+        .join(models.StockCount, models.StockCount.id == models.StockCountLine.stock_count_id)
+        .filter(models.StockCount.status == "completed", models.StockCount.count_date.isnot(None))
+        .all()
+    ]
+    if not product_ids:
+        return {}
+    return find_double_deduction_candidates(db, product_ids)

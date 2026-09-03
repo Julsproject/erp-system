@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from . import audit, models, pricing, settings_store
 from .database import SessionLocal, get_db
 from .deps import get_current_user, is_staff, safe_back_url
-from .double_deductions import find_double_deduction_candidates
+from .double_deductions import find_all_double_deduction_candidates, find_double_deduction_candidates
 from .search_utils import multi_word_ilike
 from .templating import templates
 
@@ -330,6 +330,7 @@ def list_products(
     delete_blocked_name: str = "",
     merged: str = "",
     merge_error: str = "",
+    flag: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -339,6 +340,13 @@ def list_products(
     q = (q or "").strip()
     page = max(page, 1)
     sort_dir = "desc" if sort_dir == "desc" else "asc"
+
+    # Every product with an open double-deduction candidate, store-wide —
+    # computed once per request and reused for the Void tab's filter, its
+    # badge count, and the existing per-row ⚠ flags below, instead of
+    # scanning for candidates three separate times.
+    void_map = find_all_double_deduction_candidates(db) if is_staff(user) else {}
+    void_ids = set(void_map.keys())
 
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
@@ -361,6 +369,8 @@ def list_products(
         query = query.filter(models.Product.shelf_id.is_(None))
     elif shelf_id:
         query = query.filter(models.Product.shelf_id == shelf_id)
+    if flag == "void":
+        query = query.filter(models.Product.id.in_(void_ids or {-1}))
 
     total = query.count()
     pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
@@ -389,20 +399,18 @@ def list_products(
         .all()
     )
 
-    # Which of these products (only this page's worth — cheap) have a past
-    # sale that likely double-deducted stock already reflected in a
-    # completed Stock Count. Admin/manager only, since only they can void one.
-    dd_flags = {}
-    if is_staff(user):
-        dd_map = find_double_deduction_candidates(db, [p.id for p in products])
-        dd_flags = {
-            pid: {
-                "count": len(rows),
-                "min_date": min(r["sale_date"] for r in rows).date().isoformat(),
-                "max_date": max(r["sale_date"] for r in rows).date().isoformat(),
-            }
-            for pid, rows in dd_map.items()
+    # Which of these products (only this page's worth) have a past sale that
+    # likely double-deducted stock already reflected in a completed Stock
+    # Count — reused from void_map above rather than recomputed.
+    page_ids = {p.id for p in products}
+    dd_flags = {
+        pid: {
+            "count": len(rows),
+            "min_date": min(r["sale_date"] for r in rows).date().isoformat(),
+            "max_date": max(r["sale_date"] for r in rows).date().isoformat(),
         }
+        for pid, rows in void_map.items() if pid in page_ids
+    }
 
     # Quick-filter pills: only categories actually in use, with a live count
     # each, computed against the current search/alert filter (not the
@@ -417,6 +425,8 @@ def list_products(
             models.Product.cost_price > 0,
             models.Product.selling_price <= models.Product.cost_price,
         )
+    if flag == "void":
+        base_for_counts = base_for_counts.filter(models.Product.id.in_(void_ids or {-1}))
     cat_counts = dict(
         base_for_counts.filter(models.Product.category_id.isnot(None))
         .with_entities(models.Product.category_id, func.count(models.Product.id))
@@ -507,6 +517,8 @@ def list_products(
             "sort": sort,
             "sort_dir": sort_dir,
             "dd_flags": dd_flags,
+            "flag": flag,
+            "void_count": len(void_ids),
             "last_rollover_period": settings_store.get_setting(db, MONTH_END_SETTING_KEY, ""),
         },
     )
@@ -776,6 +788,115 @@ def void_double_deductions(product_id: int, data: dict, request: Request, db: Se
     )
     db.commit()
     return JSONResponse({"ok": True, "corrected": len(candidates), "qty_restored": float(total_qty)})
+
+
+@router.get("/products/void-invoice")
+def void_invoice_search(invoice: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Every still-open double-deduction candidate line whose invoice
+    matches (case-insensitive) — for the Void tab's invoice-search tool, so
+    one invoice can be found and corrected across every product on it at
+    once, instead of only from a single product's own Inventory row."""
+    if not user or not is_staff(user):
+        return JSONResponse({"items": []}, status_code=403)
+    needle = (invoice or "").strip().lower()
+    if not needle:
+        return JSONResponse({"items": []})
+
+    void_map = find_all_double_deduction_candidates(db)
+    matches = [
+        (pid, r) for pid, rows in void_map.items() for r in rows
+        if needle in r["invoice_no"].lower()
+    ]
+    product_ids = {pid for pid, _ in matches}
+    names = dict(
+        db.query(models.Product.id, models.Product.name)
+        .filter(models.Product.id.in_(product_ids))
+        .all()
+    ) if product_ids else {}
+    return JSONResponse({
+        "items": [
+            {
+                "product_id": pid,
+                "product_name": names.get(pid, ""),
+                "movement_id": r["movement_id"],
+                "qty_base": r["qty_base"],
+                "sale_date": r["sale_date"].date().isoformat(),
+                "count_ref": r["count_ref"],
+                "count_date": r["count_date"].isoformat(),
+            }
+            for pid, r in matches
+        ],
+    })
+
+
+@router.post("/products/void-by-movements")
+def void_by_movements(data: dict, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Voids a specific set of double-deduction candidate movements, picked
+    from the Void tab's invoice search (which can span several products at
+    once) — same rule as /products/{id}/void-deductions, just addressed by
+    movement id instead of a per-product date range. Recomputes candidates
+    itself and only ever touches whichever of the requested ids are still
+    real, open evidence at the moment this runs — never trusts the client's
+    list beyond which ids it's asking to act on."""
+    if not user:
+        return JSONResponse({"ok": False, "error": "Please sign in again."}, status_code=401)
+    if not is_staff(user):
+        return JSONResponse({"ok": False, "error": "You don't have permission to do this."}, status_code=403)
+
+    requested_ids = set()
+    for mid in (data.get("movement_ids") or []):
+        try:
+            requested_ids.add(int(mid))
+        except (TypeError, ValueError):
+            continue
+    if not requested_ids:
+        return JSONResponse({"ok": False, "error": "Nothing selected."}, status_code=400)
+
+    void_map = find_all_double_deduction_candidates(db)
+    candidates = [
+        (pid, r) for pid, rows in void_map.items() for r in rows
+        if r["movement_id"] in requested_ids
+    ]
+    if not candidates:
+        return JSONResponse({"ok": False, "error": "Nothing matched — it may already be corrected."}, status_code=400)
+
+    from .pos import _apply_stock_count_correction
+    product_ids = {pid for pid, _ in candidates}
+    products = {
+        p.id: p for p in db.query(models.Product).filter(models.Product.id.in_(product_ids)).all()
+    }
+    total_qty = Decimal("0")
+    invoices = set()
+    changes = []
+    for pid, c in candidates:
+        product = products.get(pid)
+        if not product:
+            continue
+        qty = Decimal(str(abs(c["qty_base"])))
+        _apply_stock_count_correction(product, qty)
+        db.add(models.StockMovement(
+            product_id=product.id,
+            qty_base=qty,
+            reason="correction",
+            ref=c["invoice_no"],
+            note=f"Double-deduction void — {c['invoice_no']} ({c['sale_date'].date().isoformat()}), already reflected in {c['count_ref']}",
+            corrects_movement_id=c["movement_id"],
+        ))
+        total_qty += qty
+        invoices.add(c["invoice_no"])
+        changes.append({
+            "product_id": pid, "movement_id": c["movement_id"], "invoice_no": c["invoice_no"],
+            "qty": c["qty_base"], "count_ref": c["count_ref"],
+        })
+
+    audit.record(
+        db, user=user, request=request, action="void_double_deduction", entity_type="product",
+        entity_id=None, entity_label=", ".join(sorted(invoices)),
+        summary=f"Voided {len(changes)} double-deducted line(s) across invoice(s) {', '.join(sorted(invoices))}, restored {total_qty} unit(s)",
+        changes={"corrected": changes},
+    )
+    db.commit()
+    return JSONResponse({"ok": True, "corrected": len(changes), "qty_restored": float(total_qty)})
 
 
 def _save_from_form(product: models.Product, db: Session, form):
