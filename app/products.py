@@ -21,7 +21,7 @@ from openpyxl.utils import get_column_letter
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from starlette.concurrency import run_in_threadpool
 
 from . import audit, models, pricing, settings_store
@@ -313,6 +313,30 @@ SORTABLE_COLUMNS = {
 }
 
 
+def _find_conversion_issue_ids(db: Session) -> set:
+    """Product ids whose unit-breakdown display (Sealed packs / Open
+    container — see Product.unit_breakdown) shows a negative quantity on
+    any tier. That's physically impossible (you can't have -2 packs on a
+    shelf), so it's a reliable sign the item's total is oversold and needs
+    a physical recount — not a guess, just reading the same numbers already
+    shown on the row, gathered up instead of left to be spotted by eye.
+    Computed in Python since unit_breakdown is derived from total_qty + the
+    unit ladder, not a queryable column, so this only ever looks at active
+    products that actually have a units ladder to begin with."""
+    candidates = (
+        db.query(models.Product)
+        .options(selectinload(models.Product.units))
+        .filter(models.Product.is_active.is_(True), models.Product.units.any())
+        .all()
+    )
+    ids = set()
+    for p in candidates:
+        breakdown = p.unit_breakdown
+        if breakdown and any(tier["qty"] < 0 for tier in breakdown):
+            ids.add(p.id)
+    return ids
+
+
 @router.get("/products", response_class=HTMLResponse)
 def list_products(
     request: Request,
@@ -348,6 +372,11 @@ def list_products(
     void_map = find_all_double_deduction_candidates(db) if is_staff(user) else {}
     void_ids = set(void_map.keys())
 
+    # Every product whose Sealed/Open Container breakdown shows a negative
+    # number (see _find_conversion_issue_ids) — same "compute once, reuse
+    # for the tab's filter + badge" idea as void_ids above.
+    conversion_ids = _find_conversion_issue_ids(db) if is_staff(user) else set()
+
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
         query = query.filter(
@@ -371,6 +400,8 @@ def list_products(
         query = query.filter(models.Product.shelf_id == shelf_id)
     if flag == "void":
         query = query.filter(models.Product.id.in_(void_ids or {-1}))
+    elif flag == "conversion":
+        query = query.filter(models.Product.id.in_(conversion_ids or {-1}))
 
     total = query.count()
     pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
@@ -427,6 +458,8 @@ def list_products(
         )
     if flag == "void":
         base_for_counts = base_for_counts.filter(models.Product.id.in_(void_ids or {-1}))
+    elif flag == "conversion":
+        base_for_counts = base_for_counts.filter(models.Product.id.in_(conversion_ids or {-1}))
     cat_counts = dict(
         base_for_counts.filter(models.Product.category_id.isnot(None))
         .with_entities(models.Product.category_id, func.count(models.Product.id))
@@ -519,6 +552,7 @@ def list_products(
             "dd_flags": dd_flags,
             "flag": flag,
             "void_count": len(void_ids),
+            "conversion_count": len(conversion_ids),
             "last_rollover_period": settings_store.get_setting(db, MONTH_END_SETTING_KEY, ""),
         },
     )

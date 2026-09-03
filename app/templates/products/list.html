@@ -71,6 +71,9 @@
   {% if void_count %}
   <a class="tab {{ 'active' if flag == 'void' }}" href="/products?flag=void">Void <span class="warn-tag">{{ void_count }}</span></a>
   {% endif %}
+  {% if conversion_count %}
+  <a class="tab {{ 'active' if flag == 'conversion' }}" href="/products?flag=conversion">Conversion Issues <span class="warn-tag">{{ conversion_count }}</span></a>
+  {% endif %}
   {% endif %}
 </div>
 
