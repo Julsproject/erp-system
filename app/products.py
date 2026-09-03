@@ -8,7 +8,7 @@ import csv
 import io
 import json
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from difflib import SequenceMatcher
 from zoneinfo import ZoneInfo
@@ -337,6 +337,25 @@ def _find_conversion_issue_ids(db: Session) -> set:
     return ids
 
 
+MANUAL_ADJUSTMENT_WINDOW_DAYS = 7
+
+
+def _find_recent_manual_adjustment_ids(db: Session) -> set:
+    """Product ids with a manual stock adjustment (Product Edit's Beginning/
+    Stocks Qty change, reason="adjustment" — either direction, dagdag or
+    bawas) in the last MANUAL_ADJUSTMENT_WINDOW_DAYS days. A plain rolling
+    review window, not a correctness check — an item ages off this list on
+    its own once its most recent adjustment is more than a week old, no
+    manual cleanup needed."""
+    cutoff = datetime.now(MANILA) - timedelta(days=MANUAL_ADJUSTMENT_WINDOW_DAYS)
+    rows = (
+        db.query(models.StockMovement.product_id.distinct())
+        .filter(models.StockMovement.reason == "adjustment", models.StockMovement.created_at >= cutoff)
+        .all()
+    )
+    return {row[0] for row in rows}
+
+
 @router.get("/products", response_class=HTMLResponse)
 def list_products(
     request: Request,
@@ -377,6 +396,10 @@ def list_products(
     # for the tab's filter + badge" idea as void_ids above.
     conversion_ids = _find_conversion_issue_ids(db) if is_staff(user) else set()
 
+    # Every product with a manual stock adjustment in the last week — see
+    # _find_recent_manual_adjustment_ids.
+    adjustment_ids = _find_recent_manual_adjustment_ids(db) if is_staff(user) else set()
+
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
         query = query.filter(
@@ -402,6 +425,8 @@ def list_products(
         query = query.filter(models.Product.id.in_(void_ids or {-1}))
     elif flag == "conversion":
         query = query.filter(models.Product.id.in_(conversion_ids or {-1}))
+    elif flag == "adjustments":
+        query = query.filter(models.Product.id.in_(adjustment_ids or {-1}))
 
     total = query.count()
     pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
@@ -460,6 +485,8 @@ def list_products(
         base_for_counts = base_for_counts.filter(models.Product.id.in_(void_ids or {-1}))
     elif flag == "conversion":
         base_for_counts = base_for_counts.filter(models.Product.id.in_(conversion_ids or {-1}))
+    elif flag == "adjustments":
+        base_for_counts = base_for_counts.filter(models.Product.id.in_(adjustment_ids or {-1}))
     cat_counts = dict(
         base_for_counts.filter(models.Product.category_id.isnot(None))
         .with_entities(models.Product.category_id, func.count(models.Product.id))
@@ -553,6 +580,7 @@ def list_products(
             "flag": flag,
             "void_count": len(void_ids),
             "conversion_count": len(conversion_ids),
+            "adjustment_count": len(adjustment_ids),
             "last_rollover_period": settings_store.get_setting(db, MONTH_END_SETTING_KEY, ""),
         },
     )

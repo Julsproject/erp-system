@@ -74,6 +74,9 @@
   {% if conversion_count %}
   <a class="tab {{ 'active' if flag == 'conversion' }}" href="/products?flag=conversion">Conversion Issues <span class="warn-tag">{{ conversion_count }}</span></a>
   {% endif %}
+  {% if adjustment_count %}
+  <a class="tab {{ 'active' if flag == 'adjustments' }}" href="/products?flag=adjustments">Manual Adjustments <span class="warn-tag">{{ adjustment_count }}</span></a>
+  {% endif %}
   {% endif %}
 </div>
 
