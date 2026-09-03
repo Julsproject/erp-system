@@ -1865,7 +1865,7 @@ MOVEMENT_LABELS = {
 
 
 @router.get("/products/{product_id:int}/stock-card", response_class=HTMLResponse)
-def stock_card(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def stock_card(product_id: int, request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Per-product stock ledger: every in/out movement with a running balance.
 
     The balance is anchored to the product's *current* on-hand total and worked
@@ -1980,6 +1980,7 @@ def stock_card(product_id: int, request: Request, db: Session = Depends(get_db),
             "product": product, "rows": rows, "opening": opening,
             "current_total": current_total, "total_in": total_in, "total_out": total_out,
             "count": len(movements),
+            "back": safe_back_url(back, "/products"),
         },
     )
 

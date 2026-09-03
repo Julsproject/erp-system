@@ -273,7 +273,7 @@
         <td class="row-actions">
           {% if is_admin_user %}<a class="btn-link" href="/products/{{ p.id }}/edit?back={{ cur_url|urlencode }}">Edit</a>{% endif %}
           {% if (user.role or '')|lower == 'admin' %}
-          <a class="btn-link" href="/products/{{ p.id }}/stock-card">Stock card</a>
+          <a class="btn-link" href="/products/{{ p.id }}/stock-card?back={{ cur_url|urlencode }}">Stock card</a>
           {% endif %}
           <button type="button" class="btn-link danger"
                   onclick="submitRowAction('/products/{{ p.id }}/delete', 'Delete {{ p.name|e }}? This cannot be undone.\n\nIf this product already has sales, purchases, or stock activity, deleting it will be blocked — use Archive for those instead.')">Delete</button>

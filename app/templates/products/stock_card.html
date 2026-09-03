@@ -7,7 +7,7 @@
     <p class="muted">{{ product.name }}{% if product.unit_type %} · in {{ product.unit_type.name }}{% endif %} — every movement in and out, with a running balance.</p>
   </div>
   <div class="head-actions">
-    <a class="btn-secondary" href="/products">← Inventory</a>
+    <a class="btn-secondary" href="{{ back }}">← Inventory</a>
     <a class="btn-secondary" href="/products/{{ product.id }}/edit">Edit product</a>
     <a class="btn-secondary" href="/?track_product={{ product.id }}">📈 Cost &amp; price history</a>
   </div>
