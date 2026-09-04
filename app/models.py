@@ -435,6 +435,10 @@ class Sale(Base):
     notes = Column(String(255), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # The real clock moment this row was written — unlike created_at, a
+    # backdated sale never overwrites this, so it's what answers "when was
+    # this actually typed in" regardless of what transaction date was picked.
+    entered_at = Column(DateTime(timezone=True), server_default=func.now())
 
     lines = relationship("SaleLine", back_populates="sale", cascade="all, delete-orphan")
     payments = relationship("Payment", back_populates="sale", cascade="all, delete-orphan")

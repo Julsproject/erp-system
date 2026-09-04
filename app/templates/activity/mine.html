@@ -28,9 +28,13 @@
 
 <div class="kpi-row">
   <div class="kpi"><span class="kpi-label">Transactions</span><span class="kpi-value">{{ summary.count }}</span></div>
+  <div class="kpi"><span class="kpi-label">Encoded</span><span class="kpi-value">{{ summary.encoded_count }}</span></div>
   <div class="kpi"><span class="kpi-label">Total Sales</span><span class="kpi-value">{{ summary.net_total|peso }}</span></div>
   <div class="kpi"><span class="kpi-label">Credit Collected</span><span class="kpi-value">{{ summary.collections|peso }}</span></div>
 </div>
+<p class="hint" style="margin:-6px 0 16px;">
+  Transactions follows each sale's transaction date (which a backdated entry moves to the past); Encoded counts sales by the real day they were actually typed in, no matter what date they were backdated to.
+</p>
 
 {% if summary.by_method %}
 <div class="card" style="padding:16px 20px;margin-bottom:18px;">

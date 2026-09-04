@@ -107,6 +107,21 @@ def _day_summary(db: Session, cashier_id: int, day: date, end: date = None) -> d
         )
         .scalar()
     )
+    # How many sales this cashier actually TYPED IN during this window,
+    # regardless of what transaction date those sales were backdated to —
+    # entered_at is the real clock moment the row was written (see the Sale
+    # model), never touched by backdating the way created_at is. A shop
+    # working through a backlog of past transactions wants this number
+    # separately from `count` above (which follows the backdated date).
+    encoded_count = (
+        db.query(func.count(models.Sale.id))
+        .filter(
+            models.Sale.cashier_id == cashier_id,
+            models.Sale.is_voided.is_(False),
+            _local_date(models.Sale.entered_at).between(day, end),
+        )
+        .scalar()
+    )
     by_method = {
         m: Decimal(str(a or 0)) for m, a in pay_rows
     }
@@ -125,6 +140,7 @@ def _day_summary(db: Session, cashier_id: int, day: date, end: date = None) -> d
     return {
         "sales": sales,
         "count": len(sales),
+        "encoded_count": encoded_count or 0,
         "net_total": net_total,
         "by_method": by_method_list,
         "collections": Decimal(str(collections or 0)),
@@ -140,7 +156,7 @@ def _all_rows(db: Session, start: date, end: date):
     rows = []
     for p in people:
         summary = _day_summary(db, p.id, start, end)
-        if summary["count"] > 0 or summary["collections"]:
+        if summary["count"] > 0 or summary["collections"] or summary["encoded_count"] > 0:
             rows.append({"user": p, "summary": summary})
     return rows
 
@@ -174,6 +190,7 @@ def all_activity(request: Request, day: str = "", date_from: str = "", date_to: 
     rows = _all_rows(db, start, end)
     totals = {
         "count": sum(r["summary"]["count"] for r in rows),
+        "encoded_count": sum(r["summary"]["encoded_count"] for r in rows),
         "net_total": sum((r["summary"]["net_total"] for r in rows), Decimal("0")),
         "collections": sum((r["summary"]["collections"] for r in rows), Decimal("0")),
     }
@@ -243,7 +260,7 @@ def export_activity(
 
     ws = wb.active
     ws.title = "Summary"
-    ws.append(["Cashier", "Transactions", "Total Sales", "Credit Collected"])
+    ws.append(["Cashier", "Transactions", "Encoded (this period)", "Total Sales", "Credit Collected"])
     _style_header(ws)
     rows = _all_rows(db, start, end)
     if user_id:
@@ -252,6 +269,7 @@ def export_activity(
         ws.append([
             r["user"].full_name or r["user"].username,
             r["summary"]["count"],
+            r["summary"]["encoded_count"],
             float(r["summary"]["net_total"] or 0),
             float(r["summary"]["collections"] or 0),
         ])
@@ -260,10 +278,11 @@ def export_activity(
         ws.append([
             "TOTAL",
             sum(r["summary"]["count"] for r in rows),
+            sum(r["summary"]["encoded_count"] for r in rows),
             float(sum((r["summary"]["net_total"] for r in rows), Decimal("0"))),
             float(sum((r["summary"]["collections"] for r in rows), Decimal("0"))),
         ])
-    for i, w in enumerate([26, 14, 16, 18], start=1):
+    for i, w in enumerate([26, 14, 20, 16, 18], start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
     # Second sheet: the transactions themselves, but only when the export is

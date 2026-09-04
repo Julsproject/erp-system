@@ -27,22 +27,27 @@
   <a class="btn-link" href="/activity/all" style="margin-top:14px;">Today</a>
 </form>
 
+<p class="hint" style="margin:-6px 0 16px;">
+  Transactions follows each sale's transaction date (which a backdated entry moves to the past); Encoded counts sales by the real day they were actually typed in, no matter what date they were backdated to.
+</p>
+
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Cashier</th><th class="num">Transactions</th><th class="num">Total Sales</th><th class="num">Credit Collected</th><th></th></tr>
+      <tr><th>Cashier</th><th class="num">Transactions</th><th class="num">Encoded</th><th class="num">Total Sales</th><th class="num">Credit Collected</th><th></th></tr>
     </thead>
     <tbody>
       {% for r in rows %}
       <tr>
         <td class="strong">{{ r.user.full_name or r.user.username }}</td>
         <td class="num">{{ r.summary.count }}</td>
+        <td class="num">{{ r.summary.encoded_count }}</td>
         <td class="num strong">{{ r.summary.net_total|peso }}</td>
         <td class="num">{{ r.summary.collections|peso }}</td>
         <td class="row-actions"><a class="btn-link" href="/activity/user/{{ r.user.id }}?date_from={{ day.isoformat() }}&date_to={{ end.isoformat() }}">View</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="5" class="empty">No activity recorded in this period.</td></tr>
+      <tr><td colspan="6" class="empty">No activity recorded in this period.</td></tr>
       {% endfor %}
     </tbody>
     {% if rows %}
@@ -50,6 +55,7 @@
       <tr>
         <td class="strong">TOTAL</td>
         <td class="num strong">{{ totals.count }}</td>
+        <td class="num strong">{{ totals.encoded_count }}</td>
         <td class="num strong">{{ totals.net_total|peso }}</td>
         <td class="num strong">{{ totals.collections|peso }}</td>
         <td></td>
