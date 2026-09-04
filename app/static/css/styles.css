@@ -684,6 +684,12 @@ table.grid tr:last-child td { border-bottom: none; }
 .cart-qty, .cart-price { width: 140px; padding: 12px 12px; border: 1.5px solid var(--line-2); border-radius: 9px; font-size: 17px; font-weight: 600; text-align: right; }
 .cart-qty:focus, .cart-disc:focus, .cart-price:focus, .cart-unit:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
 
+/* Tap-to-add qty button next to a .ret-qty box — a big, thumb-friendly "+1"
+   so a touch/tablet POS doesn't need the keyboard just to bump a return qty. */
+.qty-tap-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.qty-tap-btn { width: 34px; height: 34px; border-radius: 8px; border: 1.5px solid var(--brand); background: var(--brand); color: #fff; font-size: 18px; font-weight: 700; line-height: 1; cursor: pointer; flex: none; }
+.qty-tap-btn:active { transform: scale(0.94); }
+
 /* New Purchase's Unit Price / Subtotal — wider than the generic .cart-disc
    (which stays narrow for POS's small per-line discount box) so a 5-6 digit
    peso amount like 12425.00 shows in full instead of getting clipped. */

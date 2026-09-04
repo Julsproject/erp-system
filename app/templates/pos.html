@@ -1726,14 +1726,24 @@ function renderReturnLines() {
   returnLines.forEach((l, i) => {
     const tr = document.createElement('tr');
     const maxAttr = l.qty !== null ? ' max="' + l.qty + '"' : '';
-    const startQty = l.qty !== null ? fmtQty(l.qty) : '1';
+    // Re-use whatever was already typed/tapped for this line across a
+    // re-render (e.g. adding another item rebuilds every row) instead of
+    // resetting it back to the original sold qty / checked state every time —
+    // enteredQty/enteredPrice/enteredChecked are written back in
+    // returnTotals() below on every change, so this survives any re-render.
+    const startQty = l.enteredQty !== undefined ? l.enteredQty : (l.qty !== null ? fmtQty(l.qty) : '1');
+    const startPrice = l.enteredPrice !== undefined ? l.enteredPrice : l.unit_price.toFixed(2);
+    const startChecked = l.enteredChecked !== undefined ? l.enteredChecked : true;
     tr.innerHTML =
-      '<td><input type="checkbox" data-i="' + i + '" checked onchange="calcReturn()"></td>' +
+      '<td><input type="checkbox" data-i="' + i + '"' + (startChecked ? ' checked' : '') + ' onchange="calcReturn()"></td>' +
       '<td class="strong">' + escapeHtml(l.name) + '</td>' +
-      '<td class="num"><input class="cart-qty ret-qty" type="number" step="0.001" min="0"' + maxAttr + ' value="' + startQty + '" data-i="' + i + '" oninput="calcReturn()"></td>' +
+      '<td class="num"><span class="qty-tap-wrap">' +
+        '<input class="cart-qty ret-qty" type="number" step="0.001" min="0"' + maxAttr + ' value="' + startQty + '" data-i="' + i + '" oninput="calcReturn()">' +
+        '<button type="button" class="qty-tap-btn" data-i="' + i + '" onclick="returnBumpQty(' + i + ')" title="Tap to add 1">+</button>' +
+      '</span></td>' +
       '<td>' + escapeHtml(l.unit_name || '') + '</td>' +
       '<td class="num">' + (l.editable
-        ? '<input class="cart-price ret-price" type="number" step="0.01" min="0" value="' + l.unit_price.toFixed(2) + '" data-i="' + i + '" oninput="calcReturn()">'
+        ? '<input class="cart-price ret-price" type="number" step="0.01" min="0" value="' + startPrice + '" data-i="' + i + '" oninput="calcReturn()">'
         : peso(l.unit_price)) + '</td>' +
       '<td>' + (l.editable ? '<button type="button" class="btn-link danger" onclick="returnRemoveLine(' + i + ')">✕</button>' : '') + '</td>';
     body.appendChild(tr);
@@ -1753,10 +1763,29 @@ function returnTotals() {
     if (l.qty !== null && qty > l.qty) { qty = l.qty; qtyInput.value = fmtQty(l.qty); }
     const priceInput = tr.querySelector('.ret-price');
     const price = priceInput ? (parseFloat(priceInput.value) || 0) : l.unit_price;
+    // Persist onto the line itself so renderReturnLines() can restore this
+    // exact value on its next re-render (e.g. triggered by adding another
+    // item) instead of resetting it back to the default.
+    l.enteredQty = qtyInput.value;
+    if (priceInput) l.enteredPrice = priceInput.value;
+    l.enteredChecked = cb.checked;
     const val = qty * price;
     if (cb.checked && qty > 0) { net += val; if (effectiveIsVat(l)) vatBase += val; }
   });
   return { net: net, vatBase: vatBase };
+}
+function returnBumpQty(i) {
+  // Tap-to-add: bump this row's qty by 1 instead of typing it in — capped at
+  // what was actually sold (same limit returnTotals() already enforces).
+  const qtyInput = document.querySelector('#returnItems .ret-qty[data-i="' + i + '"]');
+  if (!qtyInput) return;
+  const l = returnLines[i];
+  let qty = (parseFloat(qtyInput.value) || 0) + 1;
+  if (l.qty !== null && qty > l.qty) qty = l.qty;
+  qtyInput.value = fmtQty(qty);
+  const cb = document.querySelector('#returnItems input[type=checkbox][data-i="' + i + '"]');
+  if (cb && !cb.checked) cb.checked = true;
+  calcReturn();
 }
 function calcReturn() {
   const r = returnTotals();
