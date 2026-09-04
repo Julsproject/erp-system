@@ -1929,6 +1929,7 @@ def stock_card(product_id: int, request: Request, back: str = "", db: Session = 
     # day, even after the item is re-priced later. Movements written before
     # `ref` was populated have nothing to match on and simply show no price.
     priced_by_ref = {}
+    sale_id_by_ref = {}
     for line, sale in (
         db.query(models.SaleLine, models.Sale)
         .join(models.Sale, models.SaleLine.sale_id == models.Sale.id)
@@ -1937,6 +1938,25 @@ def stock_card(product_id: int, request: Request, back: str = "", db: Session = 
     ):
         key = f"{sale.receipt_type}{sale.invoice_no}" if sale.receipt_type else sale.invoice_no
         priced_by_ref.setdefault(key, []).append(line)
+        sale_id_by_ref[key] = sale.id
+
+    # Invoice/PO # is clickable when it resolves to a real record — a sale
+    # (any sale-driven reason shares the same ref/display-invoice, already
+    # collected above), a purchase, or a stock count. Scoped to just the
+    # refs these movements actually carry, not a store-wide scan.
+    purchase_reasons = {"purchase", "purchase-return", "purchase-cancelled", "purchase-edit-reverse"}
+    purchase_refs = {m.ref for m in movements if m.ref and m.reason in purchase_reasons}
+    purchase_id_by_ref = dict(
+        db.query(models.Purchase.ref_no, models.Purchase.id)
+        .filter(models.Purchase.ref_no.in_(purchase_refs))
+        .all()
+    ) if purchase_refs else {}
+    count_refs = {m.ref for m in movements if m.ref and m.reason == "stock_count"}
+    count_id_by_ref = dict(
+        db.query(models.StockCount.ref_no, models.StockCount.id)
+        .filter(models.StockCount.ref_no.in_(count_refs))
+        .all()
+    ) if count_refs else {}
 
     def _sold_line(movement, delta):
         """The sale line behind this movement, or None. An exchange can put
@@ -1985,6 +2005,15 @@ def stock_card(product_id: int, request: Request, back: str = "", db: Session = 
         else:
             unit_cost_shown = movement_cost
 
+        if m.reason in purchase_reasons:
+            ref_link = f"/purchases/{purchase_id_by_ref[m.ref]}" if m.ref in purchase_id_by_ref else None
+        elif m.reason == "stock_count":
+            ref_link = f"/stock-count/{count_id_by_ref[m.ref]}" if m.ref in count_id_by_ref else None
+        elif m.ref in sale_id_by_ref:
+            ref_link = f"/pos/receipt/{sale_id_by_ref[m.ref]}"
+        else:
+            ref_link = None
+
         rows.append({
             "movement": m,
             "label": MOVEMENT_LABELS.get(m.reason, (m.reason or "").replace("-", " ").title()),
@@ -1999,6 +2028,7 @@ def stock_card(product_id: int, request: Request, back: str = "", db: Session = 
             "sold_unit": (
                 sold.unit_name if sold and sold.unit_name and factor != 1 else None
             ),
+            "ref_link": ref_link,
         })
     rows.reverse()  # newest first for display
 
