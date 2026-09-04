@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from . import accounting, audit, models, settings_store
 from .customers import get_or_create_customer
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_staff, safe_back_url
 from .products import _get_or_create_category, _get_or_create_subcategory, _get_or_create_unit_type
 from .templating import templates
 
@@ -1548,6 +1548,7 @@ def pos_receipt(
     sale_id: int,
     request: Request,
     from_: str = Query("", alias="from"),
+    back: str = "",
     cust: int = 0,
     quote: int = 0,
     thermal: int = 0,
@@ -1599,7 +1600,7 @@ def pos_receipt(
     return templates.TemplateResponse(
         "receipt.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "sale": sale, "from": from_, "cust": cust, "quote": quote, "thermal": thermal,
+         "sale": sale, "from": from_, "back": safe_back_url(back, ""), "cust": cust, "quote": quote, "thermal": thermal,
          "linked": linked, "original": original, "credit_outstanding": credit_outstanding,
          "can_void": _can_void_sale(user), "void_error": VOID_ERRORS.get(void_error),
          "can_unvoid": is_staff(user), "unvoid_error": UNVOID_ERRORS.get(unvoid_error),

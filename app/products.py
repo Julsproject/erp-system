@@ -8,6 +8,7 @@ import csv
 import io
 import json
 import re
+from urllib.parse import quote
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from difflib import SequenceMatcher
@@ -1922,6 +1923,18 @@ def stock_card(product_id: int, request: Request, back: str = "", unit: int = 0,
     view_factor = Decimal(str(view_unit.factor_to_base)) if view_unit and view_unit.factor_to_base else Decimal("1")
     view_unit_name = view_unit.name if view_unit else (product.unit_type.name if product.unit_type else "base unit")
 
+    # This exact Stock Card view — unit + wherever it was itself opened
+    # from — so a sale opened from here can send someone back to it
+    # specifically, instead of dumping them on a blank new sale.
+    self_url = f"/products/{product_id}/stock-card"
+    self_qs = []
+    if unit:
+        self_qs.append(f"unit={unit}")
+    if back:
+        self_qs.append(f"back={quote(back)}")
+    if self_qs:
+        self_url += "?" + "&".join(self_qs)
+
     movements = (
         db.query(models.StockMovement)
         .filter(models.StockMovement.product_id == product_id)
@@ -2022,7 +2035,7 @@ def stock_card(product_id: int, request: Request, back: str = "", unit: int = 0,
         elif m.reason == "stock_count":
             ref_link = f"/stock-count/{count_id_by_ref[m.ref]}" if m.ref in count_id_by_ref else None
         elif m.ref in sale_id_by_ref:
-            ref_link = f"/pos/receipt/{sale_id_by_ref[m.ref]}"
+            ref_link = f"/pos/receipt/{sale_id_by_ref[m.ref]}?from=stock_card&back={quote(self_url)}"
         else:
             ref_link = None
 

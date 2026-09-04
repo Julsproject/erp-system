@@ -384,13 +384,15 @@
     <a class="btn back" href="/customers/{{ cust }}/history">← Back to History</a>
     {% elif from == 'quotation' and quote %}
     <a class="btn back" href="/quotations/{{ quote }}">← Back to Quotation</a>
+    {% elif from == 'stock_card' and back %}
+    <a class="btn back" href="{{ back }}">← Back to Stock Card</a>
     {% else %}
     <a class="btn back" href="/pos">← New sale</a>
     {% endif %}
     {% if thermal %}
-    <a class="btn back" href="/pos/receipt/{{ sale.id }}?from={{ from }}&cust={{ cust }}&quote={{ quote }}">🧾 Full-page view</a>
+    <a class="btn back" href="/pos/receipt/{{ sale.id }}?from={{ from }}&back={{ back|urlencode }}&cust={{ cust }}&quote={{ quote }}">🧾 Full-page view</a>
     {% else %}
-    <a class="btn back" href="/pos/receipt/{{ sale.id }}?from={{ from }}&cust={{ cust }}&quote={{ quote }}&thermal=1">🧾 Thermal receipt</a>
+    <a class="btn back" href="/pos/receipt/{{ sale.id }}?from={{ from }}&back={{ back|urlencode }}&cust={{ cust }}&quote={{ quote }}&thermal=1">🧾 Thermal receipt</a>
     {% endif %}
     <button class="btn print" onclick="window.print()">🖨 Print</button>
     <a class="btn back" href="/pos/receipt/{{ sale.id }}/pdf">⬇ Download PDF</a>
