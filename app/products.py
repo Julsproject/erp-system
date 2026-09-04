@@ -688,12 +688,12 @@ def _render_form(request, db, user, product=None, error=None, back=""):
 
 
 @router.get("/products/new", response_class=HTMLResponse)
-def new_product(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def new_product(request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
-    return _render_form(request, db, product=None, user=user)
+    return _render_form(request, db, product=None, user=user, back=back)
 
 
 @router.get("/products/{product_id:int}/edit", response_class=HTMLResponse)
@@ -1101,6 +1101,7 @@ async def create_product(request: Request, db: Session = Depends(get_db), user=D
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
     form = await request.form()
+    back = (form.get("back") or "").strip()
 
     # The DB work below is synchronous SQLAlchemy — running it directly in
     # this async function would block the whole app for every other user
@@ -1109,10 +1110,10 @@ async def create_product(request: Request, db: Session = Depends(get_db), user=D
     # parsing above (which genuinely needs await) stays on the loop.
     def _do():
         if not (form.get("name") or "").strip():
-            return _render_form(request, db, user, product=None, error="Product name is required.")
+            return _render_form(request, db, user, product=None, error="Product name is required.", back=back)
         barcode = (form.get("barcode") or "").strip()
         if barcode and db.query(models.Product).filter(models.Product.barcode == barcode).first():
-            return _render_form(request, db, user, product=None, error=f"Barcode “{barcode}” is already assigned to another product.")
+            return _render_form(request, db, user, product=None, error=f"Barcode “{barcode}” is already assigned to another product.", back=back)
         product = models.Product()
         db.add(product)  # add before _save_from_form so its internal flush (for the units-ladder chain) can assign ids
         _save_from_form(product, db, form)
@@ -1123,7 +1124,7 @@ async def create_product(request: Request, db: Session = Depends(get_db), user=D
             summary=f"Created product “{product.name}”",
         )
         db.commit()
-        return RedirectResponse("/products", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(safe_back_url(back, "/products"), status_code=status.HTTP_302_FOUND)
 
     return await run_in_threadpool(_do)
 

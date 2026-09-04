@@ -2,6 +2,16 @@
 {% block title %}Inventory · {{ app_name }}{% endblock %}
 {% block content %}
 {% set is_admin_user = (user.role or '')|lower in ('admin', 'manager') %}
+{# This exact list view — search, filters and page — handed to row links (and
+   the Add product button) so Back/Cancel/after-save returns here instead of
+   dumping the user on an unfiltered page 1 and making them search again. #}
+{% set cur_url = '/products?page=' ~ page
+   ~ ('&q=' ~ q if q else '')
+   ~ ('&alert=1' if alert else '')
+   ~ ('&flag=' ~ flag if flag else '')
+   ~ ('&category_id=' ~ category_id if category_id else '')
+   ~ ('&subcategory_id=' ~ subcategory_id if subcategory_id else '')
+   ~ ('&shelf_id=' ~ shelf_id if shelf_id else '') %}
 <div class="page-head">
   <div>
     <h1 class="page-title">{{ 'Price Review Needed' if alert else 'Inventory' }}</h1>
@@ -22,7 +32,7 @@
     <a class="btn-secondary" href="/shelves">🗂 Shelves</a>
     {% if is_admin_user %}
     <a class="btn-secondary" href="/products/import">⬆ Import Excel</a>
-    <a class="btn" href="/products/new">+ Add product</a>
+    <a class="btn" href="/products/new?back={{ cur_url|urlencode }}">+ Add product</a>
     {% endif %}
   </div>
 </div>
@@ -81,16 +91,6 @@
 </div>
 
 {% set qs_base = ('q=' ~ q ~ '&' if q) ~ ('alert=1&' if alert) ~ ('flag=' ~ flag ~ '&' if flag) ~ ('sort=' ~ sort ~ '&sort_dir=' ~ sort_dir ~ '&' if sort) %}
-{# This exact list view — search, filters and page — handed to row links so
-   Back/Cancel/after-save returns here instead of dumping the user on an
-   unfiltered page 1 and making them search all over again. #}
-{% set cur_url = '/products?page=' ~ page
-   ~ ('&q=' ~ q if q else '')
-   ~ ('&alert=1' if alert else '')
-   ~ ('&flag=' ~ flag if flag else '')
-   ~ ('&category_id=' ~ category_id if category_id else '')
-   ~ ('&subcategory_id=' ~ subcategory_id if subcategory_id else '')
-   ~ ('&shelf_id=' ~ shelf_id if shelf_id else '') %}
 <div class="pill-filter-bar">
   {% if categories or no_category_count %}
   {% set current_cat = 'No category' if category_id == -1 else (categories|selectattr('id', 'equalto', category_id)|map(attribute='name')|first if category_id else None) %}
