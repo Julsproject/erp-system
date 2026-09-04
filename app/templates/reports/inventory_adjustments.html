@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Inventory Adjustments · {{ app_name }}{% endblock %}
 {% block content %}
+{% set qs = '&days=' ~ days if not custom else ('&date_from=' ~ date_from ~ '&date_to=' ~ date_to) %}
 <div class="page-head">
   <div>
     <h1 class="page-title">Inventory Adjustments</h1>
@@ -35,7 +36,7 @@
 </div>
 
 <div class="stat-row">
-  <div class="mini-stat"><span class="mini-num">{{ rows|length }}</span><span>Adjustments</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>Adjustments</span></div>
   <div class="mini-stat owed"><span class="mini-num">{{ loss_total|peso }}</span><span>Shrinkage (loss)</span></div>
   <div class="mini-stat"><span class="mini-num">{{ gain_total|peso }}</span><span>Gains found</span></div>
   <div class="mini-stat {{ 'owed' if net_total < 0 }}"><span class="mini-num">{{ net_total|peso }}</span><span>Net inventory impact</span></div>
@@ -65,4 +66,12 @@
     </tbody>
   </table>
 </div>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}<a class="btn-secondary" href="/reports/inventory-adjustments?page={{ page - 1 }}{{ qs }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-secondary" href="/reports/inventory-adjustments?page={{ page + 1 }}{{ qs }}">Next →</a>{% endif %}
+</div>
+{% endif %}
 {% endblock %}

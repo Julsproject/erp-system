@@ -1116,12 +1116,16 @@ def _inventory_adjustment_rows(db: Session, period_start: date, period_end: date
     return out
 
 
+INV_ADJ_PAGE_SIZE = 30
+
+
 @router.get("/reports/inventory-adjustments", response_class=HTMLResponse)
 def inventory_adjustments(
     request: Request,
     days: int = 30,
     date_from: str = "",
     date_to: str = "",
+    page: int = 1,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -1131,10 +1135,15 @@ def inventory_adjustments(
         return RedirectResponse("/pos", status_code=302)
 
     period_start, period_end, custom = _resolve_period(days, date_from, date_to)
-    rows = _inventory_adjustment_rows(db, period_start, period_end)
-    loss_total = sum((r["value"] for r in rows if r["value"] < 0), ZERO)
-    gain_total = sum((r["value"] for r in rows if r["value"] > 0), ZERO)
+    all_rows = _inventory_adjustment_rows(db, period_start, period_end)
+    loss_total = sum((r["value"] for r in all_rows if r["value"] < 0), ZERO)
+    gain_total = sum((r["value"] for r in all_rows if r["value"] > 0), ZERO)
     net_total = loss_total + gain_total
+
+    total = len(all_rows)
+    pages = max((total + INV_ADJ_PAGE_SIZE - 1) // INV_ADJ_PAGE_SIZE, 1)
+    page = min(max(page, 1), pages)
+    rows = all_rows[(page - 1) * INV_ADJ_PAGE_SIZE: page * INV_ADJ_PAGE_SIZE]
 
     today = _today()
     month_start = today.replace(day=1)
@@ -1147,7 +1156,8 @@ def inventory_adjustments(
             "days": days, "date_from": date_from, "date_to": date_to,
             "period_start": period_start, "period_end": period_end, "custom": custom,
             "month_start": month_start, "today": today, "this_month": this_month,
-            "rows": rows, "loss_total": loss_total, "gain_total": gain_total, "net_total": net_total,
+            "rows": rows, "total": total, "page": page, "pages": pages,
+            "loss_total": loss_total, "gain_total": gain_total, "net_total": net_total,
         },
     )
 
