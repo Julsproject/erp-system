@@ -321,7 +321,11 @@
         <td class="num">{% if eq %}{{ eq.beginning|qty }}{% else %}<span class="muted">—</span>{% endif %}</td>
         <td class="num">{% if eq %}{{ eq.stock|qty }}{% else %}<span class="muted">—</span>{% endif %}</td>
         <td class="num strong">{% if eq %}{{ eq.total|qty }}{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td></td>
+        <td class="row-actions">
+          {% if (user.role or '')|lower == 'admin' %}
+          <a class="btn-link" href="/products/{{ p.id }}/stock-card?unit={{ u.id }}&back={{ cur_url|urlencode }}">Stock card</a>
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
       {% else %}

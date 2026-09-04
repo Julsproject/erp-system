@@ -1894,13 +1894,21 @@ MOVEMENT_LABELS = {
 
 
 @router.get("/products/{product_id:int}/stock-card", response_class=HTMLResponse)
-def stock_card(product_id: int, request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+def stock_card(product_id: int, request: Request, back: str = "", unit: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Per-product stock ledger: every in/out movement with a running balance.
 
     The balance is anchored to the product's *current* on-hand total and worked
     backwards through the movements, so the newest row always shows the true
     current stock even if older movements pre-date movement tracking (e.g. a
     bulk import). The implied opening balance is shown for reconciliation.
+
+    `unit`, when given, is one of this product's ProductUnit ids — everything
+    stock-related (In/Out/Balance, the stat tiles) is shown converted into
+    that unit instead of base (dividing by its factor_to_base, same math as
+    ProductUnit.stock_as_this_unit), for a product sold in a bigger unit than
+    it's tracked in. This never changes what's actually stored — base units
+    remain the only thing written anywhere — purely a different lens on the
+    same movements.
     """
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -1909,6 +1917,10 @@ def stock_card(product_id: int, request: Request, back: str = "", db: Session = 
     product = db.get(models.Product, product_id)
     if not product:
         return RedirectResponse("/products", status_code=302)
+
+    view_unit = next((u for u in product.units if u.id == unit), None) if unit else None
+    view_factor = Decimal(str(view_unit.factor_to_base)) if view_unit and view_unit.factor_to_base else Decimal("1")
+    view_unit_name = view_unit.name if view_unit else (product.unit_type.name if product.unit_type else "base unit")
 
     movements = (
         db.query(models.StockMovement)
@@ -2017,9 +2029,9 @@ def stock_card(product_id: int, request: Request, back: str = "", db: Session = 
         rows.append({
             "movement": m,
             "label": MOVEMENT_LABELS.get(m.reason, (m.reason or "").replace("-", " ").title()),
-            "in_qty": delta if delta > 0 else None,
-            "out_qty": -delta if delta < 0 else None,
-            "balance": running,
+            "in_qty": (delta / view_factor) if delta > 0 else None,
+            "out_qty": (-delta / view_factor) if delta < 0 else None,
+            "balance": running / view_factor,
             "unit_cost": unit_cost_shown,
             "sold_price": Decimal(str(sold.unit_price or 0)) if sold else None,
             # Labels both money columns. Only worth showing when it isn't the
@@ -2036,10 +2048,12 @@ def stock_card(product_id: int, request: Request, back: str = "", db: Session = 
         "products/stock_card.html",
         {
             "request": request, "app_name": request.app.title, "user": user,
-            "product": product, "rows": rows, "opening": opening,
-            "current_total": current_total, "total_in": total_in, "total_out": total_out,
+            "product": product, "rows": rows, "opening": opening / view_factor,
+            "current_total": current_total / view_factor,
+            "total_in": total_in / view_factor, "total_out": total_out / view_factor,
             "count": len(movements),
             "back": safe_back_url(back, "/products"),
+            "view_unit_id": unit, "view_unit_name": view_unit_name,
         },
     )
 

@@ -4,7 +4,7 @@
 <div class="page-head">
   <div>
     <h1 class="page-title">Stock Card</h1>
-    <p class="muted">{{ product.name }}{% if product.unit_type %} · in {{ product.unit_type.name }}{% endif %} — every movement in and out, with a running balance.</p>
+    <p class="muted">{{ product.name }} · in {{ view_unit_name }} — every movement in and out, with a running balance.</p>
   </div>
   <div class="head-actions">
     <a class="btn-secondary" href="{{ back }}">← Inventory</a>
@@ -12,6 +12,20 @@
     <a class="btn-secondary" href="/?track_product={{ product.id }}">📈 Cost &amp; price history</a>
   </div>
 </div>
+
+{% if product.units %}
+<div class="pill-filter-bar" style="margin-bottom:14px;">
+  <span class="muted" style="font-size:12.5px;align-self:center;">View in:</span>
+  <a class="cat-pill {{ 'active' if not view_unit_id }}" href="/products/{{ product.id }}/stock-card?back={{ back|urlencode }}">
+    {{ product.unit_type.name if product.unit_type else 'base unit' }} (base)
+  </a>
+  {% for u in product.units %}
+  <a class="cat-pill {{ 'active' if view_unit_id == u.id }}" href="/products/{{ product.id }}/stock-card?unit={{ u.id }}&back={{ back|urlencode }}">
+    {{ u.name }}
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
 
 <div class="stat-row">
   <div class="mini-stat"><span class="mini-num">{{ product.cost_price|peso }}</span><span>Cost now</span></div>
@@ -24,16 +38,16 @@
     </span>
     <span>Current margin</span>
   </div>
-  <div class="mini-stat"><span class="mini-num">{{ current_total|qty }}</span><span>On hand now</span></div>
-  <div class="mini-stat"><span class="mini-num">{{ total_in|qty }}</span><span>Total in</span></div>
-  <div class="mini-stat"><span class="mini-num">{{ total_out|qty }}</span><span>Total out</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ current_total|qty }}</span><span>On hand now ({{ view_unit_name }})</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total_in|qty }}</span><span>Total in ({{ view_unit_name }})</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total_out|qty }}</span><span>Total out ({{ view_unit_name }})</span></div>
   <div class="mini-stat"><span class="mini-num">{{ count }}</span><span>Movements</span></div>
 </div>
 
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>When</th><th>Movement</th><th>Invoice / PO #</th><th class="num">In</th><th class="num">Out</th><th class="num">Balance</th><th class="num">Unit Cost</th><th class="num">Selling Price</th><th class="num">Value</th></tr>
+      <tr><th>When</th><th>Movement</th><th>Invoice / PO #</th><th class="num">In ({{ view_unit_name }})</th><th class="num">Out ({{ view_unit_name }})</th><th class="num">Balance ({{ view_unit_name }})</th><th class="num">Unit Cost</th><th class="num">Selling Price</th><th class="num">Value</th></tr>
     </thead>
     <tbody>
       {% for r in rows %}
