@@ -34,7 +34,7 @@
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Cashier</th><th class="num">Transactions</th><th class="num">Encoded</th><th class="num">Total Sales</th><th class="num">Credit Collected</th><th></th></tr>
+      <tr><th>Cashier</th><th class="num">Transactions</th><th class="num">Encoded</th><th class="num">Encoded Sales Value</th><th class="num">Total Sales</th><th class="num">Credit Collected</th><th></th></tr>
     </thead>
     <tbody>
       {% for r in rows %}
@@ -42,12 +42,13 @@
         <td class="strong">{{ r.user.full_name or r.user.username }}</td>
         <td class="num">{{ r.summary.count }}</td>
         <td class="num">{{ r.summary.encoded_count }}</td>
+        <td class="num">{{ r.summary.encoded_total|peso }}</td>
         <td class="num strong">{{ r.summary.net_total|peso }}</td>
         <td class="num">{{ r.summary.collections|peso }}</td>
         <td class="row-actions"><a class="btn-link" href="/activity/user/{{ r.user.id }}?date_from={{ day.isoformat() }}&date_to={{ end.isoformat() }}">View</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="empty">No activity recorded in this period.</td></tr>
+      <tr><td colspan="7" class="empty">No activity recorded in this period.</td></tr>
       {% endfor %}
     </tbody>
     {% if rows %}
@@ -56,6 +57,7 @@
         <td class="strong">TOTAL</td>
         <td class="num strong">{{ totals.count }}</td>
         <td class="num strong">{{ totals.encoded_count }}</td>
+        <td class="num strong">{{ totals.encoded_total|peso }}</td>
         <td class="num strong">{{ totals.net_total|peso }}</td>
         <td class="num strong">{{ totals.collections|peso }}</td>
         <td></td>

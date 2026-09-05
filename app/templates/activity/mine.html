@@ -29,6 +29,7 @@
 <div class="kpi-row">
   <div class="kpi"><span class="kpi-label">Transactions</span><span class="kpi-value">{{ summary.count }}</span></div>
   <div class="kpi"><span class="kpi-label">Encoded</span><span class="kpi-value">{{ summary.encoded_count }}</span></div>
+  <div class="kpi"><span class="kpi-label">Encoded Sales Value</span><span class="kpi-value">{{ summary.encoded_total|peso }}</span></div>
   <div class="kpi"><span class="kpi-label">Total Sales</span><span class="kpi-value">{{ summary.net_total|peso }}</span></div>
   <div class="kpi"><span class="kpi-label">Credit Collected</span><span class="kpi-value">{{ summary.collections|peso }}</span></div>
 </div>
