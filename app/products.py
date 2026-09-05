@@ -1893,6 +1893,17 @@ MOVEMENT_LABELS = {
     "unvoid": "Sale restored",
 }
 
+# Which side of the ledger a reason ALWAYS belongs to, regardless of the
+# actual qty moved — used only to still show "0" in that column for a
+# zero-effect movement (e.g. a backdated sale skipped because it's already
+# reflected in a Stock Count, or a cancelled purchase that net to nothing),
+# so the Stock Card row still reads as "a sale happened here, it just moved
+# nothing" instead of looking like an unrelated no-op. A reason genuinely
+# bidirectional by nature (adjustment, stock_count, purchase-cancelled) is
+# deliberately left out — there's no single side to default a zero to.
+OUT_INTENT_REASONS = {"sale", "exchange-sale", "purchase-return", "purchase-edit-reverse", "unvoid"}
+IN_INTENT_REASONS = {"refund", "exchange-return", "purchase", "void", "sale-edit-reverse", "correction"}
+
 
 @router.get("/products/{product_id:int}/stock-card", response_class=HTMLResponse)
 def stock_card(product_id: int, request: Request, back: str = "", unit: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
@@ -2039,11 +2050,22 @@ def stock_card(product_id: int, request: Request, back: str = "", unit: int = 0,
         else:
             ref_link = None
 
+        if delta > 0:
+            in_qty, out_qty = delta / view_factor, None
+        elif delta < 0:
+            in_qty, out_qty = None, -delta / view_factor
+        elif m.reason in OUT_INTENT_REASONS:
+            in_qty, out_qty = None, Decimal("0")
+        elif m.reason in IN_INTENT_REASONS:
+            in_qty, out_qty = Decimal("0"), None
+        else:
+            in_qty, out_qty = None, None
+
         rows.append({
             "movement": m,
             "label": MOVEMENT_LABELS.get(m.reason, (m.reason or "").replace("-", " ").title()),
-            "in_qty": (delta / view_factor) if delta > 0 else None,
-            "out_qty": (-delta / view_factor) if delta < 0 else None,
+            "in_qty": in_qty,
+            "out_qty": out_qty,
             "balance": running / view_factor,
             "unit_cost": unit_cost_shown,
             "sold_price": Decimal(str(sold.unit_price or 0)) if sold else None,

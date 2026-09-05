@@ -55,12 +55,12 @@
       <tr>
         <td style="white-space:nowrap;">{{ m.created_at.strftime('%b %d, %Y') if m.created_at else '—' }}
           <span class="muted" style="font-size:12px;">{{ m.created_at.strftime('%I:%M %p') if m.created_at else '' }}</span></td>
-        <td><span class="mv-reason mv-{{ 'in' if r.in_qty else 'out' }}">{{ r.label }}</span></td>
+        <td><span class="mv-reason mv-{{ 'in' if r.in_qty is not none else 'out' }}">{{ r.label }}</span></td>
         <td class="muted">
           {% if r.ref_link %}<a class="btn-link" href="{{ r.ref_link }}">{{ m.ref }}</a>{% else %}{{ m.ref or '—' }}{% endif %}
         </td>
-        <td class="num" style="color:var(--ok);font-weight:600;">{{ ('+' ~ r.in_qty|qty) if r.in_qty else '' }}</td>
-        <td class="num" style="color:var(--danger);font-weight:600;">{{ ('−' ~ r.out_qty|qty) if r.out_qty else '' }}</td>
+        <td class="num" style="color:var(--ok);font-weight:600;">{{ ('+' ~ r.in_qty|qty) if r.in_qty is not none else '' }}</td>
+        <td class="num" style="color:var(--danger);font-weight:600;">{{ ('−' ~ r.out_qty|qty) if r.out_qty is not none else '' }}</td>
         <td class="num strong">{{ r.balance|qty }}</td>
         <td class="num muted">
           {% if r.unit_cost %}
