@@ -108,7 +108,7 @@
     <p class="hint" id="priceHint">Markup and margin are calculated from the Cost of Sales above — enter a cost for them to work.</p>
   </div>
   {% elif is_admin_user %}
-  <p class="full hint" style="margin:-8px 0 4px;">Selling price is set from the <a class="btn-link" href="/products/pricing">Selling Price</a> tab.</p>
+  <p class="full hint" style="margin:-8px 0 4px;">Selling price is set from the <a class="btn-link" href="/products/pricing?product_id={{ product.id }}">Selling Price</a> tab.</p>
   {% endif %}
 
   <label>Actual Beginning Stocks

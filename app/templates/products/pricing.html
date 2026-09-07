@@ -89,6 +89,7 @@
 let peProducts = [];
 let peSelectedId = null;
 let peReviewOnly = {{ 'true' if initial_review else 'false' }};
+let peInitialProductId = {{ initial_product_id or 'null' }};
 
 const peSearchBox = document.getElementById('priceSearch');
 let peTimer = null;
@@ -109,13 +110,25 @@ function peEsc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':
 function peMoney(v) { return '₱' + (Number(v) || 0).toFixed(2); }
 
 async function peLoadList() {
+  // A specific product to land on (from a product's own edit page) wins
+  // over whatever's in the search box, but only for this one load — normal
+  // searching afterward works as usual.
+  const jumpToId = peInitialProductId;
+  if (jumpToId) peInitialProductId = null;
   const q = peSearchBox.value.trim();
-  const res = await fetch('/products/price-search?q=' + encodeURIComponent(q) + '&review=' + (peReviewOnly ? 1 : 0));
+  const url = jumpToId
+    ? '/products/price-search?product_id=' + jumpToId
+    : '/products/price-search?q=' + encodeURIComponent(q) + '&review=' + (peReviewOnly ? 1 : 0);
+  const res = await fetch(url);
   const data = await res.json();
   peProducts = data.products || [];
   document.getElementById('reviewBadge').textContent = data.review_count || 0;
   peRenderList();
 
+  if (jumpToId && peProducts.length) {
+    peSelectProduct(peProducts[0].id);
+    return;
+  }
   // If exactly one barcode/name match came back from an Enter/scan, jump
   // straight to editing it — same fast path the old search-only tool had.
   if (peProducts.length === 1 && q) {

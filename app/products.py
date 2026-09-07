@@ -1264,10 +1264,14 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
 
 
 @router.get("/products/pricing", response_class=HTMLResponse)
-def pricing_tool(request: Request, review: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def pricing_tool(request: Request, review: int = 0, product_id: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """The single unified costing + pricing workflow: search or browse on
     the left (with a 'Price Review Needed' filter folded in as a toggle,
-    not a separate tab), edit cost + the 3-row pricing matrix on the right."""
+    not a separate tab), edit cost + the 3-row pricing matrix on the right.
+
+    `product_id`, when given (e.g. from a product's own edit page's "Selling
+    price is set from the Selling Price tab" link), jumps straight to that
+    product pre-selected — no re-searching for the item you were just on."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -1282,6 +1286,7 @@ def pricing_tool(request: Request, review: int = 0, db: Session = Depends(get_db
             "request": request, "app_name": request.app.title, "user": user,
             "review_count": review_count,
             "initial_review": bool(review),
+            "initial_product_id": product_id or None,
         },
     )
 
@@ -1290,6 +1295,7 @@ def pricing_tool(request: Request, review: int = 0, db: Session = Depends(get_db
 def price_search(
     q: str = "",
     review: int = 0,
+    product_id: int = 0,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -1303,6 +1309,25 @@ def price_search(
     review_count = db.query(func.count(models.Product.id)).filter(
         models.Product.is_active.is_(True), _needs_review_expr(min_margin)
     ).scalar() or 0
+
+    # A specific product to jump straight to (see pricing_tool's product_id)
+    # — an exact id lookup, bypassing name search entirely so it can never
+    # be missed by a partial-name match or hidden behind the review filter.
+    if product_id:
+        exact = db.query(models.Product).filter(models.Product.id == product_id, models.Product.is_active.is_(True)).first()
+        products = [exact] if exact else []
+        flagged_rows = []
+        for p in products:
+            flagged, reason = pricing.needs_review(p.selling_price, p.cost_price, min_margin)
+            flagged_rows.append({
+                "id": p.id, "name": p.name, "barcode": p.barcode,
+                "cost_price": float(p.cost_price or 0),
+                "selling_price": float(p.selling_price or 0),
+                "markup_pct": float(p.markup_pct or 0),
+                "margin_pct": float(p.margin_pct or 0),
+                "needs_review": flagged, "review_reason": reason,
+            })
+        return {"products": flagged_rows, "review_count": review_count}
 
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if review:
