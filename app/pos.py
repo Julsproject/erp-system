@@ -113,7 +113,7 @@ def _add_stock(product: models.Product, base_qty: Decimal):
     product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
 
 
-def _replenish_from_source(db: Session, product: models.Product, needed_base_qty: Decimal, *, ref: str, note: str):
+def _replenish_from_source(db: Session, product: models.Product, needed_base_qty: Decimal, *, ref: str, note: str, created_at=None):
     """If `product` is an open/retail counterpart (replenish_from_id set) and
     its own stock can't cover needed_base_qty, pull whole packs from its
     linked sealed source — one StockMovement pair per pack opened — until
@@ -121,18 +121,25 @@ def _replenish_from_source(db: Session, product: models.Product, needed_base_qty
     product with replenish_from_id set is ever a target), and never touches
     the source if the open product already has enough on hand. Left to go
     negative on the source if it runs dry itself, same as any other oversell
-    in this app — see _deduct_stock's own note on that."""
+    in this app — see _deduct_stock's own note on that.
+
+    `created_at`, when given, backdates the repack movements to match the
+    triggering sale's own date (e.g. `movement_stamp` in _finalize_sale, or
+    `sale.created_at` in edit_sale_items) — otherwise a backdated sale's
+    "sale" movement would carry the right date while its repack-in/repack-out
+    pair silently landed on today via the column's own server default."""
     if not product.replenish_from_id:
         return
     available = (product.beginning_stock or Decimal("0")) + (product.stock_qty or Decimal("0"))
     if available >= needed_base_qty:
         return
     source = db.get(models.Product, product.replenish_from_id, with_for_update=True)
-    if not source:
+    if not source or not source.is_active:
         return
     pack_factor = max((Decimal(str(u.factor_to_base or 0)) for u in source.units), default=Decimal("0"))
     if pack_factor <= 0:
         return
+    extra = {"created_at": created_at} if created_at is not None else {}
     guard = 0
     while available < needed_base_qty and guard < 10000:
         _deduct_stock(source, pack_factor)
@@ -140,12 +147,12 @@ def _replenish_from_source(db: Session, product: models.Product, needed_base_qty
         db.add(models.StockMovement(
             product_id=source.id, qty_base=-pack_factor, reason="repack-out",
             unit_cost=source.cost_price, value=-pack_factor * (source.cost_price or Decimal("0")),
-            ref=ref, note=note,
+            ref=ref, note=note, **extra,
         ))
         db.add(models.StockMovement(
             product_id=product.id, qty_base=pack_factor, reason="repack-in",
             unit_cost=source.cost_price, value=pack_factor * (source.cost_price or Decimal("0")),
-            ref=ref, note=note,
+            ref=ref, note=note, **extra,
         ))
         product.cost_price = source.cost_price  # keep the open item's cost in step with its source
         available += pack_factor
@@ -696,7 +703,7 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
             # pack over from its sealed source first — so both the cost
             # captured just below and the actual deduction reflect the
             # now-replenished stock.
-            _replenish_from_source(db, product, base_qty, ref=_display_invoice(sale), note="Auto-opened for loose sale")
+            _replenish_from_source(db, product, base_qty, ref=_display_invoice(sale), note="Auto-opened for loose sale", created_at=movement_stamp)
             sale_unit_cost = Decimal(str(product.cost_price or 0))
             _deduct_stock(product, base_qty)
             db.add(models.StockMovement(
@@ -1792,7 +1799,16 @@ def _can_edit_sale_payment(db: Session, sale: models.Sale):
         return "type"
     if db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id).first():
         return "linked"
-    if db.query(models.PostDatedCheque.id).filter(models.PostDatedCheque.sale_id == sale.id).first():
+    # Only a still-live cheque (pending/deposited/cleared) is worth blocking
+    # over — same reasoning as _can_edit_sale_items/void_sale's equivalent check.
+    if (
+        db.query(models.PostDatedCheque.id)
+        .filter(
+            models.PostDatedCheque.sale_id == sale.id,
+            models.PostDatedCheque.status.notin_(["cancelled", "bounced"]),
+        )
+        .first()
+    ):
         return "pdc"
     is_credit = (sale.receivable_amount or 0) > 0
     if not is_credit and len(sale.payments) != 1:
@@ -2182,7 +2198,16 @@ def edit_sale_payment_method(
             return _back("type")
         if db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id).first():
             return _back("linked")
-        if db.query(models.PostDatedCheque.id).filter(models.PostDatedCheque.sale_id == sale.id).first():
+        # Only a still-live cheque is worth blocking over — same reasoning
+        # as _can_edit_sale_items/void_sale/_can_edit_sale_payment's checks.
+        if (
+            db.query(models.PostDatedCheque.id)
+            .filter(
+                models.PostDatedCheque.sale_id == sale.id,
+                models.PostDatedCheque.status.notin_(["cancelled", "bounced"]),
+            )
+            .first()
+        ):
             return _back("pdc")
         if new_method not in EDIT_PAYMENT_METHODS:
             return _back("invalid")
@@ -2384,7 +2409,7 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
         subtotal += line_total
 
         base_qty = qty * factor
-        _replenish_from_source(db, product, base_qty, ref=_display_invoice(sale), note="Auto-opened for a corrected item")
+        _replenish_from_source(db, product, base_qty, ref=_display_invoice(sale), note="Auto-opened for a corrected item", created_at=sale.created_at)
         _deduct_stock(product, base_qty)
         unit_cost = Decimal(str(product.cost_price or 0))
         db.add(models.StockMovement(

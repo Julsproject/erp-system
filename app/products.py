@@ -786,7 +786,23 @@ def set_product_unit_type(product_id: int, data: dict, request: Request, db: Ses
         return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
 
     old_unit_type = product.unit_type.name if product.unit_type else None
-    product.unit_type = _get_or_create_unit_type(db, data.get("unit_type"))
+    new_unit_type_obj = _get_or_create_unit_type(db, data.get("unit_type"))
+    new_unit_type_id = new_unit_type_obj.id if new_unit_type_obj else None
+
+    # A replenish link (either direction — this product IS a counterpart, or
+    # something else counts on THIS product as its sealed source) only makes
+    # sense while both sides share a base unit; _save_from_form enforces that
+    # at link time, but this quick editor bypasses that form entirely, so it
+    # has to re-check the same invariant itself.
+    if product.replenish_from_id:
+        source = db.get(models.Product, product.replenish_from_id)
+        if source and source.unit_type_id != new_unit_type_id:
+            return JSONResponse({"ok": False, "error": "This product replenishes from another product with a different base unit — change that link first."}, status_code=400)
+    counterpart = db.query(models.Product).filter(models.Product.replenish_from_id == product.id).first()
+    if counterpart and counterpart.unit_type_id != new_unit_type_id:
+        return JSONResponse({"ok": False, "error": f"“{counterpart.name}” replenishes from this product and needs the same base unit — change that link first."}, status_code=400)
+
+    product.unit_type = new_unit_type_obj
     new_unit_type = product.unit_type.name if product.unit_type else None
     if new_unit_type != old_unit_type:
         audit.record(
@@ -1028,10 +1044,21 @@ def _save_from_form(product: models.Product, db: Session, form):
             raise ValueError("The product picked to replenish from wasn't found.")
         if product.id and source.id == product.id:
             raise ValueError("A product can't replenish from itself.")
-        if source.unit_type_id != product.unit_type_id:
+        # Compare against the just-assigned unit_type via the relationship,
+        # not the raw unit_type_id column — that FK attribute isn't synced
+        # until the next flush, so reading it here would still see the OLD
+        # unit type on a form submission that changes both the unit type
+        # and this link at once.
+        product_unit_type_id = product.unit_type.id if product.unit_type else None
+        if source.unit_type_id != product_unit_type_id:
             raise ValueError("The replenish source must use the same base unit as this product.")
         if source.replenish_from_id:
             raise ValueError("That product is itself an open/retail counterpart — pick its sealed source instead.")
+        # Same flat-2-tier rule from the other direction: this product can't
+        # become a counterpart of something else if it's already serving as
+        # the sealed source for one of its own — that would chain 3 deep.
+        if product.id and db.query(models.Product.id).filter(models.Product.replenish_from_id == product.id).first():
+            raise ValueError("This product is already a replenish source for another product — unlink that one first.")
         product.replenish_from_id = source.id
     else:
         product.replenish_from_id = None
@@ -1171,6 +1198,7 @@ async def create_product(request: Request, db: Session = Depends(get_db), user=D
         try:
             _save_from_form(product, db, form)
         except ValueError as e:
+            db.rollback()  # discard the new product and any category/unit-type rows flushed before the failure
             return _render_form(request, db, user, product=None, error=str(e), back=back)
         db.flush()  # assign product.id so the audit row can reference it
         audit.record(
@@ -1258,6 +1286,7 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
         try:
             _save_from_form(product, db, form)
         except ValueError as e:
+            db.rollback()  # discard the partial edit (and any category/unit-type rows flushed before the failure)
             return _render_form(request, db, user, product=product, error=str(e), back=back)
         db.flush()
         after = _product_snapshot(product)
@@ -1457,6 +1486,12 @@ def _product_has_history(db: Session, product_id: int) -> bool:
     for model, col in checks:
         if db.query(model.id).filter(col == product_id).first():
             return True
+    # Not "history" in the transactional sense, but the FK isn't ON DELETE
+    # CASCADE here either (see Product.replenish_from_id) — another product
+    # still counting on this one as its sealed source would otherwise hit a
+    # raw IntegrityError instead of the friendly "use Archive" redirect below.
+    if db.query(models.Product.id).filter(models.Product.replenish_from_id == product_id).first():
+        return True
     return False
 
 

@@ -59,11 +59,12 @@ def qty(value) -> str:
     if frac != 0:
         eighths = frac * 8
         nearest = eighths.to_integral_value(rounding=ROUND_HALF_UP)
-        if 0 < nearest < 8 and abs(eighths - nearest) <= Decimal("0.02"):
+        close_enough = abs(eighths - nearest) <= Decimal("0.02")
+        if 0 < nearest < 8 and close_enough:
             label = _EIGHTHS_LABELS[int(nearest)]
             s = f"{whole} {label}" if whole else label
             return ("-" if neg else "") + s
-        if nearest == 8:
+        if nearest == 8 and close_enough:
             return ("-" if neg else "") + str(whole + 1)
     s = format(d, "f")
     return ("-" if neg else "") + s
