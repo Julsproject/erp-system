@@ -260,7 +260,12 @@
           {% endif %}
         </td>
         <td id="subcatCell{{ p.id }}"><span id="subcatText{{ p.id }}">{{ p.subcategory.name if p.subcategory else '—' }}</span></td>
-        <td>{{ p.unit_type.name if p.unit_type else '—' }}</td>
+        <td id="unitCell{{ p.id }}">
+          <span id="unitText{{ p.id }}">{{ p.unit_type.name if p.unit_type else '—' }}</span>
+          {% if is_admin_user %}
+          <button type="button" class="btn-link rename-btn" onclick="startUnitTypeEdit({{ p.id }})" title="Set unit type">✎</button>
+          {% endif %}
+        </td>
         <td>{{ p.shelf.name if p.shelf else '—' }}</td>
         <td class="num">
           {% if p.cost_price and p.cost_price > 0 %}{{ p.cost_price|peso }}
@@ -472,6 +477,9 @@ function startRename(id) {
 <datalist id="invSubcategoryList">
   {% for sc in all_subcategories %}<option value="{{ sc.name }}">{% endfor %}
 </datalist>
+<datalist id="invUnitTypeList">
+  {% for u in all_unit_types %}<option value="{{ u.name }}">{% endfor %}
+</datalist>
 <script>
 // Set Category/Sub Category straight from the Inventory list — same "type
 // or pick" fields the Edit form uses, mainly for quickly filling in a
@@ -558,6 +566,71 @@ function startCategoryEdit(id) {
     if (e.key === 'Enter') { e.preventDefault(); save(); }
     else if (e.key === 'Escape') cancel();
   }));
+}
+
+// Same idea as startCategoryEdit, one field instead of two.
+function startUnitTypeEdit(id) {
+  const cell = document.getElementById('unitCell' + id);
+  const origHtml = cell.innerHTML;
+  const origText = document.getElementById('unitText' + id).textContent;
+
+  const input = document.createElement('input');
+  input.type = 'text'; input.setAttribute('list', 'invUnitTypeList');
+  input.value = origText === '—' ? '' : origText;
+  input.placeholder = 'e.g. Piece, Bag, Meter, Kg';
+  input.style.cssText = 'font-size:13px;padding:3px 6px;border:1px solid var(--brand);border-radius:6px;width:110px;';
+
+  const okBtn = document.createElement('button');
+  okBtn.type = 'button'; okBtn.textContent = '✓'; okBtn.title = 'Save';
+  okBtn.className = 'btn-link rename-btn'; okBtn.style.color = '#15803d'; okBtn.style.fontWeight = '700';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button'; cancelBtn.textContent = '✕'; cancelBtn.title = 'Cancel';
+  cancelBtn.className = 'btn-link danger rename-btn';
+
+  cell.innerHTML = '';
+  cell.append(input, okBtn, cancelBtn);
+  input.focus();
+
+  function cancel() { cell.innerHTML = origHtml; }
+
+  function renderResult(unitName) {
+    cell.innerHTML = '';
+    const span = document.createElement('span');
+    span.id = 'unitText' + id;
+    span.textContent = unitName || '—';
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button'; editBtn.className = 'btn-link rename-btn';
+    editBtn.title = 'Set unit type'; editBtn.textContent = '✎';
+    editBtn.onclick = () => startUnitTypeEdit(id);
+    cell.append(span, ' ', editBtn);
+  }
+
+  async function save() {
+    input.disabled = true; okBtn.disabled = true; cancelBtn.disabled = true;
+    try {
+      const res = await fetch('/products/' + id + '/set-unit-type', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ unit_type: input.value.trim() }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        renderResult(data.unit_type);
+      } else {
+        alert(data.error || 'Could not save.');
+        input.disabled = false; okBtn.disabled = false; cancelBtn.disabled = false;
+      }
+    } catch (e) {
+      alert('Network error — nothing was saved.');
+      input.disabled = false; okBtn.disabled = false; cancelBtn.disabled = false;
+    }
+  }
+
+  okBtn.onclick = save;
+  cancelBtn.onclick = cancel;
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); save(); }
+    else if (e.key === 'Escape') cancel();
+  });
 }
 </script>
 {% endif %}

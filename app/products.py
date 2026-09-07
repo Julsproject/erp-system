@@ -541,6 +541,7 @@ def list_products(
     # autocomplete, same "type or pick" datalist the Add/Edit form uses.
     all_categories = db.query(models.Category).order_by(models.Category.name).all()
     all_subcategories = db.query(models.SubCategory).order_by(models.SubCategory.name).all()
+    all_unit_types = db.query(models.UnitType).order_by(models.UnitType.name).all()
 
     return templates.TemplateResponse(
         "products/list.html",
@@ -568,6 +569,7 @@ def list_products(
             "no_category_count": no_category_count,
             "all_categories": all_categories,
             "all_subcategories": all_subcategories,
+            "all_unit_types": all_unit_types,
             "subcategory_id": subcategory_id,
             "subcategories": subcategories,
             "subcat_counts": subcat_counts,
@@ -768,6 +770,33 @@ def set_product_category(product_id: int, data: dict, request: Request, db: Sess
         )
         db.commit()
     return JSONResponse({"ok": True, "category": new_category or "", "subcategory": new_subcategory or ""})
+
+
+@router.post("/products/{product_id:int}/set-unit-type")
+def set_product_unit_type(product_id: int, data: dict, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Set a product's Unit Type straight from the Inventory list — same
+    "type or pick" field as the Edit form, just without the full find ->
+    Edit page -> Save round trip."""
+    if not user:
+        return JSONResponse({"ok": False, "error": "Please sign in again."}, status_code=401)
+    if not is_staff(user):
+        return JSONResponse({"ok": False, "error": "You don't have permission to do this."}, status_code=403)
+    product = db.get(models.Product, product_id)
+    if not product:
+        return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
+
+    old_unit_type = product.unit_type.name if product.unit_type else None
+    product.unit_type = _get_or_create_unit_type(db, data.get("unit_type"))
+    new_unit_type = product.unit_type.name if product.unit_type else None
+    if new_unit_type != old_unit_type:
+        audit.record(
+            db, user=user, request=request, action="update", entity_type="product",
+            entity_id=product.id, entity_label=product.name,
+            summary=f"Set unit type for “{product.name}”: {old_unit_type or '—'} → {new_unit_type or '—'}",
+            changes={"unit_type": [old_unit_type, new_unit_type]},
+        )
+        db.commit()
+    return JSONResponse({"ok": True, "unit_type": new_unit_type or ""})
 
 
 @router.get("/products/{product_id:int}/double-deductions")
