@@ -113,6 +113,45 @@ def _add_stock(product: models.Product, base_qty: Decimal):
     product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
 
 
+def _replenish_from_source(db: Session, product: models.Product, needed_base_qty: Decimal, *, ref: str, note: str):
+    """If `product` is an open/retail counterpart (replenish_from_id set) and
+    its own stock can't cover needed_base_qty, pull whole packs from its
+    linked sealed source — one StockMovement pair per pack opened — until
+    there's enough. Never fires for the sealed product itself (only a
+    product with replenish_from_id set is ever a target), and never touches
+    the source if the open product already has enough on hand. Left to go
+    negative on the source if it runs dry itself, same as any other oversell
+    in this app — see _deduct_stock's own note on that."""
+    if not product.replenish_from_id:
+        return
+    available = (product.beginning_stock or Decimal("0")) + (product.stock_qty or Decimal("0"))
+    if available >= needed_base_qty:
+        return
+    source = db.get(models.Product, product.replenish_from_id, with_for_update=True)
+    if not source:
+        return
+    pack_factor = max((Decimal(str(u.factor_to_base or 0)) for u in source.units), default=Decimal("0"))
+    if pack_factor <= 0:
+        return
+    guard = 0
+    while available < needed_base_qty and guard < 10000:
+        _deduct_stock(source, pack_factor)
+        _add_stock(product, pack_factor)
+        db.add(models.StockMovement(
+            product_id=source.id, qty_base=-pack_factor, reason="repack-out",
+            unit_cost=source.cost_price, value=-pack_factor * (source.cost_price or Decimal("0")),
+            ref=ref, note=note,
+        ))
+        db.add(models.StockMovement(
+            product_id=product.id, qty_base=pack_factor, reason="repack-in",
+            unit_cost=source.cost_price, value=pack_factor * (source.cost_price or Decimal("0")),
+            ref=ref, note=note,
+        ))
+        product.cost_price = source.cost_price  # keep the open item's cost in step with its source
+        available += pack_factor
+        guard += 1
+
+
 def _apply_stock_count_correction(product: models.Product, variance: Decimal):
     """Apply a Stock Count's counted-vs-system variance to on-hand, using the
     same "Actual Beginning first" rule sales already follow via _deduct_stock
@@ -631,13 +670,13 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
         subtotal += line_total
 
         base_qty = qty * factor
-        sale_unit_cost = Decimal(str(product.cost_price or 0))
         if product.id in conflicting_ids and not force_stock_deduction:
             # Already physically counted in a completed Stock Count that
             # covers this date — that count's number already reflects this
             # item being gone, so deducting again here would double it.
             # No stock effect; the sale itself is still recorded normally
             # (see the audit entry added below for the full detail).
+            sale_unit_cost = Decimal(str(product.cost_price or 0))
             db.add(models.StockMovement(
                 product_id=product.id, qty_base=Decimal("0"), reason="sale",
                 unit_cost=sale_unit_cost, value=Decimal("0"), ref=_display_invoice(sale),
@@ -652,6 +691,13 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
             # allowed to go negative and the next Stock Count reconciles it to the
             # real shelf count — see _deduct_stock, and the "over stock" badge the
             # POS already shows on these lines.
+            #
+            # If this is an open/retail counterpart running low, pull a whole
+            # pack over from its sealed source first — so both the cost
+            # captured just below and the actual deduction reflect the
+            # now-replenished stock.
+            _replenish_from_source(db, product, base_qty, ref=_display_invoice(sale), note="Auto-opened for loose sale")
+            sale_unit_cost = Decimal(str(product.cost_price or 0))
             _deduct_stock(product, base_qty)
             db.add(models.StockMovement(
                 product_id=product.id, qty_base=-base_qty, reason="sale",
@@ -1421,6 +1467,7 @@ def pos_exchange(data: dict, db: Session = Depends(get_db), user=Depends(get_cur
         product = db.get(models.Product, int(ln["product_id"]), with_for_update=True) if ln.get("product_id") else None
         if product:
             base_qty = qty * factor
+            _replenish_from_source(db, product, base_qty, ref=None, note="Auto-opened for loose exchange item")
             _deduct_stock(product, base_qty)  # oversell allowed — see _finalize_sale
             ex_sale_cost = Decimal(str(product.cost_price or 0))
             db.add(models.StockMovement(
@@ -1888,6 +1935,7 @@ def unvoid_sale(
         if not product:
             continue
         base_qty = Decimal(str(line.qty or 0)) * Decimal(str(line.unit_factor or 1))
+        _replenish_from_source(db, product, base_qty, ref=_display_invoice(sale), note="Auto-opened restoring an un-voided sale")
         _deduct_stock(product, base_qty)
         unit_cost = Decimal(str(line.unit_cost or 0))
         db.add(models.StockMovement(
@@ -2336,6 +2384,7 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
         subtotal += line_total
 
         base_qty = qty * factor
+        _replenish_from_source(db, product, base_qty, ref=_display_invoice(sale), note="Auto-opened for a corrected item")
         _deduct_stock(product, base_qty)
         unit_cost = Decimal(str(product.cost_price or 0))
         db.add(models.StockMovement(

@@ -985,6 +985,28 @@ def _save_from_form(product: models.Product, db: Session, form):
     product.reorder_level = _to_decimal(form.get("reorder_level"))
     product.is_vat = bool(form.get("is_vat"))
 
+    # Open/retail counterpart link — see Product.replenish_from_id. Kept a
+    # flat 2-tier relationship (a linked source can't itself be a linked
+    # counterpart) so replenishing never has to chase a chain.
+    replenish_from_raw = (form.get("replenish_from_id") or "").strip()
+    if replenish_from_raw:
+        try:
+            replenish_from_id = int(replenish_from_raw)
+        except ValueError:
+            raise ValueError("That's not a valid product to replenish from.")
+        source = db.get(models.Product, replenish_from_id)
+        if not source or not source.is_active:
+            raise ValueError("The product picked to replenish from wasn't found.")
+        if product.id and source.id == product.id:
+            raise ValueError("A product can't replenish from itself.")
+        if source.unit_type_id != product.unit_type_id:
+            raise ValueError("The replenish source must use the same base unit as this product.")
+        if source.replenish_from_id:
+            raise ValueError("That product is itself an open/retail counterpart — pick its sealed source instead.")
+        product.replenish_from_id = source.id
+    else:
+        product.replenish_from_id = None
+
     # Units ladder (extra sellable units). Parallel arrays from the form.
     # Each row's factor can be typed relative to another unit already on the
     # ladder (e.g. "1 Elf Load = 6 Sack") instead of only relative to base —
@@ -1117,7 +1139,10 @@ async def create_product(request: Request, db: Session = Depends(get_db), user=D
             return _render_form(request, db, user, product=None, error=f"Barcode “{barcode}” is already assigned to another product.", back=back)
         product = models.Product()
         db.add(product)  # add before _save_from_form so its internal flush (for the units-ladder chain) can assign ids
-        _save_from_form(product, db, form)
+        try:
+            _save_from_form(product, db, form)
+        except ValueError as e:
+            return _render_form(request, db, user, product=None, error=str(e), back=back)
         db.flush()  # assign product.id so the audit row can reference it
         audit.record(
             db, user=user, request=request, action="create", entity_type="product",
@@ -1128,6 +1153,50 @@ async def create_product(request: Request, db: Session = Depends(get_db), user=D
         return RedirectResponse(safe_back_url(back, "/products"), status_code=status.HTTP_302_FOUND)
 
     return await run_in_threadpool(_do)
+
+
+@router.post("/products/{product_id:int}/create-open-counterpart")
+def create_open_counterpart(product_id: int, request: Request, name: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """One-click "+ Create Open/Retail counterpart": spins up a brand new
+    product that starts empty (0 stock, 0 selling price — the user sets that
+    part) but shares this one's category/subcategory/unit type and cost, and
+    is immediately linked via replenish_from_id so it auto-opens a pack from
+    this product the moment it's ever sold short. Redirects straight to the
+    new product's own edit page to finish setting it up (selling price,
+    barcode, etc.) — everything a normal Add Product would ask for."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
+    source = db.get(models.Product, product_id)
+    if not source:
+        return RedirectResponse("/products", status_code=302)
+    if source.replenish_from_id:
+        # An open/retail counterpart spawning its own counterpart would break
+        # the flat 2-tier relationship _save_from_form enforces — the "+
+        # Create" button is hidden in this case, so reaching here at all
+        # means the request was forged or stale; just bounce back quietly.
+        return RedirectResponse(f"/products/{product_id}/edit", status_code=status.HTTP_302_FOUND)
+
+    new_name = (name or "").strip() or f"{source.name} (Open/Retail)"
+    counterpart = models.Product(
+        name=new_name,
+        category=source.category,
+        subcategory=source.subcategory,
+        unit_type=source.unit_type,
+        cost_price=source.cost_price,
+        is_active=True,
+    )
+    db.add(counterpart)
+    db.flush()
+    counterpart.replenish_from_id = source.id
+    audit.record(
+        db, user=user, request=request, action="create", entity_type="product",
+        entity_id=counterpart.id, entity_label=counterpart.name,
+        summary=f"Created “{counterpart.name}” as an open/retail counterpart of “{source.name}”",
+    )
+    db.commit()
+    return RedirectResponse(f"/products/{counterpart.id}/edit", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/products/{product_id:int}")
@@ -1157,7 +1226,10 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
                                  error="Select a reason for the stock quantity change before saving.")
 
         before = _product_snapshot(product)
-        _save_from_form(product, db, form)
+        try:
+            _save_from_form(product, db, form)
+        except ValueError as e:
+            return _render_form(request, db, user, product=product, error=str(e), back=back)
         db.flush()
         after = _product_snapshot(product)
         new_total = Decimal(str(product.total_qty or 0))
@@ -1891,6 +1963,7 @@ MOVEMENT_LABELS = {
     "sale-edit-reverse": "Item correction (reversed)",
     "correction": "Double-deduction void",
     "unvoid": "Sale restored",
+    "repack-in": "Opened from bulk", "repack-out": "Opened to retail",
 }
 
 # Which side of the ledger a reason ALWAYS belongs to, regardless of the
@@ -1901,8 +1974,8 @@ MOVEMENT_LABELS = {
 # nothing" instead of looking like an unrelated no-op. A reason genuinely
 # bidirectional by nature (adjustment, stock_count, purchase-cancelled) is
 # deliberately left out — there's no single side to default a zero to.
-OUT_INTENT_REASONS = {"sale", "exchange-sale", "purchase-return", "purchase-edit-reverse", "unvoid"}
-IN_INTENT_REASONS = {"refund", "exchange-return", "purchase", "void", "sale-edit-reverse", "correction"}
+OUT_INTENT_REASONS = {"sale", "exchange-sale", "purchase-return", "purchase-edit-reverse", "unvoid", "repack-out"}
+IN_INTENT_REASONS = {"refund", "exchange-return", "purchase", "void", "sale-edit-reverse", "correction", "repack-in"}
 
 
 @router.get("/products/{product_id:int}/stock-card", response_class=HTMLResponse)

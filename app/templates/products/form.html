@@ -174,6 +174,28 @@
     <small class="hint">Warn on the dashboard when Total Qty drops to this level. Leave blank for no alert.</small>
   </label>
 
+  {% if product %}
+  <div class="full">
+    <label>Replenish from (sealed source) <span class="muted">— optional</span>
+      <input type="text" id="replenishSearch" placeholder="Search a product to auto-open a pack from…" autocomplete="off"
+             value="{{ product.replenish_from.name if product.replenish_from else '' }}">
+      <input type="hidden" name="replenish_from_id" id="replenishFromId" value="{{ product.replenish_from_id or '' }}">
+    </label>
+    <div id="replenishResults" class="pos-results" style="display:none;position:relative;max-height:220px;overflow:auto;z-index:5;"></div>
+    {% if product.replenish_from_id %}
+    <button type="button" class="btn-link" onclick="clearReplenishLink()" style="margin-top:4px;">✕ Unlink</button>
+    {% endif %}
+    <small class="hint">When this product's own stock can't cover a sale, the system automatically opens a whole pack (its largest unit, e.g. Bag) from the linked product and adds it here. Both products need the same base unit.</small>
+  </div>
+
+  {% if not product.replenish_from_id %}
+  <div class="full">
+    <button type="button" class="btn-secondary" onclick="createOpenCounterpart()">+ Create Open/Retail counterpart</button>
+    <small class="hint" style="display:block;margin-top:4px;">Spins up a new, separate product (e.g. "{{ product.name }} (Open/Retail)") for loose/retail sales, already linked to auto-open a pack from this one whenever it runs low.</small>
+  </div>
+  {% endif %}
+  {% endif %}
+
   <div class="full ladder">
     <div class="ladder-head">
       <div>
@@ -393,5 +415,58 @@
   calcTotal();
   updateBaseLabels();
   recalcPrices();
+
+  /* ---- Replenish-from link (open/retail counterpart) ---- */
+  function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  const replenishSearchEl = document.getElementById('replenishSearch');
+  let replenishTimer = null;
+  if (replenishSearchEl) {
+    replenishSearchEl.addEventListener('input', () => {
+      document.getElementById('replenishFromId').value = '';
+      clearTimeout(replenishTimer);
+      replenishTimer = setTimeout(runReplenishSearch, 180);
+    });
+    replenishSearchEl.addEventListener('blur', () => {
+      setTimeout(() => { document.getElementById('replenishResults').style.display = 'none'; }, 150);
+    });
+  }
+  async function runReplenishSearch() {
+    const q = replenishSearchEl.value.trim();
+    const box = document.getElementById('replenishResults');
+    if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    const res = await fetch('/purchases/search?q=' + encodeURIComponent(q));
+    const data = await res.json();
+    const selfId = {{ product.id if product else 'null' }};
+    const products = (data.products || []).filter(p => p.id !== selfId);
+    if (!products.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.innerHTML = '';
+    products.forEach(p => {
+      const el = document.createElement('button');
+      el.type = 'button'; el.className = 'pos-item';
+      el.onmousedown = (e) => e.preventDefault();
+      el.onclick = () => {
+        document.getElementById('replenishFromId').value = p.id;
+        replenishSearchEl.value = p.name;
+        box.style.display = 'none';
+      };
+      el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span></div>' +
+        '<div class="pos-item-sub">' + escapeHtml(p.base_unit) + '</div>';
+      box.appendChild(el);
+    });
+    box.style.display = 'flex';
+  }
+  function clearReplenishLink() {
+    document.getElementById('replenishFromId').value = '';
+    replenishSearchEl.value = '';
+  }
+  async function createOpenCounterpart() {
+    const suggested = {{ (product.name ~ ' (Open/Retail)')|tojson if product else '""' }};
+    const name = prompt('Name for the new open/retail product:', suggested);
+    if (name === null) return;
+    const fd = new FormData();
+    fd.append('name', name);
+    const res = await fetch('/products/{{ product.id if product else 0 }}/create-open-counterpart', { method: 'POST', body: fd });
+    if (res.redirected) window.location = res.url;
+  }
 </script>
 {% endblock %}

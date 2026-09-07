@@ -208,10 +208,20 @@ class Product(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+    # Set only on an "open/retail" counterpart product (e.g. loose Kg sold off
+    # a sealed Bag product) — points at the sealed product it's opened from.
+    # A sale against this product that would exhaust its own stock instead
+    # pulls a whole pack over from the source first (see pos._replenish_from_
+    # source), so its Stock Card never carries the sealed product's own
+    # whole-pack sales, and vice versa. Never chained more than one level
+    # deep — enforced at link time, not here.
+    replenish_from_id = Column(Integer, ForeignKey("products.id"), nullable=True)
+
     category = relationship("Category")
     subcategory = relationship("SubCategory")
     unit_type = relationship("UnitType")
     shelf = relationship("Shelf")
+    replenish_from = relationship("Product", remote_side=[id])
     units = relationship(
         "ProductUnit",
         back_populates="product",
