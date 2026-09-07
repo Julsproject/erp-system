@@ -1636,8 +1636,8 @@ VOID_ERRORS = {
     "voided": "This sale is already voided.",
     "type": "Only a plain sale can be voided here — not a refund or exchange.",
     "credit": "This sale has a credit balance — settle or write it off before voiding.",
-    "linked": "This sale has a refund or exchange linked to it — void that first.",
-    "pdc": "This sale has a post-dated cheque recorded against it.",
+    "linked": "This sale has a refund or exchange linked to it — that can't be undone, so it can't be voided.",
+    "pdc": "This sale has a post-dated cheque still outstanding against it.",
     "denied": "You don't have permission to void sales.",
 }
 
@@ -1681,8 +1681,8 @@ EDIT_ITEMS_ERRORS = {
     "type": "Only a plain sale can be edited here — not a refund or exchange.",
     "credit": "This sale has a credit or cheque payment — void it instead of editing.",
     "split": "This sale was paid with more than one payment method — void it instead of editing.",
-    "linked": "This sale has a refund or exchange linked to it — void that first.",
-    "pdc": "This sale has a post-dated cheque recorded against it.",
+    "linked": "This sale has a refund or exchange linked to it — that can't be undone, so it can't be edited here.",
+    "pdc": "This sale has a post-dated cheque still outstanding against it.",
     "empty": "A sale needs at least one item.",
     "invalid": "Not a valid payment method to switch to.",
     "needs_customer": "Type a customer name to put this on their credit account.",
@@ -1717,7 +1717,17 @@ def _can_edit_sale_items(db: Session, sale: models.Sale):
         return "split"
     if db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id).first():
         return "linked"
-    if db.query(models.PostDatedCheque.id).filter(models.PostDatedCheque.sale_id == sale.id).first():
+    # Only a still-live cheque (pending/deposited/cleared) is worth blocking
+    # over — one that's cancelled or bounced never left a real financial
+    # trace, same reasoning as the purchase side's equivalent check.
+    if (
+        db.query(models.PostDatedCheque.id)
+        .filter(
+            models.PostDatedCheque.sale_id == sale.id,
+            models.PostDatedCheque.status.notin_(["cancelled", "bounced"]),
+        )
+        .first()
+    ):
         return "pdc"
     return None
 
@@ -1775,7 +1785,17 @@ def void_sale(
     linked_exists = db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id).first()
     if linked_exists:
         return _back("linked")
-    pdc_exists = db.query(models.PostDatedCheque.id).filter(models.PostDatedCheque.sale_id == sale.id).first()
+    # Only a still-live cheque (pending/deposited/cleared) is worth blocking
+    # over — one that's cancelled or bounced never left a real financial
+    # trace, same reasoning as the purchase side's equivalent check.
+    pdc_exists = (
+        db.query(models.PostDatedCheque.id)
+        .filter(
+            models.PostDatedCheque.sale_id == sale.id,
+            models.PostDatedCheque.status.notin_(["cancelled", "bounced"]),
+        )
+        .first()
+    )
     if pdc_exists:
         return _back("pdc")
 
