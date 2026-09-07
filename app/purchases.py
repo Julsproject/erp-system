@@ -82,11 +82,30 @@ def _can_edit_purchase_items(db: Session, purchase: "models.Purchase"):
         return "cancelled"
     if purchase.txn_type != "receive":
         return "return"
-    if db.query(models.Purchase.id).filter(models.Purchase.original_purchase_id == purchase.id).first():
+    # A cancelled return has already had its own stock/ledger effect undone —
+    # it no longer refers to anything real on this delivery, so it shouldn't
+    # keep blocking a correction here (the error text below even tells you
+    # to cancel it first; that only works if cancelling actually unblocks it).
+    if (
+        db.query(models.Purchase.id)
+        .filter(models.Purchase.original_purchase_id == purchase.id, models.Purchase.status != "cancelled")
+        .first()
+    ):
         return "linked"
     if db.query(models.PurchaseSettlement.id).filter(models.PurchaseSettlement.purchase_id == purchase.id).first():
         return "settled"
-    if db.query(models.PostDatedCheque.id).filter(models.PostDatedCheque.purchase_id == purchase.id).first():
+    # Same idea for a cheque: "cancelled" (returned/replaced before deposit)
+    # and "bounced" (never honored) never left a real financial trace behind
+    # — only a still-live one (pending/deposited/cleared) is worth blocking
+    # a correction over.
+    if (
+        db.query(models.PostDatedCheque.id)
+        .filter(
+            models.PostDatedCheque.purchase_id == purchase.id,
+            models.PostDatedCheque.status.notin_(["cancelled", "bounced"]),
+        )
+        .first()
+    ):
         return "pdc"
     return None
 
