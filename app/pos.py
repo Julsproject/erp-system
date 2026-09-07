@@ -602,6 +602,12 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
         sale.created_at = backdated
     db.add(sale)
 
+    # Every StockMovement this sale creates below needs the same timestamp as
+    # the sale itself — otherwise a backdated sale's movements land on today
+    # (their own server_default) instead of the sale's date, throwing off the
+    # Stock Card's WHEN column even though the sale record is correctly dated.
+    movement_stamp = backdated if backdated else func.now()
+
     subtotal = Decimal("0")
 
     for ln in lines:
@@ -636,6 +642,7 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
                 product_id=product.id, qty_base=Decimal("0"), reason="sale",
                 unit_cost=sale_unit_cost, value=Decimal("0"), ref=_display_invoice(sale),
                 note="No stock effect — already reflected in a stock count covering this sale's date.",
+                created_at=movement_stamp,
             ))
         else:
             # Deliberately no insufficient-stock guard: the shop encodes a backlog
@@ -649,6 +656,7 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
             db.add(models.StockMovement(
                 product_id=product.id, qty_base=-base_qty, reason="sale",
                 unit_cost=sale_unit_cost, value=-base_qty * sale_unit_cost, ref=_display_invoice(sale),
+                created_at=movement_stamp,
             ))
 
         sale.lines.append(models.SaleLine(
@@ -2288,7 +2296,7 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
         db.add(models.StockMovement(
             product_id=product.id, qty_base=base_qty, reason="sale-edit-reverse",
             ref=_display_invoice(sale), unit_cost=unit_cost, value=base_qty * unit_cost,
-            note="Reversed for item correction",
+            note="Reversed for item correction", created_at=sale.created_at,
         ))
     sale.lines = []  # cascade="all, delete-orphan" removes the old rows
 
@@ -2313,6 +2321,7 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
         db.add(models.StockMovement(
             product_id=product.id, qty_base=-base_qty, reason="sale", ref=_display_invoice(sale),
             unit_cost=unit_cost, value=-base_qty * unit_cost, note="Corrected item",
+            created_at=sale.created_at,
         ))
         sale.lines.append(models.SaleLine(
             product_id=product.id, product_name=product.name, unit_name=ln.get("unit_name"),

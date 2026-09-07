@@ -1906,7 +1906,11 @@ IN_INTENT_REASONS = {"refund", "exchange-return", "purchase", "void", "sale-edit
 
 
 @router.get("/products/{product_id:int}/stock-card", response_class=HTMLResponse)
-def stock_card(product_id: int, request: Request, back: str = "", unit: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def stock_card(
+    product_id: int, request: Request, back: str = "", unit: int = 0,
+    date_from: str = "", date_to: str = "",
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     """Per-product stock ledger: every in/out movement with a running balance.
 
     The balance is anchored to the product's *current* on-hand total and worked
@@ -1934,13 +1938,26 @@ def stock_card(product_id: int, request: Request, back: str = "", unit: int = 0,
     view_factor = Decimal(str(view_unit.factor_to_base)) if view_unit and view_unit.factor_to_base else Decimal("1")
     view_unit_name = view_unit.name if view_unit else (product.unit_type.name if product.unit_type else "base unit")
 
-    # This exact Stock Card view — unit + wherever it was itself opened
-    # from — so a sale opened from here can send someone back to it
-    # specifically, instead of dumping them on a blank new sale.
+    def _parse_range_date(s):
+        try:
+            return date.fromisoformat((s or "").strip()) if s else None
+        except ValueError:
+            return None
+    range_from = _parse_range_date(date_from)
+    range_to = _parse_range_date(date_to)
+
+    # This exact Stock Card view — unit, date range, and wherever it was
+    # itself opened from — so a sale opened from here (or the "back" link
+    # from a linked record) returns to this same filtered view instead of
+    # dumping the range back to "all time".
     self_url = f"/products/{product_id}/stock-card"
     self_qs = []
     if unit:
         self_qs.append(f"unit={unit}")
+    if range_from:
+        self_qs.append(f"date_from={range_from.isoformat()}")
+    if range_to:
+        self_qs.append(f"date_to={range_to.isoformat()}")
     if back:
         self_qs.append(f"back={quote(back)}")
     if self_qs:
@@ -2077,6 +2094,31 @@ def stock_card(product_id: int, request: Request, back: str = "", unit: int = 0,
             ),
             "ref_link": ref_link,
         })
+    # Date range is a display filter, not a recompute: `rows` above already
+    # carries the true running balance worked out from the full history, so
+    # narrowing to a range only ever hides rows — it never has to touch the
+    # balance math. The range's own "opening" is just whatever balance sat
+    # right before its first visible row (the true opening if the range
+    # reaches back to the very first movement).
+    range_opening = opening
+    range_in = range_out = Decimal("0")
+    if range_from or range_to:
+        visible = []
+        for r in rows:  # still oldest-first here, before the display reverse
+            d = r["movement"].created_at.date() if r["movement"].created_at else None
+            in_range = d is not None and (range_from is None or d >= range_from) and (range_to is None or d <= range_to)
+            if in_range:
+                visible.append(r)
+                if r["in_qty"]:
+                    range_in += r["in_qty"]
+                if r["out_qty"]:
+                    range_out += r["out_qty"]
+            elif not visible:
+                range_opening = r["balance"]
+        rows = visible
+    else:
+        range_in, range_out = total_in / view_factor, total_out / view_factor
+
     rows.reverse()  # newest first for display
 
     return templates.TemplateResponse(
@@ -2086,7 +2128,10 @@ def stock_card(product_id: int, request: Request, back: str = "", unit: int = 0,
             "product": product, "rows": rows, "opening": opening / view_factor,
             "current_total": current_total / view_factor,
             "total_in": total_in / view_factor, "total_out": total_out / view_factor,
-            "count": len(movements),
+            "range_opening": range_opening, "range_in": range_in, "range_out": range_out,
+            "count": len(movements), "range_count": len(rows),
+            "date_from": range_from.isoformat() if range_from else "",
+            "date_to": range_to.isoformat() if range_to else "",
             "back": safe_back_url(back, "/products"),
             "view_unit_id": unit, "view_unit_name": view_unit_name,
         },

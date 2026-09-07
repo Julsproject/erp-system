@@ -688,7 +688,7 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
             product.stock_qty = (product.stock_qty or Decimal("0")) - base_qty
             movement = models.StockMovement(
                 product_id=product.id, qty_base=-base_qty, reason="purchase-return",
-                unit_cost=old_cost, value=-base_qty * old_cost,
+                unit_cost=old_cost, value=-base_qty * old_cost, created_at=stamp,
             )
             db.add(movement)
             new_movements.append(movement)
@@ -699,7 +699,7 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
             product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
             movement = models.StockMovement(
                 product_id=product.id, qty_base=base_qty, reason="purchase",
-                unit_cost=new_cost, value=base_qty * new_cost,
+                unit_cost=new_cost, value=base_qty * new_cost, created_at=stamp,
             )
             db.add(movement)
             new_movements.append(movement)
@@ -1194,6 +1194,7 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
         db.add(models.StockMovement(
             product_id=product.id, qty_base=-base_qty, reason="purchase-edit-reverse",
             unit_cost=unit_cost, value=-base_qty * unit_cost, ref=purchase.ref_no,
+            created_at=purchase.created_at,
         ))
     purchase.lines = []  # cascade="all, delete-orphan" removes the old rows
 
@@ -1223,6 +1224,7 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
         db.add(models.StockMovement(
             product_id=product.id, qty_base=base_qty, reason="purchase",
             unit_cost=new_cost, value=base_qty * new_cost, ref=purchase.ref_no,
+            created_at=purchase.created_at,
         ))
 
         purchase.lines.append(models.PurchaseLine(

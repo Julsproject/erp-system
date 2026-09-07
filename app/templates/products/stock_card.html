@@ -16,16 +16,31 @@
 {% if product.units %}
 <div class="pill-filter-bar" style="margin-bottom:14px;">
   <span class="muted" style="font-size:12.5px;align-self:center;">View in:</span>
-  <a class="cat-pill {{ 'active' if not view_unit_id }}" href="/products/{{ product.id }}/stock-card?back={{ back|urlencode }}">
+  <a class="cat-pill {{ 'active' if not view_unit_id }}" href="/products/{{ product.id }}/stock-card?back={{ back|urlencode }}{{ '&date_from=' ~ date_from if date_from }}{{ '&date_to=' ~ date_to if date_to }}">
     {{ product.unit_type.name if product.unit_type else 'base unit' }} (base)
   </a>
   {% for u in product.units %}
-  <a class="cat-pill {{ 'active' if view_unit_id == u.id }}" href="/products/{{ product.id }}/stock-card?unit={{ u.id }}&back={{ back|urlencode }}">
+  <a class="cat-pill {{ 'active' if view_unit_id == u.id }}" href="/products/{{ product.id }}/stock-card?unit={{ u.id }}&back={{ back|urlencode }}{{ '&date_from=' ~ date_from if date_from }}{{ '&date_to=' ~ date_to if date_to }}">
     {{ u.name }}
   </a>
   {% endfor %}
 </div>
 {% endif %}
+
+<form class="filters-bar" method="get" style="display:flex;align-items:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+  {% if view_unit_id %}<input type="hidden" name="unit" value="{{ view_unit_id }}">{% endif %}
+  <input type="hidden" name="back" value="{{ back }}">
+  <label style="font-size:12.5px;">From
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </label>
+  <label style="font-size:12.5px;">To
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </label>
+  <button class="btn-secondary" type="submit">Apply</button>
+  {% if date_from or date_to %}
+  <a class="btn-link" href="/products/{{ product.id }}/stock-card?back={{ back|urlencode }}{{ '&unit=' ~ view_unit_id if view_unit_id }}">Clear range</a>
+  {% endif %}
+</form>
 
 <div class="stat-row">
   <div class="mini-stat"><span class="mini-num">{{ product.cost_price|peso }}</span><span>Cost now</span></div>
@@ -39,9 +54,9 @@
     <span>Current margin</span>
   </div>
   <div class="mini-stat"><span class="mini-num">{{ current_total|qty }}</span><span>On hand now ({{ view_unit_name }})</span></div>
-  <div class="mini-stat"><span class="mini-num">{{ total_in|qty }}</span><span>Total in ({{ view_unit_name }})</span></div>
-  <div class="mini-stat"><span class="mini-num">{{ total_out|qty }}</span><span>Total out ({{ view_unit_name }})</span></div>
-  <div class="mini-stat"><span class="mini-num">{{ count }}</span><span>Movements</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ range_in|qty }}</span><span>Total in ({{ view_unit_name }}){{ ' · range' if (date_from or date_to) }}</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ range_out|qty }}</span><span>Total out ({{ view_unit_name }}){{ ' · range' if (date_from or date_to) }}</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ range_count if (date_from or date_to) else count }}</span><span>Movements{{ ' · range' if (date_from or date_to) }}</span></div>
 </div>
 
 <div class="table-wrap">
@@ -75,12 +90,16 @@
         <td class="num {{ 'owed' if m.value and m.value < 0 }}">{{ m.value|peso if m.value is not none else '—' }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="9" class="empty">No stock movements recorded yet for this product.</td></tr>
+      <tr><td colspan="9" class="empty">
+        {% if date_from or date_to %}No movements in this date range.{% else %}No stock movements recorded yet for this product.{% endif %}
+      </td></tr>
       {% endfor %}
-      {% if rows %}
+      {% if rows or date_from or date_to %}
       <tr style="background:var(--surface-2);">
-        <td class="muted" colspan="5" style="font-style:italic;">Opening balance (implied — before the earliest movement)</td>
-        <td class="num strong">{{ opening|qty }}</td>
+        <td class="muted" colspan="5" style="font-style:italic;">
+          {% if date_from or date_to %}Opening balance for this range (before the earliest movement shown){% else %}Opening balance (implied — before the earliest movement){% endif %}
+        </td>
+        <td class="num strong">{{ range_opening|qty }}</td>
         <td colspan="3"></td>
       </tr>
       {% endif %}
