@@ -1,5 +1,5 @@
 """Shared Jinja2 templates instance and view helpers."""
-from decimal import Decimal, InvalidOperation, ROUND_FLOOR
+from decimal import Decimal, InvalidOperation, ROUND_FLOOR, ROUND_HALF_UP
 
 from fastapi.templating import Jinja2Templates
 
@@ -23,8 +23,10 @@ def peso(value) -> str:
         return "₱0.00"
 
 
-def qty(value) -> str:
-    """Format a quantity, trimming trailing zeros (e.g. 12.000 -> 12, 5.500 -> 5.5)."""
+def qty_input(value) -> str:
+    """Format a quantity, trimming trailing zeros (e.g. 12.000 -> 12, 5.500 -> 5.5).
+    Plain decimal only — for pre-filling an editable number input, where a fraction
+    like "1/2" wouldn't be a valid value. Use `qty` for read-only display."""
     try:
         d = _to_decimal(value)
     except (InvalidOperation, TypeError, ValueError):
@@ -32,6 +34,39 @@ def qty(value) -> str:
     d = d.normalize()
     s = format(d, "f")
     return s
+
+
+# Common hardware-store shorthand for a partial sack/roll/etc. — an eighth
+# close enough to read as a clean fraction. Anything else still falls back
+# to plain decimal, same as before this existed.
+_EIGHTHS_LABELS = {1: "1/8", 2: "1/4", 3: "3/8", 4: "1/2", 5: "5/8", 6: "3/4", 7: "7/8"}
+
+
+def qty(value) -> str:
+    """Format a quantity for read-only display, trimming trailing zeros (e.g.
+    12.000 -> 12, 5.300 -> 5.3) — except a fractional remainder that lands
+    cleanly on an eighth is shown as that fraction instead (e.g. 1.5 -> "1 1/2",
+    0.25 -> "1/4"). See `qty_input` for pre-filling an editable number field,
+    where a fraction string isn't a valid value."""
+    try:
+        d = _to_decimal(value)
+    except (InvalidOperation, TypeError, ValueError):
+        return "0"
+    neg = d < 0
+    d = abs(d).normalize()
+    whole = int(d)
+    frac = d - whole
+    if frac != 0:
+        eighths = frac * 8
+        nearest = eighths.to_integral_value(rounding=ROUND_HALF_UP)
+        if 0 < nearest < 8 and abs(eighths - nearest) <= Decimal("0.02"):
+            label = _EIGHTHS_LABELS[int(nearest)]
+            s = f"{whole} {label}" if whole else label
+            return ("-" if neg else "") + s
+        if nearest == 8:
+            return ("-" if neg else "") + str(whole + 1)
+    s = format(d, "f")
+    return ("-" if neg else "") + s
 
 
 def whole_qty(value) -> str:
@@ -165,6 +200,7 @@ def min_margin_pct():
 
 templates.env.filters["peso"] = peso
 templates.env.filters["qty"] = qty
+templates.env.filters["qty_input"] = qty_input
 templates.env.filters["whole_qty"] = whole_qty
 templates.env.globals["price_alert_count"] = price_alert_count
 templates.env.globals["pdc_due_count"] = pdc_due_count
