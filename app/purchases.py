@@ -1034,7 +1034,14 @@ def change_payment_method(
     new_method = None if is_payable else raw_method
     if not is_payable and new_method not in dict(PAYMENT_METHODS):
         return RedirectResponse(f"/purchases/{purchase_id}?edit_payment_error=invalid", status_code=302)
-    if new_method == "cheque" or purchase.payment_method == "cheque":
+    # Switching TO cheque isn't supported here — that needs a real PDC record,
+    # which this flow (a straight reverse-and-repost of the ledger entry)
+    # never creates. Switching AWAY FROM cheque is fine as long as there's no
+    # still-live one to leave orphaned — block_reason above already checked
+    # that (a cancelled/bounced cheque doesn't count), so payment_method
+    # still reading "cheque" at this point just means a stale label on a
+    # cheque that's no longer actually in play.
+    if new_method == "cheque":
         return RedirectResponse(f"/purchases/{purchase_id}?edit_payment_error=cheque", status_code=302)
 
     old_label = "Payable" if purchase.status == "confirmed" else dict(PAYMENT_METHODS).get(purchase.payment_method, purchase.payment_method or "")

@@ -72,11 +72,17 @@
   <a href="/purchases/{{ purchase.original_purchase.id }}" style="color:inherit;font-weight:700;text-decoration:underline;">{{ purchase.original_purchase.ref_no }}</a>
 </div>
 {% endif %}
-{% for lr in linked_returns %}
+{% for lr in linked_returns if lr.status != 'cancelled' %}
 <div class="alert" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;margin-bottom:16px;">
   ⚠ Item(s) from this delivery were returned:
   <a href="/purchases/{{ lr.id }}" style="color:inherit;font-weight:700;text-decoration:underline;">{{ lr.ref_no }}</a> · {{ lr.total|peso }}
 </div>
+{% endfor %}
+{% for lr in linked_returns if lr.status == 'cancelled' %}
+<p class="muted" style="font-size:12.5px;margin:0 0 12px;">
+  A return was recorded against this delivery by mistake and has since been cancelled (no live effect):
+  <a href="/purchases/{{ lr.id }}">{{ lr.ref_no }}</a> · {{ lr.total|peso }}
+</p>
 {% endfor %}
 
 {% if alerts %}
