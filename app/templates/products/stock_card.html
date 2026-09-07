@@ -12,11 +12,14 @@
     </p>
   </div>
   <div class="head-actions">
-    <a class="btn-secondary" href="{{ back }}">← Inventory</a>
+    <a class="btn-secondary" href="{{ back }}" onclick="try { localStorage.removeItem('last_product_view'); } catch (e) {}">← Inventory</a>
     <a class="btn-secondary" href="/products/{{ product.id }}/edit">Edit product</a>
     <a class="btn-secondary" href="/?track_product={{ product.id }}">📈 Cost &amp; price history</a>
   </div>
 </div>
+<script>
+try { localStorage.setItem('last_product_view', window.location.pathname + window.location.search); } catch (e) {}
+</script>
 
 <div class="pill-filter-bar" style="margin-bottom:14px;">
   <span class="muted" style="font-size:12.5px;align-self:center;">Show:</span>

@@ -3,8 +3,13 @@
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">{{ 'Edit product' if product else 'Add product' }}</h1>
-  <a class="btn-link" href="{{ back }}">← Back to inventory</a>
+  <a class="btn-link" href="{{ back }}" onclick="try { localStorage.removeItem('last_product_view'); } catch (e) {}">← Back to inventory</a>
 </div>
+{% if product %}
+<script>
+try { localStorage.setItem('last_product_view', window.location.pathname + window.location.search); } catch (e) {}
+</script>
+{% endif %}
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
 {% set is_admin_user = (user.role or '')|lower in ('admin', 'manager') %}
@@ -246,7 +251,7 @@
 
   <div class="form-actions full">
     <button class="btn" type="submit">{{ 'Save changes' if product else 'Save product' }}</button>
-    <a class="btn-secondary" href="{{ back }}">Cancel</a>
+    <a class="btn-secondary" href="{{ back }}" onclick="try { localStorage.removeItem('last_product_view'); } catch (e) {}">Cancel</a>
   </div>
 </form>
 

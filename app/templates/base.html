@@ -195,6 +195,21 @@
           window.location = sc.href;
         }
       });
+
+      // Resume-where-you-left-off: a product's own Edit/Stock Card page
+      // records itself here on load (see products/form.html and
+      // products/stock_card.html); clicking the sidebar's Inventory link
+      // jumps straight back there instead of the plain list, as long as
+      // that page hasn't since been left via its own "Back to inventory" /
+      // "Cancel" link — those explicitly clear it, since that click means
+      // "I'm done with this item," not "I got pulled into another module."
+      function navToLastProductView(e) {
+        try {
+          const last = localStorage.getItem("last_product_view");
+          if (last) { e.preventDefault(); window.location = last; }
+        } catch (err) { /* localStorage unavailable — just fall through to /products */ }
+        return true;
+      }
     </script>
     <input type="checkbox" id="navToggle" class="nav-toggle-input">
     <nav class="nav">
@@ -210,7 +225,7 @@
         {% if notif_unread %}<span class="nav-badge" title="{{ notif_unread }} unread notification(s)">{{ notif_unread }}</span>{% endif %}
       </a>
       {% endif %}
-      <a class="nav-item {{ 'active' if path.startswith('/products') }}" href="/products">
+      <a id="navInventory" class="nav-item {{ 'active' if path.startswith('/products') }}" href="/products" onclick="return navToLastProductView(event)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>
         <span>Inventory</span>
         {% if price_alerts %}<span class="nav-badge" title="{{ price_alerts }} item(s) selling at or below cost">{{ price_alerts }}</span>{% endif %}
