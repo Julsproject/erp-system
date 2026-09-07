@@ -11,13 +11,16 @@
     </p>
   </div>
   <div class="head-actions">
-    <a class="btn-secondary" href="/purchases">← Back</a>
+    <a class="btn-secondary" href="/purchases" onclick="try { localStorage.removeItem('last_purchase_view'); } catch (e) {}">← Back</a>
     <a class="btn-secondary" href="/purchases/{{ purchase.id }}/pdf">⬇ Download PDF</a>
     {% if purchase.txn_type == 'receive' and purchase.status == 'paid' %}
     <a class="btn-secondary" href="/purchases/new?return_against={{ purchase.id }}">↩ Return to supplier</a>
     {% endif %}
     <a class="btn" href="/purchases/new">+ New purchase</a>
   </div>
+  <script>
+  try { localStorage.setItem('last_purchase_view', window.location.pathname + window.location.search); } catch (e) {}
+  </script>
 </div>
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}

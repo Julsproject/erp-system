@@ -196,20 +196,22 @@
         }
       });
 
-      // Resume-where-you-left-off: a product's own Edit/Stock Card page
-      // records itself here on load (see products/form.html and
-      // products/stock_card.html); clicking the sidebar's Inventory link
-      // jumps straight back there instead of the plain list, as long as
-      // that page hasn't since been left via its own "Back to inventory" /
-      // "Cancel" link — those explicitly clear it, since that click means
-      // "I'm done with this item," not "I got pulled into another module."
-      function navToLastProductView(e) {
+      // Resume-where-you-left-off: a record's own detail page records
+      // itself under `key` on load (see products/form.html,
+      // products/stock_card.html, purchases/view.html); clicking the
+      // matching sidebar link jumps straight back there instead of the
+      // plain list/new-record page, as long as that page hasn't since been
+      // left via its own "Back" link — that click means "I'm done with
+      // this item," not "I got pulled into another module," and clears it.
+      function navToLastView(e, key) {
         try {
-          const last = localStorage.getItem("last_product_view");
+          const last = localStorage.getItem(key);
           if (last) { e.preventDefault(); window.location = last; }
-        } catch (err) { /* localStorage unavailable — just fall through to /products */ }
+        } catch (err) { /* localStorage unavailable — just fall through to the default href */ }
         return true;
       }
+      function navToLastProductView(e) { return navToLastView(e, "last_product_view"); }
+      function navToLastPurchaseView(e) { return navToLastView(e, "last_purchase_view"); }
     </script>
     <input type="checkbox" id="navToggle" class="nav-toggle-input">
     <nav class="nav">
@@ -243,7 +245,7 @@
       {# Receiving stock and counting it are counter work, so a cashier gets
          both. The label differs because a cashier can only raise a delivery,
          not browse suppliers, payables or past purchase orders. #}
-      <a class="nav-item {{ 'active' if path.startswith('/suppliers') or path.startswith('/purchases') }}" href="/purchases/new">
+      <a id="navPurchases" class="nav-item {{ 'active' if path.startswith('/suppliers') or path.startswith('/purchases') }}" href="/purchases/new" onclick="return navToLastPurchaseView(event)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 9h13v8H3z"/><path d="M16 12h3.5l1.5 3v2h-5"/><circle cx="7" cy="18" r="1.6"/><circle cx="17.5" cy="18" r="1.6"/></svg>
         <span>{{ 'Suppliers' if is_staff else 'New Purchase' }}</span>
       </a>
