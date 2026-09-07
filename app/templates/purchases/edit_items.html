@@ -54,8 +54,30 @@ let cart = {{ lines_json|safe }}.map(function (l) {
     productId: l.product_id, name: l.name,
     unitName: l.unit_name, factor: l.factor,
     qty: l.qty, unitCost: l.unit_cost,
+    units: null, unitIndex: 0,   // filled in by loadCartUnits() before the first render
   };
 });
+
+/* Each existing line only knows the unit name/factor it was bought under —
+   not the product's full unit ladder — so a switch can't be offered until
+   that's fetched. Pull each distinct product's current units (via the same
+   endpoint the New Purchase form's picker uses) before the first render;
+   a product that's gone inactive/missing just keeps its unit as plain text. */
+async function loadCartUnits() {
+  const ids = [...new Set(cart.filter(l => l.productId).map(l => l.productId))];
+  const results = await Promise.all(ids.map(id =>
+    fetch('/purchases/product/' + id).then(r => r.json()).catch(() => ({ found: false }))
+  ));
+  const byId = {};
+  ids.forEach((id, i) => { if (results[i] && results[i].found) byId[id] = results[i].product; });
+  cart.forEach(line => {
+    const p = byId[line.productId];
+    if (!p || !p.units || p.units.length < 2) return;
+    line.units = p.units;
+    const match = p.units.findIndex(u => u.name === line.unitName);
+    line.unitIndex = match >= 0 ? match : 0;
+  });
+}
 
 function peso(v) { return '₱' + (Math.round((Number(v) || 0) * 100) / 100).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtQty(n) { return (Math.round((Number(n) || 0) * 1000) / 1000).toString(); }
@@ -110,7 +132,24 @@ function renderResults(products) {
   });
 }
 function addToCart(p) {
-  cart.push({ productId: p.id, name: p.name, unitName: p.base_unit, factor: 1, qty: 1, unitCost: p.cost_price });
+  cart.push({
+    productId: p.id, name: p.name, unitName: p.base_unit, factor: 1, qty: 1, unitCost: p.cost_price,
+    units: (p.units && p.units.length > 1) ? p.units : null, unitIndex: 0,
+  });
+  renderCart();
+}
+function setUnitIndex(i, v) {
+  const l = cart[i];
+  const oldFactor = Number(l.factor) || 1;
+  l.unitIndex = parseInt(v);
+  const u = l.units[l.unitIndex];
+  l.unitName = u.name;
+  const newFactor = Number(u.factor) || 1;
+  // Keep cost-per-base-unit steady across the switch — rescale the displayed
+  // unit cost to match the new unit's size instead of leaving a Box's price
+  // sitting in a Piece field (or vice versa).
+  if (oldFactor > 0) l.unitCost = (Number(l.unitCost) || 0) / oldFactor * newFactor;
+  l.factor = newFactor;
   renderCart();
 }
 function setQty(i, v) { cart[i].qty = parseFloat(v) || 0; refreshCartComputed(); }
@@ -131,10 +170,15 @@ function renderCart() {
   }
   body.innerHTML = '';
   cart.forEach((line, i) => {
+    const unitCell = (line.units && line.units.length > 1)
+      ? '<select class="cart-unit" onchange="setUnitIndex(' + i + ', this.value)">' +
+          line.units.map((u, ui) => '<option value="' + ui + '"' + (ui === line.unitIndex ? ' selected' : '') + '>' + escapeHtml(u.name) + '</option>').join('') +
+        '</select>'
+      : escapeHtml(line.unitName || '');
     const tr = document.createElement('tr');
     tr.innerHTML =
       '<td class="strong">' + escapeHtml(line.name) + '</td>' +
-      '<td>' + escapeHtml(line.unitName || '') + '</td>' +
+      '<td>' + unitCell + '</td>' +
       '<td class="num"><input class="cart-qty" type="number" step="0.001" min="0" value="' + fmtQty(line.qty) + '" oninput="setQty(' + i + ', this.value)"></td>' +
       '<td class="num"><input class="cart-disc line-cost" type="number" step="0.01" min="0" value="' + round4(line.unitCost) + '" oninput="setCost(' + i + ', this.value)"></td>' +
       '<td class="num"><input class="cart-disc line-total" type="number" step="0.01" min="0" value="' + round2(lineTotalOf(line)) + '" oninput="setTotal(' + i + ', this.value)"></td>' +
@@ -189,7 +233,7 @@ async function saveEdit() {
   }
 }
 
-renderCart();
+loadCartUnits().then(renderCart);
 const savedEditPurchaseSearch = localStorage.getItem(searchStorageKey);
 if (savedEditPurchaseSearch) { searchBox.value = savedEditPurchaseSearch; runSearch(); }
 </script>
