@@ -169,7 +169,6 @@ const txnType = {{ 'true' if return_against_po else 'false' }} ? 'return' : 'rec
 const isReturnAgainstPo = {{ 'true' if return_against_po else 'false' }};
 const returnAgainstId = {{ return_against_po.id if return_against_po else 'null' }};
 function round2(n) { return (Math.round((Number(n) || 0) * 100) / 100).toString(); }
-function round4(n) { return (Math.round((Number(n) || 0) * 10000) / 10000).toString(); }
 function fmtQty(n) { return (Math.round((Number(n) || 0) * 1000) / 1000).toString(); }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function lineTotal(l) { return (Number(l.qty) || 0) * (Number(l.unitCost) || 0); }
@@ -199,7 +198,7 @@ function renderReturnLines() {
       '<td class="num"><input class="cart-qty" type="number" step="any" min="0" value="' + fmtQty(l.qty) + '" oninput="setReturnQty(' + i + ', this.value)"></td>' +
       '<td><select class="cart-unit" onchange="setReturnUnit(' + i + ', this.value)">' + opts + '</select></td>' +
       '<td class="strong">' + escapeHtml(l.product.name) + '</td>' +
-      '<td class="num"><input class="cart-disc line-cost" type="number" step="any" min="0" value="' + round4(l.unitCost) + '" oninput="setReturnCost(' + i + ', this.value)"></td>' +
+      '<td class="num"><input class="cart-disc line-cost" type="number" step="any" min="0" value="' + round2(l.unitCost) + '" oninput="setReturnCost(' + i + ', this.value)"></td>' +
       '<td class="num"><input class="cart-disc line-total" type="number" step="any" min="0" value="' + round2(lineTotal(l)) + '" oninput="setReturnTotal(' + i + ', this.value)"></td>' +
       '<td><button class="btn-link danger" onclick="removeReturnLine(' + i + ')">✕</button></td>';
     body.appendChild(tr);
@@ -331,7 +330,7 @@ function rowHtml(l, i) {
       '<span class="hint row-hint" style="display:' + (l.productId || l.name.trim() ? 'block' : 'none') + ';">' +
       (l.productId ? 'matched existing product' : 'will be created as a new product') + '</span>' +
     '</td>' +
-    '<td class="num"><input class="cart-disc line-cost" type="number" step="any" min="0" value="' + (l.unitCost === '' ? '' : round4(l.unitCost)) + '" oninput="setRCost(' + i + ', this.value)"></td>' +
+    '<td class="num"><input class="cart-disc line-cost" type="number" step="any" min="0" value="' + (l.unitCost === '' ? '' : round2(l.unitCost)) + '" oninput="setRCost(' + i + ', this.value)"></td>' +
     '<td class="num"><input class="cart-disc line-total" type="number" step="any" min="0" value="' + round2(lineTotal(l)) + '" oninput="setRTotal(' + i + ', this.value)"></td>' +
     '<td><button class="btn-link danger" onclick="removeReceiveLine(' + i + ')">✕</button></td>'
   );
@@ -365,7 +364,7 @@ function refreshRow(i, skipField) {
   const l = receiveLines[i];
   const costEl = tr.querySelector('.line-cost');
   const totalEl = tr.querySelector('.line-total');
-  if (costEl && skipField !== 'cost') costEl.value = l.unitCost === '' ? '' : round4(l.unitCost);
+  if (costEl && skipField !== 'cost') costEl.value = l.unitCost === '' ? '' : round2(l.unitCost);
   if (totalEl && skipField !== 'total') totalEl.value = round2(lineTotal(l));
 }
 
