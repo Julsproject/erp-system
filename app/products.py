@@ -1908,7 +1908,7 @@ IN_INTENT_REASONS = {"refund", "exchange-return", "purchase", "void", "sale-edit
 @router.get("/products/{product_id:int}/stock-card", response_class=HTMLResponse)
 def stock_card(
     product_id: int, request: Request, back: str = "", unit: int = 0,
-    date_from: str = "", date_to: str = "",
+    date_from: str = "", date_to: str = "", view: str = "qty",
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """Per-product stock ledger: every in/out movement with a running balance.
@@ -1934,6 +1934,8 @@ def stock_card(
     if not product:
         return RedirectResponse("/products", status_code=302)
 
+    view_mode = "value" if view == "value" else "qty"
+
     view_unit = next((u for u in product.units if u.id == unit), None) if unit else None
     view_factor = Decimal(str(view_unit.factor_to_base)) if view_unit and view_unit.factor_to_base else Decimal("1")
     view_unit_name = view_unit.name if view_unit else (product.unit_type.name if product.unit_type else "base unit")
@@ -1954,6 +1956,8 @@ def stock_card(
     self_qs = []
     if unit:
         self_qs.append(f"unit={unit}")
+    if view_mode == "value":
+        self_qs.append("view=value")
     if range_from:
         self_qs.append(f"date_from={range_from.isoformat()}")
     if range_to:
@@ -1973,6 +1977,17 @@ def stock_card(
     current_total = Decimal(str(product.total_qty or 0))
     total_delta = sum((Decimal(str(m.qty_base or 0)) for m in movements), Decimal("0"))
     opening = current_total - total_delta
+
+    # Same anchor-and-work-backwards idea as the qty balance above, but in
+    # pesos: each movement's own `value` is its valuation at the time (COGS
+    # for a sale, cost received for a purchase, etc.), already computed
+    # wherever the movement was created — so it's summed as-is rather than
+    # recomputed here. A handful of old "correction" movements (double-
+    # deduction voids) never carried a cost and count as ₱0, a known,
+    # accepted gap same as the qty side's implied-opening approximation.
+    current_value = current_total * Decimal(str(product.cost_price or 0))
+    total_value_delta = sum((Decimal(str(m.value)) if m.value is not None else Decimal("0") for m in movements), Decimal("0"))
+    opening_value = current_value - total_value_delta
 
     # What each sale-driven movement actually sold for. A StockMovement only
     # ever carries cost, never price — the price lives on the sale's own line,
@@ -2029,7 +2044,9 @@ def stock_card(
         return lines[0]
 
     running = opening
+    running_value = opening_value
     total_in = total_out = Decimal("0")
+    total_value_in = total_value_out = Decimal("0")
     rows = []
     for m in movements:
         delta = Decimal(str(m.qty_base or 0))
@@ -2038,6 +2055,12 @@ def stock_card(
             total_in += delta
         else:
             total_out += -delta
+        value_delta = Decimal(str(m.value)) if m.value is not None else Decimal("0")
+        running_value += value_delta
+        if value_delta >= 0:
+            total_value_in += value_delta
+        else:
+            total_value_out += -value_delta
         sold = _sold_line(m, delta)
         factor = Decimal(str(sold.unit_factor or 1)) if sold else Decimal("1")
 
@@ -2078,12 +2101,26 @@ def stock_card(
         else:
             in_qty, out_qty = None, None
 
+        if value_delta > 0:
+            value_in, value_out = value_delta, None
+        elif value_delta < 0:
+            value_in, value_out = None, -value_delta
+        elif m.reason in OUT_INTENT_REASONS:
+            value_in, value_out = None, Decimal("0")
+        elif m.reason in IN_INTENT_REASONS:
+            value_in, value_out = Decimal("0"), None
+        else:
+            value_in, value_out = None, None
+
         rows.append({
             "movement": m,
             "label": MOVEMENT_LABELS.get(m.reason, (m.reason or "").replace("-", " ").title()),
             "in_qty": in_qty,
             "out_qty": out_qty,
             "balance": running / view_factor,
+            "value_in": value_in,
+            "value_out": value_out,
+            "balance_value": running_value,
             "unit_cost": unit_cost_shown,
             "sold_price": Decimal(str(sold.unit_price or 0)) if sold else None,
             # Labels both money columns. Only worth showing when it isn't the
@@ -2101,7 +2138,9 @@ def stock_card(
     # right before its first visible row (the true opening if the range
     # reaches back to the very first movement).
     range_opening = opening
+    range_value_opening = opening_value
     range_in = range_out = Decimal("0")
+    range_value_in = range_value_out = Decimal("0")
     if range_from or range_to:
         visible = []
         for r in rows:  # still oldest-first here, before the display reverse
@@ -2113,11 +2152,17 @@ def stock_card(
                     range_in += r["in_qty"]
                 if r["out_qty"]:
                     range_out += r["out_qty"]
+                if r["value_in"]:
+                    range_value_in += r["value_in"]
+                if r["value_out"]:
+                    range_value_out += r["value_out"]
             elif not visible:
                 range_opening = r["balance"]
+                range_value_opening = r["balance_value"]
         rows = visible
     else:
         range_in, range_out = total_in / view_factor, total_out / view_factor
+        range_value_in, range_value_out = total_value_in, total_value_out
 
     rows.reverse()  # newest first for display
 
@@ -2129,11 +2174,15 @@ def stock_card(
             "current_total": current_total / view_factor,
             "total_in": total_in / view_factor, "total_out": total_out / view_factor,
             "range_opening": range_opening, "range_in": range_in, "range_out": range_out,
+            "current_value": current_value,
+            "opening_value": opening_value, "range_value_opening": range_value_opening,
+            "range_value_in": range_value_in, "range_value_out": range_value_out,
             "count": len(movements), "range_count": len(rows),
             "date_from": range_from.isoformat() if range_from else "",
             "date_to": range_to.isoformat() if range_to else "",
             "back": safe_back_url(back, "/products"),
             "view_unit_id": unit, "view_unit_name": view_unit_name,
+            "view_mode": view_mode,
         },
     )
 
