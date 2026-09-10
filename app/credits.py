@@ -546,16 +546,27 @@ def _settlement_is_undoable(db: Session, settlement: models.ReceivableSettlement
         undoing one would desync it from that transaction.
       - cheque settlements only exist because a PDC cleared — undoing one
         here wouldn't touch the cheque's own status, so it'd desync too.
-        Reopen/void the cheque from the Cheques register instead.
-      - a settlement a Delivery or PDC points back to (settlement_id) is
-        load-bearing for that other record; same desync risk.
+        Reopen/void the cheque from the Cheques register instead. (No
+        cancelled/bounced-PDC carve-out needed here, unlike the Delivery
+        check below: settlement_id is only ever set inside pdc.clear_pdc,
+        and a PDC can't bounce/cancel/delete once cleared — so any PDC this
+        matches is guaranteed still live.)
+      - a still-live Delivery pointing back at this settlement (settlement_id)
+        is load-bearing for that COD collection — same desync risk. A
+        cancelled delivery doesn't count: cancel_delivery never reverses the
+        COD settlement it collected, so a cancelled one carries no live
+        effect worth protecting (same reasoning as a cancelled return/PDC).
     Everything else — a plain Collect Payment / Pay Full / Pay Selected
     entry — is fair game."""
     if settlement.method in ("cheque", "credit_note"):
         return False
     if db.query(models.PostDatedCheque.id).filter(models.PostDatedCheque.settlement_id == settlement.id).first():
         return False
-    if db.query(models.Delivery.id).filter(models.Delivery.settlement_id == settlement.id).first():
+    if (
+        db.query(models.Delivery.id)
+        .filter(models.Delivery.settlement_id == settlement.id, models.Delivery.status != "cancelled")
+        .first()
+    ):
         return False
     return True
 
