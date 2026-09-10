@@ -340,8 +340,7 @@ function peMarginPriceInput() {
   // Same idea, but margin's curve is asymptotic — it can get arbitrarily
   // close to 0 but never reach it at any finite %. If someone types 0 (or
   // less) here, there's no % to solve for; leave the % alone and let recalc
-  // restore the closest price that % actually represents. Use the Fixed
-  // price row to sell something for exactly ₱0.
+  // restore the closest price that % actually represents.
   var cost = parseFloat(document.getElementById('peCost').value) || 0;
   var price = parseFloat(document.getElementById('peMarginPrice').value);
   if (price > 0 && !isNaN(price)) {
@@ -354,13 +353,19 @@ function peMarginPriceInput() {
 
 async function peSave() {
   if (!peSelectedId) return;
+  const msg = document.getElementById('peMsg');
+  if ((parseFloat(document.getElementById('peFixedPrice').value) || 0) <= 0) {
+    msg.style.background = ''; msg.style.borderColor = ''; msg.style.color = '';
+    msg.textContent = "Selling price can't be ₱0 — enter the Fixed price this item actually sells for.";
+    msg.style.display = 'block';
+    return;
+  }
   const payload = {
     cost_price: document.getElementById('peCost').value,
     selling_price: document.getElementById('peFixedPrice').value,
     markup_pct: document.getElementById('peMarkupPct').value,
     margin_pct: document.getElementById('peMarginPct').value,
   };
-  const msg = document.getElementById('peMsg');
   try {
     const res = await fetch('/products/' + peSelectedId + '/pricing', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)

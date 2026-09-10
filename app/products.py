@@ -1504,10 +1504,16 @@ def update_pricing(product_id: int, data: dict, request: Request, db: Session = 
     product = db.get(models.Product, product_id)
     if not product:
         return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
+    new_selling_price = _to_decimal(data.get("selling_price"))
+    if new_selling_price <= 0:
+        return JSONResponse(
+            {"ok": False, "error": "Selling price can't be ₱0 — enter the Fixed price this item actually sells for."},
+            status_code=400,
+        )
     before = _product_snapshot(product)
     if "cost_price" in data:
         product.cost_price = _to_decimal(data.get("cost_price"))
-    product.selling_price = _to_decimal(data.get("selling_price"))
+    product.selling_price = new_selling_price
     pricing.apply_to(product, product.cost_price, data.get("markup_pct"), data.get("margin_pct"))
     db.flush()
     after = _product_snapshot(product)
@@ -1943,11 +1949,11 @@ async def bulk_price_apply(request: Request, db: Session = Depends(get_db), user
         label = _bulk_mode_label(mode, value)
         updated = 0
         skipped = 0
+        zeroed = 0
         for p in products:
             if mode in ("markup", "margin", "cost_pct") and (not p.cost_price or p.cost_price <= 0):
                 skipped += 1
                 continue
-            before = _product_snapshot(p)
 
             # For the three Fixed-Price modes, the row's own editable field wins
             # when present — same trust level as a normal single-product price
@@ -1966,17 +1972,27 @@ async def bulk_price_apply(request: Request, db: Session = Depends(get_db), user
                 new_price = override if override is not None else (
                     Decimal(str(p.selling_price or 0)) * (1 + value / 100)
                 ).quantize(CENTS, rounding=ROUND_HALF_UP)
-                p.selling_price = max(new_price, Decimal("0"))
             elif mode == "amount":
                 new_price = override if override is not None else (
                     Decimal(str(p.selling_price or 0)) + value
                 ).quantize(CENTS, rounding=ROUND_HALF_UP)
-                p.selling_price = max(new_price, Decimal("0"))
             elif mode == "cost_pct":
                 # Same math as Markup, but writes straight into Fixed Price —
                 # for the common case of seeding a never-set Fixed Price in bulk.
                 new_price = override if override is not None else pricing.markup_price(p.cost_price, value)
-                p.selling_price = max(new_price, Decimal("0"))
+            else:
+                new_price = None  # markup/margin modes below never touch Fixed price
+
+            # A Fixed price of ₱0 (or a negative result, e.g. a big Reduce By
+            # Amount) is never saved — same rule as the single-product editor.
+            # Skipped here instead of erroring the whole batch out.
+            if new_price is not None and new_price <= 0:
+                zeroed += 1
+                continue
+
+            before = _product_snapshot(p)
+            if mode in ("pct", "amount", "cost_pct"):
+                p.selling_price = new_price
             elif mode == "markup":
                 p.markup_pct = value
                 p.markup_price = pricing.markup_price(p.cost_price, value)
@@ -1993,8 +2009,13 @@ async def bulk_price_apply(request: Request, db: Session = Depends(get_db), user
                 updated += 1
         db.commit()
         msg = f"Updated {updated} product{'s' if updated != 1 else ''}"
+        skip_notes = []
         if skipped:
-            msg += f", skipped {skipped} with no cost on file"
+            skip_notes.append(f"{skipped} with no cost on file")
+        if zeroed:
+            skip_notes.append(f"{zeroed} that would've priced at ₱0 or less")
+        if skip_notes:
+            msg += ", skipped " + " and ".join(skip_notes)
         return RedirectResponse(f"/products?bulk_msg={msg}", status_code=status.HTTP_302_FOUND)
 
     return await run_in_threadpool(_do)
