@@ -61,6 +61,118 @@
   <a class="btn-secondary" href="/purchases/new">+ Receive Delivery</a>
 </div>
 
+<!-- ============ PRICE CALCULATOR (what-if, not tied to any product) ============ -->
+<details class="card no-print" style="margin-bottom:18px;">
+  <summary style="cursor:pointer;font-weight:600;">🧮 Price Calculator <span class="muted" style="font-weight:500;">— quick markup/margin math, doesn't touch your Inventory</span></summary>
+
+  <div class="pe-cost-row" style="margin-top:14px;">
+    <label style="display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--muted);font-weight:600;">
+      Cost of Sales
+      <input id="dcCost" class="pe-cost-input" type="number" step="0.01" min="0" inputmode="decimal" oninput="dcRecalc()">
+    </label>
+  </div>
+
+  <div class="table-wrap">
+    <table class="grid price-table">
+      <thead>
+        <tr><th>Price</th><th class="num">%</th><th class="num">Selling price (₱)</th><th class="num">Profit</th><th class="num">True margin</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Fixed</strong><small class="muted" style="display:block;">typed in — POS uses this</small></td>
+          <td class="num muted">—</td>
+          <td class="num"><input id="dcFixedPrice" type="number" step="0.01" min="0" inputmode="decimal" oninput="dcRecalc()"></td>
+          <td class="num" id="dcFixedProfit">—</td>
+          <td class="num" id="dcFixedMargin">—</td>
+        </tr>
+        <tr>
+          <td><strong>Markup</strong><small class="muted" style="display:block;">% on top of cost</small></td>
+          <td class="num"><input id="dcMarkupPct" type="number" step="0.01" class="pct-in" oninput="dcRecalc()"></td>
+          <td class="num"><input id="dcMarkupPrice" type="number" step="0.01" inputmode="decimal" oninput="dcMarkupPriceInput()" onblur="dcRecalc()"></td>
+          <td class="num" id="dcMarkupProfit">—</td>
+          <td class="num" id="dcMarkupMargin">—</td>
+        </tr>
+        <tr>
+          <td><strong>Margin</strong><small class="muted" style="display:block;">% of the selling price</small></td>
+          <td class="num"><input id="dcMarginPct" type="number" step="0.01" max="99.99" class="pct-in" oninput="dcRecalc()"></td>
+          <td class="num"><input id="dcMarginPrice" type="number" step="0.01" inputmode="decimal" oninput="dcMarginPriceInput()" onblur="dcRecalc()"></td>
+          <td class="num" id="dcMarginProfit">—</td>
+          <td class="num" id="dcMarginMargin">—</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="hint" id="dcHint">Enter a Cost of Sales — Markup, Margin and profit all need one to work.</p>
+</details>
+
+<script>
+/* Standalone what-if version of products/pricing.html's peRecalc — same
+   math as app/pricing.py (markup_price/margin_price/true_margin), but with
+   no product behind it: nothing here is ever saved or read from Inventory. */
+{% set dcMmp = min_margin_pct() %}
+var DC_MIN_MARGIN_PCT = {{ dcMmp if dcMmp is not none else 'null' }};
+
+function dcShowRow(price, cost, priceEl, profitEl, marginEl) {
+  if (priceEl) priceEl.value = price.toFixed(2);
+  if (cost <= 0) {
+    profitEl.textContent = '—'; profitEl.className = 'num muted';
+    marginEl.textContent = '—'; marginEl.className = 'num muted'; marginEl.title = '';
+    return;
+  }
+  var profit = price - cost;
+  var marginPct = price > 0 ? (profit / price * 100) : -100;
+  profitEl.textContent = '₱' + profit.toFixed(2);
+  profitEl.className = 'num ' + (profit < 0 ? 'neg' : '');
+  var belowTarget = DC_MIN_MARGIN_PCT !== null && profit >= 0 && marginPct < DC_MIN_MARGIN_PCT;
+  marginEl.textContent = marginPct.toFixed(1) + '%' + (belowTarget ? ' ⚠' : '');
+  marginEl.className = 'num ' + (profit < 0 ? 'neg' : (belowTarget ? 'thin-margin' : ''));
+  marginEl.title = belowTarget ? ('Below your ' + DC_MIN_MARGIN_PCT + '% minimum margin target') : '';
+}
+
+function dcRecalc(skipPriceId) {
+  var cost = parseFloat(document.getElementById('dcCost').value) || 0;
+  var hint = document.getElementById('dcHint');
+
+  var fixed = parseFloat(document.getElementById('dcFixedPrice').value) || 0;
+  dcShowRow(fixed, cost, null, document.getElementById('dcFixedProfit'), document.getElementById('dcFixedMargin'));
+
+  var mPct = parseFloat(document.getElementById('dcMarkupPct').value) || 0;
+  var gPct = parseFloat(document.getElementById('dcMarginPct').value) || 0;
+  if (gPct > 99.99) { gPct = 99.99; document.getElementById('dcMarginPct').value = gPct; }
+
+  var markup = cost > 0 ? Math.max(Math.round(cost * (1 + mPct / 100) * 100) / 100, 0) : 0;
+  var margin = cost > 0 ? Math.max(Math.round(cost / (1 - gPct / 100) * 100) / 100, 0) : 0;
+
+  dcShowRow(markup, cost, skipPriceId === 'dcMarkupPrice' ? null : document.getElementById('dcMarkupPrice'), document.getElementById('dcMarkupProfit'), document.getElementById('dcMarkupMargin'));
+  dcShowRow(margin, cost, skipPriceId === 'dcMarginPrice' ? null : document.getElementById('dcMarginPrice'), document.getElementById('dcMarginProfit'), document.getElementById('dcMarginMargin'));
+
+  hint.textContent = (cost > 0)
+    ? 'Markup and margin are calculated from the Cost of Sales above — edit it and everything recalculates instantly. You can also type straight into a Selling price cell to solve back to its %.'
+    : 'Enter a Cost of Sales — Markup, Margin and profit all need one to work.';
+}
+
+function dcMarkupPriceInput() {
+  var cost = parseFloat(document.getElementById('dcCost').value) || 0;
+  var price = parseFloat(document.getElementById('dcMarkupPrice').value);
+  if (cost > 0 && !isNaN(price)) {
+    var pct = (price - cost) / cost * 100;
+    document.getElementById('dcMarkupPct').value = pct.toFixed(2);
+  }
+  dcRecalc('dcMarkupPrice');
+}
+
+function dcMarginPriceInput() {
+  var cost = parseFloat(document.getElementById('dcCost').value) || 0;
+  var price = parseFloat(document.getElementById('dcMarginPrice').value);
+  if (price > 0 && !isNaN(price)) {
+    var pct = (price - cost) / price * 100;
+    if (pct > 99.99) pct = 99.99;
+    document.getElementById('dcMarginPct').value = pct.toFixed(2);
+  }
+  dcRecalc('dcMarginPrice');
+}
+</script>
+
 <div class="print-only-heading" style="display:none;">
   <h1>{{ business_info().business_name or app_name }} — Dashboard</h1>
   <p>{{ period_start.strftime('%b %d, %Y') if period_start else '' }} – {{ period_end.strftime('%b %d, %Y') if period_end else '' }} · Generated {{ today.strftime('%b %d, %Y %I:%M %p') }}</p>
