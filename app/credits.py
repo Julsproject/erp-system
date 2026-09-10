@@ -360,6 +360,52 @@ def _outstanding_sales(db: Session, customer_id: int):
     return out
 
 
+@router.get("/credits/collect", response_class=HTMLResponse)
+def collect_payment(
+    request: Request, q: str = "", customer_id: int = 0,
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    """One-page shortcut for the common case — search a customer, see what
+    they still owe, tick some or all of it, pay right there — without
+    detouring through their full statement first. Submits straight to the
+    existing /pay-selected endpoint (same checkboxes-to-sale_ids shape the
+    statement page's own picker already produces), so there's no second copy
+    of the settlement/posting logic to keep in sync."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    q = (q or "").strip()
+    customer = db.get(models.Customer, customer_id) if customer_id else None
+    matches = []
+    match_totals = {}
+    owed = []
+    total = Decimal("0")
+    if customer:
+        owed = _outstanding_sales(db, customer.id)
+        total = sum((o for _, o in owed), Decimal("0"))
+    elif q:
+        matches = (
+            db.query(models.Customer)
+            .join(models.Sale, models.Sale.customer_id == models.Customer.id)
+            .filter(models.Sale.receivable_amount > 0, models.Customer.name.ilike(f"%{q}%"))
+            .distinct()
+            .order_by(models.Customer.name)
+            .limit(20)
+            .all()
+        )
+        match_totals = {c.id: sum((o for _, o in _outstanding_sales(db, c.id)), Decimal("0")) for c in matches}
+    return templates.TemplateResponse(
+        "credits/collect.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "q": q, "customer": customer, "matches": matches, "match_totals": match_totals,
+            "owed": owed, "total": total, "methods": SETTLE_METHODS,
+            "today_iso": datetime.now(MANILA).date().isoformat(),
+        },
+    )
+
+
 @router.get("/credits/{customer_id:int}/pay-full", response_class=HTMLResponse)
 def pay_full_form(customer_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:

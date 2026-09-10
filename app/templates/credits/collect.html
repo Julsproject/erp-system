@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}Collect Payment · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">Collect Payment</h1>
+  {% if customer %}<a class="btn-link" href="/credits/collect">← Search another customer</a>{% endif %}
+</div>
+
+{% if not customer %}
+<form class="card" method="get" action="/credits/collect" style="max-width:480px;display:flex;gap:8px;">
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search customer name…" autofocus style="flex:1;">
+  <button class="btn" type="submit">Search</button>
+</form>
+
+{% if q %}
+<div class="table-wrap" style="max-width:480px;margin-top:16px;">
+  <table class="grid">
+    <thead><tr><th>Customer</th><th class="num">Outstanding</th></tr></thead>
+    <tbody>
+      {% for c in matches %}
+      <tr>
+        <td><a href="/credits/collect?customer_id={{ c.id }}">{{ c.name }}</a></td>
+        <td class="num owed">{{ match_totals.get(c.id, 0)|peso }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="2" class="empty">No customer with an outstanding balance matches “{{ q }}”.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% else %}
+<h3 style="margin:0 0 2px;">{{ customer.name }}</h3>
+<p class="muted" style="margin:0 0 16px;font-size:12.5px;"><a class="btn-link" href="/credits/{{ customer.id }}">View full statement →</a></p>
+
+{% if not owed %}
+<div class="card"><p class="empty" style="margin:0;">Nothing outstanding — already paid in full.</p></div>
+{% else %}
+<form class="form" method="post" action="/credits/{{ customer.id }}/pay-selected" id="collectForm">
+  <div class="table-wrap" style="max-width:620px;">
+    <table class="grid">
+      <thead>
+        <tr>
+          <th><input type="checkbox" id="selectAllChk" checked onchange="toggleAllChk(this)" title="Select all"></th>
+          <th>Invoice #</th><th>Date</th><th class="num">Outstanding</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for sale, outstanding in owed %}
+        <tr>
+          <td><input type="checkbox" class="payChk" name="sale_ids" value="{{ sale.id }}" data-outstanding="{{ outstanding }}" checked onchange="updateTotal()"></td>
+          <td class="strong">{{ sale.invoice_no }}</td>
+          <td>{{ sale.created_at.strftime('%b %d, %Y') if sale.created_at else '' }}</td>
+          <td class="num owed">{{ outstanding|peso }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr><td colspan="3" class="strong">Total selected</td><td class="num strong owed" id="selTotal">{{ total|peso }}</td></tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <div class="card" style="margin-top:16px;max-width:620px;">
+    <label>Method
+      <select name="method" id="method" onchange="toggleCheque()">
+        {% for value, label in methods %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <label id="refNoField">Reference # <span class="muted">(optional)</span>
+      <input name="ref_no" type="text" placeholder="Reference No.">
+    </label>
+    <label id="paymentDateField">Payment date <span class="muted">(optional — defaults to now)</span>
+      <input name="payment_date" type="date" value="" max="{{ today_iso }}">
+      <small class="hint">Set this if the payment was actually collected earlier and you're only encoding it now.</small>
+    </label>
+
+    <div id="chequeFields" class="full" style="display:none;">
+      <div class="cheque-grid">
+        <label>Bank<input name="bank" type="text" placeholder="e.g. BDO"></label>
+        <label>Cheque #<input name="cheque_no" type="text" placeholder="000123"></label>
+        <label>Cheque date<input name="cheque_date" type="date"></label>
+      </div>
+      <p class="hint" style="margin-top:6px;">
+        This won't settle the credit yet — it goes into the <a href="/pdc">Cheques register</a> as pending until it clears, one entry per invoice selected above.
+      </p>
+    </div>
+  </div>
+
+  <div class="form-actions" style="margin-top:14px;">
+    <button class="btn" type="submit" id="collectSubmit">Pay Selected — {{ total|peso }}</button>
+    <a class="btn-secondary" href="/credits/collect">Cancel</a>
+  </div>
+</form>
+{% endif %}
+{% endif %}
+
+<script>
+  function peso(n) { return '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
+
+  function toggleAllChk(master) {
+    document.querySelectorAll('.payChk').forEach(c => { c.checked = master.checked; });
+    updateTotal();
+  }
+
+  function updateTotal() {
+    const checked = Array.from(document.querySelectorAll('.payChk:checked'));
+    let total = 0;
+    checked.forEach(c => { total += parseFloat(c.dataset.outstanding) || 0; });
+    document.getElementById('selTotal').textContent = peso(total);
+    const btn = document.getElementById('collectSubmit');
+    btn.textContent = 'Pay Selected — ' + peso(total);
+    btn.disabled = checked.length === 0;
+  }
+
+  function toggleCheque() {
+    const isCheque = document.getElementById('method').value === 'cheque';
+    document.getElementById('chequeFields').style.display = isCheque ? 'block' : 'none';
+    document.getElementById('refNoField').style.display = isCheque ? 'none' : 'flex';
+    document.getElementById('paymentDateField').style.display = isCheque ? 'none' : 'flex';
+  }
+
+  const collectForm = document.getElementById('collectForm');
+  if (collectForm) {
+    toggleCheque();
+    collectForm.addEventListener('submit', function (e) {
+      const checked = document.querySelectorAll('.payChk:checked').length;
+      if (!checked) { e.preventDefault(); return; }
+      if (!confirm('Mark ' + checked + ' invoice(s) totaling ' + document.getElementById('selTotal').textContent + ' as paid?')) {
+        e.preventDefault();
+      }
+    });
+  }
+</script>
+{% endblock %}
