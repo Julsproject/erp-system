@@ -23,6 +23,15 @@
   <div class="head-actions">
     {# A cashier reads this page — what's in stock, where it sits, what it
        sells for. Everything that changes the catalogue is manager+. #}
+    <form method="get" action="/products/price-list" style="display:flex;align-items:center;gap:6px;" title="Preview the price list — filter by category, or leave it on All categories">
+      <select name="category_id" style="padding:8px 10px;border:1px solid var(--line-2);border-radius:8px;font-size:13px;background:var(--surface);color:var(--ink);">
+        <option value="0">All categories</option>
+        {% for c in categories %}
+        <option value="{{ c.id }}">{{ c.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn-secondary">Price List</button>
+    </form>
     {% if is_admin_user %}
     <a class="btn-secondary" href="/products/export.xlsx?q={{ q }}&category_id={{ category_id }}&subcategory_id={{ subcategory_id }}&shelf_id={{ shelf_id }}&alert={{ 1 if alert else 0 }}">⬇ Export Excel</a>
     <button type="button" class="btn-secondary" onclick="openMerge()">⇄ Merge Duplicates</button>

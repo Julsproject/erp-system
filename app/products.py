@@ -664,6 +664,89 @@ def export_products_excel(
     )
 
 
+def _price_list_products(db: Session, category_id: int):
+    """The exact row set for the price list — Category / Product / Unit /
+    Selling Price — shared by the HTML preview and the Excel export so the
+    two can never drift apart (same idea as pricing.needs_review_expr)."""
+    query = db.query(models.Product).filter(models.Product.is_active.is_(True))
+    if category_id == -1:
+        query = query.filter(models.Product.category_id.is_(None))
+    elif category_id:
+        query = query.filter(models.Product.category_id == category_id)
+    return (
+        query.outerjoin(models.Category, models.Product.category_id == models.Category.id)
+        .order_by(models.Category.name, models.Product.name)
+        .all()
+    )
+
+
+@router.get("/products/price-list", response_class=HTMLResponse)
+def price_list_preview(request: Request, category_id: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """HTML preview of the price list before downloading — same rows, same
+    order, as export_price_list_excel below."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    products = _price_list_products(db, category_id)
+    categories = db.query(models.Category).order_by(models.Category.name).all()
+    return templates.TemplateResponse(
+        "products/price_list.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "products": products, "categories": categories, "category_id": category_id},
+    )
+
+
+@router.get("/products/price-list.xlsx")
+def export_price_list_excel(
+    category_id: int = 0,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """A customer-facing price list — Category / Product / Unit / Selling
+    Price only. Deliberately excludes Cost of Sales, margin, and stock
+    quantities (see /products/export.xlsx for the internal Inventory dump
+    that has those) since this is meant to be handed to a customer or
+    printed, not kept in-house. Filterable by category only — unlike the
+    Inventory export, it doesn't inherit the list page's search/subcategory/
+    shelf filters, since "give me category X's price list" is the actual
+    use case, not whatever else happened to be filtered on-screen."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+
+    products = _price_list_products(db, category_id)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Price List"
+    ws.append(["Category", "Product Name", "Unit", "Selling Price (₱)"])
+    fill = PatternFill("solid", fgColor="1F6FEB")
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = fill
+
+    for p in products:
+        ws.append([
+            p.category.name if p.category else "Uncategorized",
+            p.name,
+            p.unit_type.name if p.unit_type else "",
+            float(p.selling_price or 0),
+        ])
+        ws.cell(row=ws.max_row, column=4).number_format = '#,##0.00'
+
+    widths = [20, 34, 12, 16]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="price_list.xlsx"'},
+    )
+
+
 def _render_form(request, db, user, product=None, error=None, back=""):
     categories = db.query(models.Category).order_by(models.Category.name).all()
     subcategories = db.query(models.SubCategory).order_by(models.SubCategory.name).all()

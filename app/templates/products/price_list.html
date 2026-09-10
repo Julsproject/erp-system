@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Price List · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Price List</h1>
+    <p class="muted">{{ products|length }} product{{ '' if products|length == 1 else 's' }}{{ ' — preview before downloading' }}</p>
+  </div>
+  <div class="head-actions">
+    <a class="btn-secondary" href="/products">← Inventory</a>
+    <a class="btn" href="/products/price-list.xlsx?category_id={{ category_id }}">⬇ Download Excel</a>
+  </div>
+</div>
+
+<div class="toolbar" style="margin-bottom:14px;">
+  <form method="get" action="/products/price-list" style="display:flex;align-items:center;gap:8px;">
+    <select name="category_id" onchange="this.form.submit()" style="padding:8px 10px;border:1px solid var(--line-2);border-radius:8px;font-size:13px;background:var(--surface);color:var(--ink);">
+      <option value="0">All categories</option>
+      {% for c in categories %}
+      <option value="{{ c.id }}" {{ 'selected' if c.id == category_id }}>{{ c.name }}</option>
+      {% endfor %}
+    </select>
+  </form>
+  <input class="search" type="search" id="plSearch" placeholder="Search this list…" oninput="plFilter()" style="margin-left:auto;">
+</div>
+
+<div class="table-wrap">
+  <table class="grid" id="plTable">
+    <thead>
+      <tr><th>Category</th><th>Product Name</th><th>Unit</th><th class="num">Selling Price</th></tr>
+    </thead>
+    <tbody>
+      {% for p in products %}
+      <tr>
+        <td>{{ p.category.name if p.category else 'Uncategorized' }}</td>
+        <td class="strong">{{ p.name }}</td>
+        <td>{{ p.unit_type.name if p.unit_type else '—' }}</td>
+        <td class="num">{{ p.selling_price|peso }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">No products in this category.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="muted" id="plCount" style="margin-top:8px;font-size:12.5px;"></p>
+
+<script>
+function plFilter() {
+  var q = document.getElementById('plSearch').value.trim().toLowerCase();
+  var rows = document.querySelectorAll('#plTable tbody tr');
+  var shown = 0;
+  rows.forEach(function (row) {
+    var match = !q || row.textContent.toLowerCase().indexOf(q) !== -1;
+    row.hidden = !match;
+    if (match) shown++;
+  });
+  var countEl = document.getElementById('plCount');
+  countEl.textContent = q ? (shown + ' of ' + rows.length + ' shown') : '';
+}
+</script>
+{% endblock %}
