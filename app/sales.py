@@ -22,7 +22,7 @@ router = APIRouter()
 MANILA = ZoneInfo("Asia/Manila")
 SETTLE_METHODS = [("cash", "Cash"), ("gcash", "GCash"), ("maya", "Maya"), ("other_ewallet", "Other E-Wallet"), ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque")]
 PAGE_SIZE = 15
-TYPE_LABELS = {"sale": "Sale", "refund": "Return", "exchange": "Sale x Exchange"}
+TYPE_LABELS = {"sale": "Sale", "refund": "Return", "exchange": "Sale x Exchange", "si": "SI (VAT)"}
 
 
 def _resolve_settlement_datetime(payment_date: str):

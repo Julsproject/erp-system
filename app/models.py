@@ -687,6 +687,23 @@ class PdcApplication(Base):
     purchase = relationship("Purchase")
 
 
+class SiApplication(Base):
+    """Which DR(s) a consolidated SI (issued later, at collection, to
+    formally recognize Output VAT on delivery-receipt sales — a DR itself
+    is never allowed to carry VAT) actually documents, and how much of each
+    it covers. Same shape as PdcApplication (one document applying to
+    several sales) — see credits.py's issue_si."""
+    __tablename__ = "si_applications"
+
+    id = Column(Integer, primary_key=True)
+    si_sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False)
+    dr_sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False)
+    amount = Column(Numeric(12, 2), nullable=False, server_default="0")
+
+    si_sale = relationship("Sale", foreign_keys=[si_sale_id])
+    dr_sale = relationship("Sale", foreign_keys=[dr_sale_id])
+
+
 class Supplier(Base):
     __tablename__ = "suppliers"
 

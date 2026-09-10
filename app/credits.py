@@ -2,6 +2,7 @@
 import io
 from datetime import date, datetime
 from decimal import Decimal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -11,8 +12,11 @@ from sqlalchemy.orm import Session
 from . import accounting, audit, models, settings_store
 from .database import get_db
 from .deps import get_current_user, is_staff
+from .pos import _invoice_taken, _money, _vat_of
 from .sales import MANILA, SETTLE_METHODS, _resolve_settlement_datetime
 from .templating import templates
+
+DR_BOOKLETS = ("DRS", "DRB")
 
 router = APIRouter()
 
@@ -362,7 +366,7 @@ def _outstanding_sales(db: Session, customer_id: int):
 
 @router.get("/credits/collect", response_class=HTMLResponse)
 def collect_payment(
-    request: Request, q: str = "", customer_id: int = 0,
+    request: Request, q: str = "", customer_id: int = 0, si_error: str = "",
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """One-page shortcut for the common case — search a customer, see what
@@ -381,9 +385,22 @@ def collect_payment(
     match_totals = {}
     owed = []
     total = Decimal("0")
+    si_eligible_ids = set()
     if customer:
         owed = _outstanding_sales(db, customer.id)
         total = sum((o for _, o in owed), Decimal("0"))
+        # A DR can have Output VAT recognized (an SI issued against it) once
+        # it's still outstanding here and nothing has already covered it —
+        # see issue_si. A plain SI invoice never needs this (it already
+        # carries its own VAT from encoding).
+        dr_ids = [s.id for s, _ in owed if (s.receipt_type or "").upper() in DR_BOOKLETS]
+        already_covered = set()
+        if dr_ids:
+            already_covered = {
+                row[0] for row in db.query(models.SiApplication.dr_sale_id)
+                .filter(models.SiApplication.dr_sale_id.in_(dr_ids)).all()
+            }
+        si_eligible_ids = set(dr_ids) - already_covered
     elif q:
         matches = (
             db.query(models.Customer)
@@ -401,9 +418,105 @@ def collect_payment(
             "request": request, "app_name": request.app.title, "user": user,
             "q": q, "customer": customer, "matches": matches, "match_totals": match_totals,
             "owed": owed, "total": total, "methods": SETTLE_METHODS,
+            "si_eligible_ids": si_eligible_ids, "si_error": si_error,
             "today_iso": datetime.now(MANILA).date().isoformat(),
         },
     )
+
+
+@router.post("/credits/{customer_id:int}/issue-si")
+def issue_si(
+    customer_id: int, request: Request,
+    dr_sale_ids: list[str] = Form([]), si_invoice_no: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    """Issue a single consolidated SI recognizing Output VAT on one or more
+    DR sales, at collection — a DR itself is never allowed to carry VAT
+    (see pos._finalize_sale). Pure paperwork/VAT event: doesn't touch the
+    DRs' own receivable/settlement history, which keeps working exactly as
+    it does today via /pay-selected, completely independent of this."""
+    def _back(err=None):
+        suffix = f"&si_error={quote(err)}" if err else ""
+        return RedirectResponse(f"/credits/collect?customer_id={customer_id}{suffix}", status_code=status.HTTP_302_FOUND)
+
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    customer = db.get(models.Customer, customer_id)
+    if not customer:
+        return RedirectResponse("/credits/collect", status_code=302)
+
+    si_invoice_no = (si_invoice_no or "").strip()
+    if not si_invoice_no:
+        return _back("Enter the SI's own invoice number.")
+    if _invoice_taken(db, si_invoice_no, "SI"):
+        return _back(f"Invoice number '{si_invoice_no}' is already used in the SI booklet.")
+
+    ids = {int(i) for i in dr_sale_ids if i.isdigit()}
+    if not ids:
+        return _back("Tick at least one Delivery Receipt to issue an SI for.")
+
+    # Re-derive eligibility server-side — never trust which boxes the client
+    # says were checked. Same rule as the GET page: still outstanding for
+    # this customer, a DR booklet, and not already covered by another SI.
+    owed_ids = {s.id for s, _ in _outstanding_sales(db, customer.id)}
+    drs = (
+        db.query(models.Sale)
+        .filter(models.Sale.id.in_(ids), models.Sale.customer_id == customer.id)
+        .all()
+    )
+    already_covered = {
+        row[0] for row in db.query(models.SiApplication.dr_sale_id)
+        .filter(models.SiApplication.dr_sale_id.in_(ids)).all()
+    }
+    drs = [
+        s for s in drs
+        if s.id in owed_ids and (s.receipt_type or "").upper() in DR_BOOKLETS and s.id not in already_covered
+    ]
+    if not drs:
+        return _back("None of the selected invoices are eligible for an SI anymore — refresh and try again.")
+
+    subtotal = sum((s.subtotal or Decimal("0")) for s in drs)
+    discount_total = sum((s.discount_total or Decimal("0")) for s in drs)
+    total = sum((s.total or Decimal("0")) for s in drs)
+    vat_amount = _vat_of(total)
+    net_amount = total - vat_amount
+
+    si = models.Sale(
+        invoice_no=si_invoice_no, receipt_type="SI", txn_type="si",
+        customer_id=customer.id, customer_name=customer.name, cashier_id=user.id,
+        subtotal=_money(subtotal), discount_total=_money(discount_total),
+        vat_amount=vat_amount, net_amount=net_amount, total=_money(total),
+        receivable_amount=Decimal("0"),
+    )
+    for dr in drs:
+        for ln in dr.lines:
+            si.lines.append(models.SaleLine(
+                product_id=ln.product_id, product_name=ln.product_name, unit_name=ln.unit_name,
+                unit_factor=ln.unit_factor, qty=ln.qty, unit_price=ln.unit_price, discount=ln.discount,
+                line_total=ln.line_total, is_vat=True, price_tier=ln.price_tier, unit_cost=ln.unit_cost,
+            ))
+    db.add(si)
+    db.flush()
+
+    for dr in drs:
+        db.add(models.SiApplication(si_sale_id=si.id, dr_sale_id=dr.id, amount=dr.total))
+
+    try:
+        accounting.post_si_conversion(db, si, entered_by_id=user.id)
+    except accounting.PostingError as e:
+        db.rollback()
+        return _back(str(e))
+
+    audit.record(
+        db, user=user, request=request, action="create", entity_type="sale",
+        entity_id=si.id, entity_label=si.invoice_no,
+        summary=f"Issued SI {si.invoice_no} — Output VAT ₱{vat_amount} on {len(drs)} DR(s): "
+                + ", ".join(dr.invoice_no for dr in drs),
+    )
+    db.commit()
+    return RedirectResponse(f"/credits/collect?customer_id={customer_id}", status_code=status.HTTP_302_FOUND)
 
 
 @router.get("/credits/{customer_id:int}/pay-full", response_class=HTMLResponse)

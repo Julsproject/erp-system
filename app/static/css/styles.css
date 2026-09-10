@@ -816,6 +816,7 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
 .txn-sale { background: var(--brand-tint); color: var(--brand-600); }
 .txn-refund { background: var(--danger-tint); color: var(--danger); }
 .txn-exchange { background: var(--warn-tint); color: var(--warn); }
+.txn-si { background: var(--ok-tint); color: var(--ok); }
 
 /* ---------- Tabs ---------- */
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }

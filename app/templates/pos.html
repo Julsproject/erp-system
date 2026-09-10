@@ -222,7 +222,9 @@
           </span>
         </div>
         <div class="totals-row" id="rowVatToggle">
-          <span><label class="vat-label"><input type="checkbox" id="vatOn" onchange="computeTotals()"> VAT (12%) · included</label></span>
+          <span><label class="vat-label"><input type="checkbox" id="vatOn" onchange="computeTotals()"> VAT (12%) · included</label>
+            <small id="vatDrHint" class="muted" style="display:none;">— not on a Delivery Receipt; issue an SI at collection to record VAT</small>
+          </span>
           <span id="tVat">₱0.00</span>
         </div>
         <div class="totals-row" id="rowNetVat" style="display:none;"><span class="muted">Net of VAT</span><span id="tNetVat">₱0.00</span></div>
@@ -529,9 +531,25 @@ function restoreTxnDatePref() {
 // field is still empty, so it never clobbers something the cashier already
 // typed. Typing a different number by hand is fine; it just becomes the new
 // starting point the next time this booklet is picked.
+// A Delivery Receipt (DRS/DRB) is never a valid BIR VAT document — only an
+// SI is. VAT on a DR sale gets recognized later, at collection, by issuing
+// a separate SI against it (Credits → Collect Payment) — never here.
+// Called from computeTotals() (so it self-corrects on every draft/state
+// restore, not just a live booklet switch) as well as directly on change,
+// for an immediate response before totals even recompute.
+function enforceVatBooklet() {
+  const vatOn = document.getElementById('vatOn');
+  const hint = document.getElementById('vatDrHint');
+  const isDr = ['DRS', 'DRB'].includes(receiptTypeBox.value);
+  vatOn.disabled = isDr;
+  hint.style.display = isDr ? 'inline' : 'none';
+  if (isDr) vatOn.checked = false;
+}
+
 async function onReceiptTypeChange() {
   const type = receiptTypeBox.value;
   localStorage.setItem('pos_receipt_type', type);
+  enforceVatBooklet();
   saveDraft();
   await refreshInvoiceSuggestion();
 }
@@ -1230,6 +1248,7 @@ function restoreDraft() {
 }
 
 function computeTotals() {
+  enforceVatBooklet();
   saveDraft();
   let subtotal = 0;
   cart.forEach(line => { subtotal += lineTotalOf(line); });

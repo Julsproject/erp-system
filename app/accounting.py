@@ -250,6 +250,29 @@ def post_sale(db: Session, sale: models.Sale, *, method_rows: list, receivable_a
     )
 
 
+def post_si_conversion(db: Session, si_sale: models.Sale, *, entered_by_id: int = None):
+    """An SI issued later, at collection, to formally invoice Output VAT on
+    one or more DRs that already recognized their own revenue (and AR) at
+    delivery time — a DR itself is never allowed to carry VAT, see
+    pos._finalize_sale. Pure reclassification: debit Sales Revenue / credit
+    Output VAT for the VAT portion only, dated today (the SI's own issue
+    date is what determines its VAT period, not the DR's original date).
+    No cash or AR moves here — that already happened on the DR(s); si_sale
+    itself carries receivable_amount=0 for the same reason."""
+    vat = Decimal(str(si_sale.vat_amount or 0))
+    if vat <= 0:
+        return None
+    lines = [
+        {"function_key": "SALES_REVENUE", "amount": vat, "side": "debit"},
+        {"function_key": "OUTPUT_VAT", "amount": vat, "side": "credit"},
+    ]
+    return post_journal(
+        db, txn_date=_today(), source_type="sale", source_id=si_sale.id,
+        description=f"SI {si_sale.invoice_no}", reference_no=si_sale.invoice_no,
+        lines=lines, entered_by_id=entered_by_id,
+    )
+
+
 def reverse_sale_posting(db: Session, sale: models.Sale, *, reason: str, entered_by_id: int = None, same_date: bool = False):
     """Called from pos.py's void_sale, and from its payment-method
     correction flows. No-op (not an error) if the sale predates Phase 1 and

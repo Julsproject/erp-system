@@ -636,6 +636,13 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
 
     customer_name = (customer_name or "").strip()
     vat_applied = bool(vat_applied)
+    # A Delivery Receipt (DRS/DRB) is never a valid BIR VAT document — only an
+    # SI is. VAT on a delivery gets recognized later, at collection, via a
+    # separate SI referencing it (see credits.issue_si /
+    # accounting.post_si_conversion) — never here, regardless of what the
+    # client sent (the UI already disables this, this is the real guard).
+    if (receipt_type or "").strip().upper() in ("DRS", "DRB"):
+        vat_applied = False
     encoded_by_id = int(encoded_by_id) if encoded_by_id else None
     sale = models.Sale(
         invoice_no=invoice_no, receipt_type=(receipt_type or "").strip() or None,
@@ -1641,6 +1648,28 @@ def pos_receipt(
     # If this receipt IS a refund/exchange, the invoice it came from.
     original = db.get(models.Sale, sale.original_sale_id) if sale.original_sale_id else None
 
+    # DR <-> SI cross-references (see credits.issue_si / accounting.post_si_conversion):
+    # if this receipt IS an SI issued to recognize VAT on one or more DRs, which
+    # DR(s) it documents; if this receipt IS a DR, the SI (if any) since issued
+    # to cover it — a DR can only ever be covered once, so at most one.
+    si_covers = []
+    si_covered_by = None
+    if sale.txn_type == "si":
+        si_covers = (
+            db.query(models.Sale)
+            .join(models.SiApplication, models.SiApplication.dr_sale_id == models.Sale.id)
+            .filter(models.SiApplication.si_sale_id == sale.id)
+            .order_by(models.Sale.id)
+            .all()
+        )
+    else:
+        covering = (
+            db.query(models.SiApplication)
+            .filter(models.SiApplication.dr_sale_id == sale.id)
+            .first()
+        )
+        si_covered_by = db.get(models.Sale, covering.si_sale_id) if covering else None
+
     # Live outstanding credit (original minus every payment collected since),
     # instead of the frozen amount recorded at the moment of sale.
     credit_paid = (
@@ -1664,6 +1693,7 @@ def pos_receipt(
         {"request": request, "app_name": request.app.title, "user": user,
          "sale": sale, "from": from_, "back": safe_back_url(back, ""), "cust": cust, "quote": quote, "thermal": thermal,
          "linked": linked, "original": original, "credit_outstanding": credit_outstanding,
+         "si_covers": si_covers, "si_covered_by": si_covered_by,
          "can_void": _can_void_sale(user), "void_error": VOID_ERRORS.get(void_error),
          "can_unvoid": is_staff(user), "unvoid_error": UNVOID_ERRORS.get(unvoid_error),
          "can_edit_date": is_staff(user), "edit_date_error": EDIT_DATE_ERRORS.get(edit_date_error),

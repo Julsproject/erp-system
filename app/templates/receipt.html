@@ -273,6 +273,19 @@
     </div>
     {% endfor %}
 
+    {% if si_covers %}
+    <div class="r-link exchange">
+      📄 This SI documents Output VAT for {{ si_covers|length }} Delivery Receipt{{ '' if si_covers|length == 1 else 's' }}:
+      {% for dr in si_covers %}<a href="/pos/receipt/{{ dr.id }}?from=sales">{{ (dr.receipt_type ~ dr.invoice_no) if (dr.receipt_type and dr.invoice_no) else dr.invoice_no }}</a>{{ ', ' if not loop.last }}{% endfor %}
+    </div>
+    {% endif %}
+    {% if si_covered_by %}
+    <div class="r-link exchange">
+      ✓ Output VAT recognized via SI
+      <a href="/pos/receipt/{{ si_covered_by.id }}?from=sales">{{ (si_covered_by.receipt_type ~ si_covered_by.invoice_no) if (si_covered_by.receipt_type and si_covered_by.invoice_no) else si_covered_by.invoice_no }}</a>
+    </div>
+    {% endif %}
+
     {% set returned_lines = sale.lines|selectattr('qty', 'lt', 0)|list %}
     {% set sold_lines = sale.lines|selectattr('qty', 'ge', 0)|list %}
 

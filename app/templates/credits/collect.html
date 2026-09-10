@@ -34,65 +34,102 @@
 <h3 style="margin:0 0 2px;">{{ customer.name }}</h3>
 <p class="muted" style="margin:0 0 16px;font-size:12.5px;"><a class="btn-link" href="/credits/{{ customer.id }}">View full statement →</a></p>
 
+{% if si_error %}<div class="alert" style="margin-bottom:14px;max-width:620px;">{{ si_error }}</div>{% endif %}
+
 {% if not owed %}
 <div class="card"><p class="empty" style="margin:0;">Nothing outstanding — already paid in full.</p></div>
 {% else %}
-<form class="form" method="post" action="/credits/{{ customer.id }}/pay-selected" id="collectForm">
-  <div class="table-wrap" style="max-width:620px;">
-    <table class="grid">
-      <thead>
-        <tr>
-          <th><input type="checkbox" id="selectAllChk" checked onchange="toggleAllChk(this)" title="Select all"></th>
-          <th>Invoice #</th><th>Date</th><th class="num">Outstanding</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for sale, outstanding in owed %}
-        <tr>
-          <td><input type="checkbox" class="payChk" name="sale_ids" value="{{ sale.id }}" data-outstanding="{{ outstanding }}" checked onchange="updateTotal()"></td>
-          <td class="strong">{{ sale.invoice_no }}</td>
-          <td>{{ sale.created_at.strftime('%b %d, %Y') if sale.created_at else '' }}</td>
-          <td class="num owed">{{ outstanding|peso }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-      <tfoot>
-        <tr><td colspan="3" class="strong">Total selected</td><td class="num strong owed" id="selTotal">{{ total|peso }}</td></tr>
-      </tfoot>
-    </table>
-  </div>
+<!-- Two independent forms share this one table: paying (#collectForm, the
+     usual sale_ids checkboxes) and issuing an SI to recognize Output VAT on
+     DR invoices (#issueSiForm) — cross-referenced via the checkbox `form`
+     attribute rather than duplicating the table, since a payment and a VAT
+     invoice are deliberately separate actions here (see credits.issue_si). -->
+<form class="form" method="post" action="/credits/{{ customer.id }}/pay-selected" id="collectForm"></form>
+{% if si_eligible_ids %}<form method="post" action="/credits/{{ customer.id }}/issue-si" id="issueSiForm"></form>{% endif %}
 
-  <div class="card" style="margin-top:16px;max-width:620px;">
+<div class="table-wrap" style="max-width:680px;">
+  <table class="grid">
+    <thead>
+      <tr>
+        <th><input type="checkbox" id="selectAllChk" checked onchange="toggleAllChk(this)" title="Select all"></th>
+        <th>Invoice #</th><th>Date</th><th class="num">Outstanding</th>
+        {% if si_eligible_ids %}<th title="Recognize Output VAT for this Delivery Receipt via a new SI">Output VAT</th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for sale, outstanding in owed %}
+      <tr>
+        <td><input type="checkbox" class="payChk" name="sale_ids" value="{{ sale.id }}" data-outstanding="{{ outstanding }}" checked onchange="updateTotal()" form="collectForm"></td>
+        <td class="strong">{{ sale.invoice_no }}</td>
+        <td>{{ sale.created_at.strftime('%b %d, %Y') if sale.created_at else '' }}</td>
+        <td class="num owed">{{ outstanding|peso }}</td>
+        {% if si_eligible_ids %}
+        <td>
+          {% if sale.id in si_eligible_ids %}
+          <input type="checkbox" class="vatChk" name="dr_sale_ids" value="{{ sale.id }}" data-total="{{ sale.total }}" onchange="updateSiTotal()" form="issueSiForm">
+          {% endif %}
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <td colspan="3" class="strong">Total selected</td><td class="num strong owed" id="selTotal">{{ total|peso }}</td>
+        {% if si_eligible_ids %}<td></td>{% endif %}
+      </tr>
+    </tfoot>
+  </table>
+</div>
+
+<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:16px;">
+  <div class="card" style="max-width:340px;flex:1;min-width:280px;">
     <label>Method
-      <select name="method" id="method" onchange="toggleCheque()">
+      <select name="method" id="method" onchange="toggleCheque()" form="collectForm">
         {% for value, label in methods %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
       </select>
     </label>
     <label id="refNoField">Reference # <span class="muted">(optional)</span>
-      <input name="ref_no" type="text" placeholder="Reference No.">
+      <input name="ref_no" type="text" placeholder="Reference No." form="collectForm">
     </label>
     <label id="paymentDateField">Payment date <span class="muted">(optional — defaults to now)</span>
-      <input name="payment_date" type="date" value="" max="{{ today_iso }}">
+      <input name="payment_date" type="date" value="" max="{{ today_iso }}" form="collectForm">
       <small class="hint">Set this if the payment was actually collected earlier and you're only encoding it now.</small>
     </label>
 
     <div id="chequeFields" class="full" style="display:none;">
       <div class="cheque-grid">
-        <label>Bank<input name="bank" type="text" placeholder="e.g. BDO"></label>
-        <label>Cheque #<input name="cheque_no" type="text" placeholder="000123"></label>
-        <label>Cheque date<input name="cheque_date" type="date"></label>
+        <label>Bank<input name="bank" type="text" placeholder="e.g. BDO" form="collectForm"></label>
+        <label>Cheque #<input name="cheque_no" type="text" placeholder="000123" form="collectForm"></label>
+        <label>Cheque date<input name="cheque_date" type="date" form="collectForm"></label>
       </div>
       <p class="hint" style="margin-top:6px;">
         This won't settle the credit yet — it goes into the <a href="/pdc">Cheques register</a> as pending until it clears, one entry per invoice selected above.
       </p>
     </div>
+    <div class="form-actions" style="margin-top:14px;">
+      <button class="btn" type="submit" id="collectSubmit" form="collectForm">Pay Selected — {{ total|peso }}</button>
+    </div>
   </div>
 
-  <div class="form-actions" style="margin-top:14px;">
-    <button class="btn" type="submit" id="collectSubmit">Pay Selected — {{ total|peso }}</button>
-    <a class="btn-secondary" href="/credits/collect">Cancel</a>
+  {% if si_eligible_ids %}
+  <div class="card" style="max-width:340px;flex:1;min-width:280px;">
+    <p class="muted" style="margin:0 0 10px;font-size:12.5px;">
+      A Delivery Receipt never carries VAT on its own — tick the ones above whose VAT you need to formally recognize now, then issue the SI that documents them.
+    </p>
+    <label>SI Invoice # <span class="muted">(new — from the SI booklet)</span>
+      <input name="si_invoice_no" type="text" placeholder="e.g. 000210" autocomplete="off" form="issueSiForm">
+    </label>
+    <div class="form-actions" style="margin-top:14px;">
+      <button class="btn-secondary" type="submit" id="issueSiSubmit" form="issueSiForm" disabled>Issue SI</button>
+    </div>
   </div>
-</form>
+  {% endif %}
+</div>
+
+<div class="form-actions" style="margin-top:14px;">
+  <a class="btn-secondary" href="/credits/collect">Cancel</a>
+</div>
 {% endif %}
 {% endif %}
 
@@ -121,6 +158,19 @@
     document.getElementById('paymentDateField').style.display = isCheque ? 'none' : 'flex';
   }
 
+  // VAT-inclusive: the 12% contained in each checked DR's own total (same
+  // math as app/pos.py's _vat_of) — purely a live preview; the server
+  // recomputes this for real from the DB, never trusting what's shown here.
+  function updateSiTotal() {
+    const btn = document.getElementById('issueSiSubmit');
+    if (!btn) return;
+    const checked = Array.from(document.querySelectorAll('.vatChk:checked'));
+    const total = checked.reduce((sum, c) => sum + (parseFloat(c.dataset.total) || 0), 0);
+    const vat = total * 0.12 / 1.12;
+    btn.textContent = checked.length ? ('Issue SI — recognize ' + peso(vat) + ' VAT') : 'Issue SI';
+    btn.disabled = checked.length === 0;
+  }
+
   const collectForm = document.getElementById('collectForm');
   if (collectForm) {
     toggleCheque();
@@ -128,6 +178,24 @@
       const checked = document.querySelectorAll('.payChk:checked').length;
       if (!checked) { e.preventDefault(); return; }
       if (!confirm('Mark ' + checked + ' invoice(s) totaling ' + document.getElementById('selTotal').textContent + ' as paid?')) {
+        e.preventDefault();
+      }
+    });
+  }
+
+  const issueSiForm = document.getElementById('issueSiForm');
+  if (issueSiForm) {
+    updateSiTotal();
+    issueSiForm.addEventListener('submit', function (e) {
+      const checked = document.querySelectorAll('.vatChk:checked').length;
+      const invoiceNo = issueSiForm.si_invoice_no.value.trim();
+      if (!checked) { e.preventDefault(); return; }
+      if (!invoiceNo) {
+        e.preventDefault();
+        alert("Enter the SI's own invoice number.");
+        return;
+      }
+      if (!confirm('Issue SI ' + invoiceNo + ' recognizing VAT on ' + checked + ' Delivery Receipt(s)?')) {
         e.preventDefault();
       }
     });
