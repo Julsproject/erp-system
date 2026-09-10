@@ -5,7 +5,9 @@
   <div>
     <h1 class="page-title">{{ purchase.ref_no }}</h1>
     <p class="muted">
-      {% if purchase.txn_type == 'return' %}Purchase return{% else %}Purchase Order{% endif %}
+      {% if purchase.txn_type == 'return' %}Purchase return
+      {%- elif purchase.status == 'pending' %}Purchase Order
+      {%- else %}Purchase{% endif %}
       · {{ purchase.created_at.strftime('%b %d, %Y %I:%M %p') if purchase.created_at else '' }}
       {% if purchase.user %} · by {{ purchase.user.full_name or purchase.user.username }}{% endif %}
     </p>
@@ -50,7 +52,7 @@
   {% endif %}
   {% if can_edit_payment %}
   <form id="editPaymentForm" method="post" action="/purchases/{{ purchase.id }}/change-payment-method"
-        style="display:none;margin:8px 0 0;padding:12px 14px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:13px;max-width:420px;">
+        style="display:none;margin:8px 0 0;padding:12px 14px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:13px;max-width:420px;color:#0f172a;">
     <label class="pos-customer">Correct payment method to
       <select name="method">
         {% for value, label in payment_methods %}
@@ -112,6 +114,9 @@
     <span class="muted">Supplier: <strong style="color:var(--ink,#0f172a);">{{ purchase.supplier.name if purchase.supplier else '—' }}</strong></span>
     <span class="muted">Supplier Invoice: <strong style="color:var(--ink,#0f172a);">{{ purchase.invoice_no or '—' }}</strong></span>
     <span class="muted">Delivered: <strong style="color:var(--ink,#0f172a);">{{ purchase.delivery_date or '—' }}</strong></span>
+    {% if purchase.txn_type == 'receive' %}
+    <span class="muted">VAT: <strong style="color:var(--ink,#0f172a);">{{ 'Yes' if purchase.vat_amount else 'No' }}</strong></span>
+    {% endif %}
     {% if purchase.notes %}<span class="muted">Notes: {{ purchase.notes }}</span>{% endif %}
     {% if can_edit_details %}
     <a href="#" onclick="showEditDetails(event)" style="font-size:12px;">✎ edit</a>
@@ -120,7 +125,7 @@
 
   {% if can_edit_details %}
   <form id="editDetailsForm" method="post" action="/purchases/{{ purchase.id }}/edit-details"
-        style="display:none;margin-top:14px;padding:12px 14px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:13px;max-width:420px;">
+        style="display:none;margin-top:14px;padding:12px 14px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:13px;max-width:420px;color:#0f172a;">
     <label class="pos-customer">Supplier
       <select name="supplier_id">
         {% for s in suppliers %}
@@ -134,6 +139,16 @@
     <label class="pos-customer" style="margin-top:8px;display:block;">Delivery date
       <input type="text" name="delivery_date" value="{{ purchase.delivery_date or '' }}" placeholder="as printed on the DR">
     </label>
+    {% if purchase.txn_type == 'receive' %}
+    <label class="checkbox" style="margin-top:10px;display:flex;align-items:center;gap:6px;{{ '' if can_edit_payment else 'opacity:.55;cursor:not-allowed;' }}">
+      <input type="checkbox" name="vat_applied" value="1" {{ 'checked' if purchase.vat_amount }}
+             {{ 'onclick="return false;" onkeydown="return false;" tabindex="-1"' if not can_edit_payment }}>
+      VAT (12%) · included
+    </label>
+    {% if not can_edit_payment %}
+    <p class="hint" style="margin:4px 0 0;">Can't be changed anymore — {{ 'a payment is already recorded' if purchase.status == 'paid' else 'this delivery has a cheque or return referring to it' }}.</p>
+    {% endif %}
+    {% endif %}
     <div style="margin-top:10px;display:flex;gap:8px;">
       <button type="submit" class="btn" style="padding:6px 12px;font-size:12.5px;">Save</button>
       <button type="button" class="btn-secondary" style="padding:6px 12px;font-size:12.5px;" onclick="hideEditDetails()">Cancel</button>
