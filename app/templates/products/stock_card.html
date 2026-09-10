@@ -13,7 +13,7 @@
   </div>
   <div class="head-actions">
     <a class="btn-secondary" href="{{ back }}" onclick="try { localStorage.removeItem('last_product_view'); } catch (e) {}">← Inventory</a>
-    <a class="btn-secondary" href="/products/{{ product.id }}/edit">Edit product</a>
+    <a class="btn-secondary" href="/products/{{ product.id }}/edit?back={{ back|urlencode }}">Edit product</a>
     <a class="btn-secondary" href="/?track_product={{ product.id }}">📈 Cost &amp; price history</a>
   </div>
 </div>
