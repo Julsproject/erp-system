@@ -93,7 +93,7 @@
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Invoice #</th><th>Type</th><th>Date</th><th>Customer</th><th>Payment</th>{% if search_all %}<th>Status</th>{% endif %}<th class="num">Total</th><th></th></tr>
+      <tr><th>Invoice #</th><th>Type</th><th>Date</th><th>Customer</th><th>TIN #</th><th>Payment</th>{% if search_all %}<th>Status</th>{% endif %}<th class="num">Total</th><th></th></tr>
     </thead>
     <tbody>
       {% for s in sales %}
@@ -102,6 +102,7 @@
         <td><span class="txn txn-{{ s.txn_type }}">{{ types.get(s.txn_type, s.txn_type|capitalize) }}</span></td>
         <td>{{ s.created_at.strftime('%b %d, %Y %I:%M %p') if s.created_at else '' }}</td>
         <td>{{ s.customer_name or 'Walk-in' }}{% if s.encoded_by %} <span class="muted" style="font-size:11px;">encoded by {{ s.encoded_by.name }}</span>{% endif %}</td>
+        <td>{{ (s.customer.tin if s.customer else '') or '—' }}</td>
         <td>{{ s.payment_method or '—' }}</td>
         {% if search_all %}
         {% set st = row_status.get(s.id) %}
@@ -116,13 +117,13 @@
         <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales">Receipt</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="{{ 8 if search_all else 7 }}" class="empty">{{ 'No invoices' if search_all else 'No fully-paid sales' }} {{ 'match that filter' if (q or type_filter or date_from or date_to) else 'yet' }}.</td></tr>
+      <tr><td colspan="{{ 9 if search_all else 8 }}" class="empty">{{ 'No invoices' if search_all else 'No fully-paid sales' }} {{ 'match that filter' if (q or type_filter or date_from or date_to) else 'yet' }}.</td></tr>
       {% endfor %}
     </tbody>
     {% if sales %}
     <tfoot>
       <tr style="background:var(--surface-2);">
-        <td colspan="{{ 6 if search_all else 5 }}" class="strong">Total{{ ' (excl. voided)' if search_all else (' (this filter)' if (q or type_filter or date_from or date_to or receipt_type)) }}</td>
+        <td colspan="{{ 7 if search_all else 6 }}" class="strong">Total{{ ' (excl. voided)' if search_all else (' (this filter)' if (q or type_filter or date_from or date_to or receipt_type)) }}</td>
         <td class="num strong">{{ totals.sales|peso }}</td>
         <td></td>
       </tr>
