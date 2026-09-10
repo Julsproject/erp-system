@@ -1056,7 +1056,7 @@ def change_payment_method(
     # reversal anyway and leave the purchase with no live entry at all — so
     # roll back everything and surface the error instead of correcting it.
     try:
-        accounting.reverse_purchase_posting(db, purchase, reason="Payment method correction", entered_by_id=user.id)
+        accounting.reverse_purchase_posting(db, purchase, reason="Payment method correction", entered_by_id=user.id, same_date=True)
         accounting.post_purchase_receive(db, purchase, is_payable=is_payable, payment_method=new_method, entered_by_id=user.id)
     except accounting.PostingError:
         db.rollback()
@@ -1085,6 +1085,13 @@ def change_payment_method(
     return RedirectResponse(f"/purchases/{purchase_id}", status_code=http_status.HTTP_302_FOUND)
 
 
+EDIT_VAT_ERRORS = {
+    "linked": "Item(s)+from+this+delivery+were+already+returned+%E2%80%94+cancel+that+return+first.",
+    "settled": "A+payment+has+already+been+recorded+against+this+purchase+%E2%80%94+VAT+can%27t+be+corrected+anymore.",
+    "pdc": "A+cheque+was+issued+for+this+purchase+%E2%80%94+VAT+can%27t+be+corrected+anymore.",
+}
+
+
 @router.post("/purchases/{purchase_id:int}/edit-details")
 def edit_purchase_details(
     purchase_id: int,
@@ -1092,13 +1099,19 @@ def edit_purchase_details(
     supplier_id: str = Form(""),
     invoice_no: str = Form(""),
     delivery_date: str = Form(""),
+    vat_applied: str = Form(""),
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    """Correct the supplier / supplier invoice # / delivery date on an
-    already-saved purchase — for a typo made while encoding the delivery.
-    Doesn't touch stock or cost, so it's allowed any time the purchase isn't
-    cancelled (unlike item editing, which is much more restricted)."""
+    """Correct the supplier / supplier invoice # / delivery date / VAT
+    checkbox on an already-saved purchase — for a typo, or a forgotten VAT
+    tick, made while encoding the delivery. Supplier/invoice/date never
+    touch accounting, so those are allowed any time the purchase isn't
+    cancelled. VAT does — it re-splits the receive posting between
+    Inventory and Input VAT (see accounting.post_purchase_receive) without
+    changing what's owed/paid (the credit side is always the same total)
+    — so that part reuses change_payment_method's same reverse-and-repost
+    gate (_can_edit_purchase_items) and only ever applies to a 'receive'."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     purchase = db.get(models.Purchase, purchase_id)
@@ -1124,24 +1137,49 @@ def edit_purchase_details(
     old_supplier_id = purchase.supplier_id
     old_invoice_no = purchase.invoice_no
     old_delivery_date = purchase.delivery_date
-    if (new_supplier_id, new_invoice_no, new_delivery_date) == (old_supplier_id, old_invoice_no, old_delivery_date):
+    old_vat_applied = bool(purchase.vat_amount)
+    new_vat_applied = bool(vat_applied) if purchase.txn_type == "receive" else old_vat_applied
+    vat_changed = new_vat_applied != old_vat_applied
+
+    if (new_supplier_id, new_invoice_no, new_delivery_date) == (old_supplier_id, old_invoice_no, old_delivery_date) and not vat_changed:
         return _back()
+
+    if vat_changed:
+        block_reason = _can_edit_purchase_items(db, purchase)
+        if block_reason:
+            return _back(EDIT_VAT_ERRORS.get(block_reason, "VAT+can%27t+be+corrected+anymore."))
 
     purchase.supplier_id = new_supplier_id
     purchase.invoice_no = new_invoice_no
     purchase.delivery_date = new_delivery_date
 
+    if vat_changed:
+        purchase.vat_amount = _vat_of(purchase.total) if new_vat_applied else Decimal("0")
+        purchase.net_amount = purchase.total - purchase.vat_amount
+        try:
+            accounting.reverse_purchase_posting(db, purchase, reason="VAT correction", entered_by_id=user.id, same_date=True)
+            accounting.post_purchase_receive(
+                db, purchase, is_payable=(purchase.status == "confirmed"),
+                payment_method=purchase.payment_method, entered_by_id=user.id,
+            )
+        except accounting.PostingError:
+            db.rollback()
+            return _back("No+account+is+mapped+for+Input+VAT+in+Accounting+Setup+%E2%80%94+nothing+was+changed.")
+
     old_supplier = db.get(models.Supplier, old_supplier_id) if old_supplier_id else None
     new_supplier = db.get(models.Supplier, new_supplier_id)
+    changes = {
+        "supplier": [old_supplier.name if old_supplier else None, new_supplier.name if new_supplier else None],
+        "invoice_no": [old_invoice_no, new_invoice_no],
+        "delivery_date": [old_delivery_date, new_delivery_date],
+    }
+    if vat_changed:
+        changes["vat_applied"] = [old_vat_applied, new_vat_applied]
     audit.record(
         db, user=user, request=request, action="update", entity_type="purchase",
         entity_id=purchase.id, entity_label=purchase.ref_no,
         summary=f"Corrected details on {purchase.ref_no}",
-        changes={
-            "supplier": [old_supplier.name if old_supplier else None, new_supplier.name if new_supplier else None],
-            "invoice_no": [old_invoice_no, new_invoice_no],
-            "delivery_date": [old_delivery_date, new_delivery_date],
-        },
+        changes=changes,
     )
     db.commit()
     return _back()

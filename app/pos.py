@@ -2226,7 +2226,7 @@ def edit_sale_payment_method(
         sale.payment_method = METHOD_LABELS[new_method]
         db.add(models.Payment(sale_id=sale.id, method=new_method, amount=sale.total))
 
-        accounting.reverse_sale_posting(db, sale, reason=f"Payment method corrected: receivable -> {new_method}", entered_by_id=user.id)
+        accounting.reverse_sale_posting(db, sale, reason=f"Payment method corrected: receivable -> {new_method}", entered_by_id=user.id, same_date=True)
         try:
             accounting.post_sale(db, sale, method_rows=[(new_method, sale.total)], receivable_amount=Decimal("0"), entered_by_id=user.id)
         except accounting.PostingError:
@@ -2265,7 +2265,7 @@ def edit_sale_payment_method(
         sale.due_date = date.today() + timedelta(days=int(days))
         sale.payment_method = METHOD_LABELS["receivable"]
 
-        accounting.reverse_sale_posting(db, sale, reason=f"Payment method corrected: {old_method} -> receivable", entered_by_id=user.id)
+        accounting.reverse_sale_posting(db, sale, reason=f"Payment method corrected: {old_method} -> receivable", entered_by_id=user.id, same_date=True)
         try:
             accounting.post_sale(db, sale, method_rows=[], receivable_amount=sale.total, entered_by_id=user.id)
         except accounting.PostingError:
@@ -2294,7 +2294,7 @@ def edit_sale_payment_method(
     payment.method = new_method
     sale.payment_method = METHOD_LABELS[new_method]
 
-    accounting.reverse_sale_posting(db, sale, reason=f"Payment method corrected: {old_method} -> {new_method}", entered_by_id=user.id)
+    accounting.reverse_sale_posting(db, sale, reason=f"Payment method corrected: {old_method} -> {new_method}", entered_by_id=user.id, same_date=True)
     try:
         accounting.post_sale(
             db, sale, method_rows=[(new_method, sale.total)], receivable_amount=Decimal("0"), entered_by_id=user.id,

@@ -181,12 +181,20 @@ def delete_draft_entry(db: Session, entry: models.JournalEntry) -> bool:
     return True
 
 
-def reverse_journal(db: Session, entry: models.JournalEntry, *, reason: str = None, entered_by_id: int = None) -> models.JournalEntry:
+def reverse_journal(db: Session, entry: models.JournalEntry, *, reason: str = None, entered_by_id: int = None, txn_date=None) -> models.JournalEntry:
     """Insert a mirror-image entry (every debit becomes a credit and vice
     versa) and mark the original reversed. Never mutates or deletes the
-    original entry's lines."""
+    original entry's lines.
+
+    `txn_date` defaults to today (a void happening now should hit today's
+    books). A caller that's about to immediately re-post a corrected
+    version of this same entry should instead pass the original entry's own
+    txn_date — otherwise the reversal (dated today) and the backdated
+    replacement land in different reporting periods, so any period ending
+    between the two shows the mistake and its correction as two separate,
+    un-netted Output/Input VAT lines instead of one clean corrected one."""
     reversal = models.JournalEntry(
-        journal_no=_next_journal_no(db), txn_date=_today(), reference_no=entry.reference_no,
+        journal_no=_next_journal_no(db), txn_date=txn_date or _today(), reference_no=entry.reference_no,
         source_type="reversal", source_id=entry.id,
         description=f"Reversal of {entry.journal_no}" + (f": {reason}" if reason else ""),
         is_reversal_of_id=entry.id, entered_by_id=entered_by_id,
@@ -242,9 +250,17 @@ def post_sale(db: Session, sale: models.Sale, *, method_rows: list, receivable_a
     )
 
 
-def reverse_sale_posting(db: Session, sale: models.Sale, *, reason: str, entered_by_id: int = None):
-    """Called from pos.py's void_sale. No-op (not an error) if the sale
-    predates Phase 1 and never got a journal entry in the first place."""
+def reverse_sale_posting(db: Session, sale: models.Sale, *, reason: str, entered_by_id: int = None, same_date: bool = False):
+    """Called from pos.py's void_sale, and from its payment-method
+    correction flows. No-op (not an error) if the sale predates Phase 1 and
+    never got a journal entry in the first place.
+
+    `same_date=True` is for a correction that immediately re-posts a
+    replacement entry (see reverse_journal) — it dates this reversal to
+    match the entry being reversed instead of today, so the mistake and its
+    fix always net to zero within the sale's own original period. Leave it
+    False for an actual void, which has no replacement and should hit the
+    books on the day it was voided."""
     entry = (
         db.query(models.JournalEntry)
         .filter(models.JournalEntry.source_type == "sale", models.JournalEntry.source_id == sale.id,
@@ -253,7 +269,8 @@ def reverse_sale_posting(db: Session, sale: models.Sale, *, reason: str, entered
     )
     if not entry:
         return None
-    return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id)
+    return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id,
+                            txn_date=entry.txn_date if same_date else None)
 
 
 def restore_sale_posting(db: Session, sale: models.Sale, *, reason: str, entered_by_id: int = None):
@@ -388,13 +405,17 @@ def post_purchase_settlement(db: Session, purchase: models.Purchase, *, amount: 
     )
 
 
-def reverse_purchase_posting(db: Session, purchase: models.Purchase, *, reason: str, entered_by_id: int = None):
-    """Called from purchases.py's cancel_purchase. Reverses only the
-    original receive/return entry (source_type="purchase") — NOT any
+def reverse_purchase_posting(db: Session, purchase: models.Purchase, *, reason: str, entered_by_id: int = None, same_date: bool = False):
+    """Called from purchases.py's cancel_purchase, and from its
+    payment-method/VAT correction flows. Reverses only the original
+    receive/return entry (source_type="purchase") — NOT any
     PurchaseSettlement postings already made against it. Cancelling a
     purchase that's already been partially paid down is a pre-existing gap
     in the operational code too (cancel_purchase doesn't block on it), so
-    this mirrors that rather than silently fixing scope beyond Phase 2."""
+    this mirrors that rather than silently fixing scope beyond Phase 2.
+
+    `same_date=True` is for a correction that immediately re-posts a
+    replacement entry — see reverse_sale_posting's same param for why."""
     entry = (
         db.query(models.JournalEntry)
         .filter(models.JournalEntry.source_type == "purchase", models.JournalEntry.source_id == purchase.id,
@@ -403,7 +424,8 @@ def reverse_purchase_posting(db: Session, purchase: models.Purchase, *, reason: 
     )
     if not entry:
         return None
-    return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id)
+    return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id,
+                            txn_date=entry.txn_date if same_date else None)
 
 
 EXPENSE_PAY_FUNCTION_KEYS = {
@@ -1156,6 +1178,172 @@ def _vat_period_total(db: Session, system_key: str, period_start: date, period_e
     return (debit - credit) if account.normal_balance == "debit" else (credit - debit)
 
 
+def _vat_input_detail(db: Session, period_start: date, period_end: date):
+    """Per-transaction breakdown of what fed the Input VAT account this
+    period — a Purchase receive or an Expense, resolved back through a
+    reversal the same way _resolve_party does for the AR/AP subledger, so a
+    cancelled purchase's reversal still reads as that purchase, not as a
+    nameless 'reversal' line. Shaped to match _vat_output_detail's columns
+    (date / invoice / party name / TIN) — a Purchase's own supplier invoice
+    # (invoice_no, not the internal ref_no) and its Supplier.tin; an Expense
+    has no linked supplier record, so it falls back to its receipt # and
+    payee name, with TIN blank (nothing on Expense carries one)."""
+    account = db.query(models.Account).filter(models.Account.system_key == "INPUT_VAT").first()
+    if not account:
+        return []
+    rows = (
+        db.query(models.JournalLine, models.JournalEntry)
+        .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
+        .filter(models.JournalLine.account_id == account.id,
+                models.JournalEntry.txn_date.between(period_start, period_end),
+                models.JournalEntry.status != "draft")
+        .order_by(models.JournalEntry.txn_date, models.JournalEntry.id)
+        .all()
+    )
+    detail = []
+    for line, entry in rows:
+        amount = line.debit - line.credit
+        if amount == 0:
+            continue
+        source_type, source_id = entry.source_type, entry.source_id
+        is_reversal = source_type == "reversal"
+        if is_reversal and entry.is_reversal_of_id:
+            original = db.get(models.JournalEntry, entry.is_reversal_of_id)
+            if original:
+                source_type, source_id = original.source_type, original.source_id
+        supplier_invoice, supplier_name, supplier_tin, source_link = entry.description, "Unspecified", "", None
+        net_of_vat, total_due = None, None
+        if source_type == "purchase" and source_id:
+            purchase = db.get(models.Purchase, source_id)
+            if purchase:
+                supplier_invoice = purchase.invoice_no or purchase.ref_no
+                supplier_name = purchase.supplier.name if purchase.supplier else "Unspecified supplier"
+                supplier_tin = purchase.supplier.tin if purchase.supplier else ""
+                source_link = f"/purchases/{purchase.id}"
+                net_of_vat, total_due = purchase.net_amount, purchase.total
+        elif source_type == "expense" and source_id:
+            expense = db.get(models.Expense, source_id)
+            if expense:
+                supplier_invoice = expense.receipt_no or expense.reference_no or expense.ref_no
+                supplier_name = expense.payee or "Unspecified payee"
+                supplier_tin = ""
+                source_link = f"/expenses/{expense.id}/edit"
+                net_of_vat, total_due = expense.amount - expense.vat_amount, expense.amount
+        # A reversal (e.g. a cancelled purchase) posts the opposite sign of
+        # the original entry — amount above already reflects that via
+        # debit/credit, but net_of_vat/total_due were just read off the
+        # original record, so negate them the same way to keep this row's
+        # own numbers consistent (amount == total_due - net_of_vat).
+        if is_reversal:
+            if net_of_vat is not None:
+                net_of_vat = -net_of_vat
+            if total_due is not None:
+                total_due = -total_due
+        detail.append({
+            "date": entry.txn_date, "supplier_invoice": supplier_invoice,
+            "supplier_name": supplier_name, "supplier_tin": supplier_tin,
+            "source_link": source_link, "amount": amount,
+            "net_of_vat": net_of_vat, "total_due": total_due,
+        })
+    return detail
+
+
+def _vat_output_detail(db: Session, period_start: date, period_end: date):
+    """Per-transaction breakdown of what fed the Output VAT account this
+    period — one row per Sale (a refund/exchange included, since post_sale
+    posts OUTPUT_VAT for those too), with the customer name and TIN a BIR
+    VAT summary needs. Resolved back through a reversal (a void) the same
+    way _vat_input_detail resolves a cancelled purchase."""
+    account = db.query(models.Account).filter(models.Account.system_key == "OUTPUT_VAT").first()
+    if not account:
+        return []
+    rows = (
+        db.query(models.JournalLine, models.JournalEntry)
+        .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
+        .filter(models.JournalLine.account_id == account.id,
+                models.JournalEntry.txn_date.between(period_start, period_end),
+                models.JournalEntry.status != "draft")
+        .order_by(models.JournalEntry.txn_date, models.JournalEntry.id)
+        .all()
+    )
+    detail = []
+    for line, entry in rows:
+        amount = line.credit - line.debit
+        if amount == 0:
+            continue
+        source_type, source_id = entry.source_type, entry.source_id
+        is_reversal = source_type == "reversal"
+        if is_reversal and entry.is_reversal_of_id:
+            original = db.get(models.JournalEntry, entry.is_reversal_of_id)
+            if original:
+                source_type, source_id = original.source_type, original.source_id
+        invoice_no, customer_name, customer_tin, source_link = entry.description, "Walk-in / Unspecified", "", None
+        net_of_vat, total_due = None, None
+        if source_type == "sale" and source_id:
+            sale = db.get(models.Sale, source_id)
+            if sale:
+                invoice_no = sale.invoice_no or entry.description
+                customer_name = (sale.customer.name if sale.customer else None) or sale.customer_name or "Walk-in / Unspecified"
+                customer_tin = sale.customer.tin if sale.customer else ""
+                source_link = f"/pos/receipt/{sale.id}?from=sales"
+                net_of_vat, total_due = sale.net_amount, sale.total
+        # See _vat_input_detail's comment: negate a reversal's net/total so
+        # this row's own numbers stay internally consistent with its amount.
+        if is_reversal:
+            if net_of_vat is not None:
+                net_of_vat = -net_of_vat
+            if total_due is not None:
+                total_due = -total_due
+        detail.append({
+            "date": entry.txn_date, "invoice_no": invoice_no,
+            "customer_name": customer_name, "customer_tin": customer_tin,
+            "source_link": source_link, "amount": amount,
+            "net_of_vat": net_of_vat, "total_due": total_due,
+        })
+    return detail
+
+
+VAT_GAP_RANGE_LIMIT = 5000
+
+
+def _vat_output_invoice_gaps(db: Session, period_start: date, period_end: date):
+    """Runs pos.py's invoice-gap check automatically over whichever
+    booklet(s) and number range actually turn up in this period's Output
+    VAT — a BIR VAT summary needs every invoice number accounted for, so
+    this surfaces that right on the report instead of making someone run
+    /pos/invoice-gaps by hand and guess the range. One result per booklet,
+    since DRS 52260 and SI 52260 are different receipts (see pos.py)."""
+    from .pos import _invoice_gap_check, _numeric_core  # local import: pos.py imports this module, so a
+                                                          # top-level import here would be circular.
+
+    rows = (
+        db.query(models.Sale.receipt_type, models.Sale.invoice_no)
+        .filter(models.Sale.receipt_type.isnot(None),
+                _local_date(models.Sale.created_at).between(period_start, period_end))
+        .all()
+    )
+    by_booklet = {}
+    for receipt_type, invoice_no in rows:
+        core = _numeric_core(invoice_no)
+        if core is None:
+            continue
+        width = len(invoice_no or "")
+        if receipt_type not in by_booklet:
+            by_booklet[receipt_type] = [core, core, width]
+        else:
+            entry = by_booklet[receipt_type]
+            entry[0] = min(entry[0], core)
+            entry[1] = max(entry[1], core)
+            entry[2] = max(entry[2], width)
+
+    results = []
+    for receipt_type, (lo, hi, width) in sorted(by_booklet.items()):
+        if hi - lo + 1 > VAT_GAP_RANGE_LIMIT:
+            continue  # unusually wide span for one period — leave it to the standalone tool
+        results.append(_invoice_gap_check(db, receipt_type, lo, hi, width))
+    return results
+
+
 @router.get("/accounting/vat-report", response_class=HTMLResponse)
 def vat_report(
     request: Request, days: int = 30, date_from: str = "", date_to: str = "",
@@ -1170,6 +1358,14 @@ def vat_report(
     output_vat = _vat_period_total(db, "OUTPUT_VAT", period_start, period_end)
     input_vat = _vat_period_total(db, "INPUT_VAT", period_start, period_end)
     vat_payable = output_vat - input_vat
+    input_vat_detail = _vat_input_detail(db, period_start, period_end)
+    output_vat_detail = _vat_output_detail(db, period_start, period_end)
+    output_vat_gaps = _vat_output_invoice_gaps(db, period_start, period_end)
+    output_vat_missing_count = sum(r["missing_count"] for r in output_vat_gaps)
+    output_vat_net_total = sum((r["net_of_vat"] for r in output_vat_detail if r["net_of_vat"] is not None), Decimal(0))
+    output_vat_total_due = sum((r["total_due"] for r in output_vat_detail if r["total_due"] is not None), Decimal(0))
+    input_vat_net_total = sum((r["net_of_vat"] for r in input_vat_detail if r["net_of_vat"] is not None), Decimal(0))
+    input_vat_total_due = sum((r["total_due"] for r in input_vat_detail if r["total_due"] is not None), Decimal(0))
 
     # Reconciliation vs. the operational figures those postings came from.
     sale_vat_total = (
@@ -1180,21 +1376,116 @@ def vat_report(
     )
     sale_vat_total = Decimal(str(sale_vat_total or 0))
 
+    # Both Purchases (post_purchase_receive) and Expenses post Input VAT —
+    # reconcile against the sum of both, not just Expense.vat_amount.
+    purchase_vat_total = (
+        db.query(func.coalesce(func.sum(models.Purchase.vat_amount), 0))
+        .filter(models.Purchase.txn_type == "receive", models.Purchase.status != "cancelled",
+                _local_date(models.Purchase.created_at).between(period_start, period_end))
+        .scalar()
+    )
+    purchase_vat_total = Decimal(str(purchase_vat_total or 0))
+
     expense_vat_total = (
         db.query(func.coalesce(func.sum(models.Expense.vat_amount), 0))
         .filter(models.Expense.is_voided.is_(False), models.Expense.expense_date.between(period_start, period_end))
         .scalar()
     )
     expense_vat_total = Decimal(str(expense_vat_total or 0))
+    input_operational_total = purchase_vat_total + expense_vat_total
 
     return templates.TemplateResponse(
         "accounting/vat_report.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "output_vat": output_vat, "input_vat": input_vat, "vat_payable": vat_payable,
-         "sale_vat_total": sale_vat_total, "expense_vat_total": expense_vat_total,
-         "output_diff": output_vat - sale_vat_total, "input_diff": input_vat - expense_vat_total,
+         "input_vat_detail": input_vat_detail, "output_vat_detail": output_vat_detail,
+         "output_vat_net_total": output_vat_net_total, "output_vat_total_due": output_vat_total_due,
+         "input_vat_net_total": input_vat_net_total, "input_vat_total_due": input_vat_total_due,
+         "output_vat_gaps": output_vat_gaps, "output_vat_missing_count": output_vat_missing_count,
+         "sale_vat_total": sale_vat_total, "purchase_vat_total": purchase_vat_total,
+         "expense_vat_total": expense_vat_total, "input_operational_total": input_operational_total,
+         "output_diff": output_vat - sale_vat_total, "input_diff": input_vat - input_operational_total,
          "days": days, "date_from": date_from, "date_to": date_to,
          "period_start": period_start, "period_end": period_end, "custom": custom},
+    )
+
+
+@router.get("/accounting/vat-report/export")
+def export_vat_report(days: int = 30, date_from: str = "", date_to: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+    period_start, period_end, _ = _resolve_period(days, date_from, date_to)
+
+    output_vat = _vat_period_total(db, "OUTPUT_VAT", period_start, period_end)
+    input_vat = _vat_period_total(db, "INPUT_VAT", period_start, period_end)
+    output_detail = _vat_output_detail(db, period_start, period_end)
+    input_detail = _vat_input_detail(db, period_start, period_end)
+
+    wb = openpyxl.Workbook()
+    header_fill = PatternFill("solid", fgColor="1F6FEB")
+
+    ws = wb.active
+    ws.title = "Summary"
+    ws.append(["Period", f"{period_start.isoformat()} to {period_end.isoformat()}"])
+    ws.append([])
+    ws.append(["Output VAT (collected on Sales)", float(output_vat)])
+    ws.append(["Input VAT (paid on Purchases/Expenses)", float(input_vat)])
+    ws.append(["VAT Payable", float(output_vat - input_vat)])
+    for row in ws.iter_rows(min_row=3, max_row=5):
+        row[0].font = Font(bold=True)
+    ws.column_dimensions["A"].width = 34
+    ws.column_dimensions["B"].width = 20
+
+    output_net_total = sum((r["net_of_vat"] for r in output_detail if r["net_of_vat"] is not None), Decimal(0))
+    output_total_due = sum((r["total_due"] for r in output_detail if r["total_due"] is not None), Decimal(0))
+    input_net_total = sum((r["net_of_vat"] for r in input_detail if r["net_of_vat"] is not None), Decimal(0))
+    input_total_due = sum((r["total_due"] for r in input_detail if r["total_due"] is not None), Decimal(0))
+
+    ws2 = wb.create_sheet("Output VAT")
+    ws2.append(["Date", "Invoice #", "Customer", "TIN #", "Net of VAT", "Output VAT", "Total Amount Due"])
+    for cell in ws2[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+    for r in output_detail:
+        ws2.append([r["date"].isoformat(), r["invoice_no"], r["customer_name"], r["customer_tin"] or "",
+                    float(r["net_of_vat"]) if r["net_of_vat"] is not None else None,
+                    float(r["amount"]),
+                    float(r["total_due"]) if r["total_due"] is not None else None])
+    ws2.append(["", "", "", "Total", float(output_net_total), float(output_vat), float(output_total_due)])
+    for cell in ws2[ws2.max_row]:
+        cell.font = Font(bold=True)
+    for i, w in enumerate([13, 16, 32, 20, 16, 16, 18], start=1):
+        ws2.column_dimensions[get_column_letter(i)].width = w
+    ws2.freeze_panes = "A2"
+
+    ws3 = wb.create_sheet("Input VAT")
+    ws3.append(["Date", "Supplier Invoice #", "Supplier Name", "TIN #", "Net of VAT", "Input VAT", "Total Amount Due"])
+    for cell in ws3[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+    for r in input_detail:
+        ws3.append([r["date"].isoformat(), r["supplier_invoice"], r["supplier_name"], r["supplier_tin"] or "",
+                    float(r["net_of_vat"]) if r["net_of_vat"] is not None else None,
+                    float(r["amount"]),
+                    float(r["total_due"]) if r["total_due"] is not None else None])
+    ws3.append(["", "", "", "Total", float(input_net_total), float(input_vat), float(input_total_due)])
+    for cell in ws3[ws3.max_row]:
+        cell.font = Font(bold=True)
+    for i, w in enumerate([13, 18, 32, 20, 16, 16, 18], start=1):
+        ws3.column_dimensions[get_column_letter(i)].width = w
+    ws3.freeze_panes = "A2"
+
+    import io
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"vat_report_{period_start.isoformat()}_to_{period_end.isoformat()}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
