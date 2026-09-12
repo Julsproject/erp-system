@@ -30,7 +30,7 @@ from .database import SessionLocal, get_db
 from .deps import get_current_user, is_staff, safe_back_url
 from .double_deductions import find_all_double_deduction_candidates, find_double_deduction_candidates
 from .search_utils import multi_word_ilike
-from .templating import templates
+from .templating import qty, templates
 
 router = APIRouter()
 
@@ -2171,6 +2171,29 @@ OUT_INTENT_REASONS = {"sale", "exchange-sale", "purchase-return", "purchase-edit
 IN_INTENT_REASONS = {"refund", "exchange-return", "purchase", "void", "sale-edit-reverse", "correction", "repack-in"}
 
 
+def _box_breakdown(base_amount: Decimal, factor: Decimal, unit_name: str, base_unit_name: str) -> str:
+    """Format a base-unit quantity for Stock Card's converted-unit view.
+
+    A plain division (e.g. 92 base pcs / 80 = "1.15") reads as noise once the
+    product is tracked in bigger units — nobody counts stock in fractions of
+    a box. Broken into whole units plus a base-unit remainder ("1 BOX 12
+    Piece") it matches the "Sealed: X bags · Open container: Y Kg" pattern
+    already used elsewhere for partial-unit stock.
+    """
+    if factor == 1:
+        return qty(base_amount)
+    sign = "-" if base_amount < 0 else ""
+    amount = abs(base_amount)
+    whole_units = int(amount // factor)
+    remainder = amount - (whole_units * factor)
+    parts = []
+    if whole_units:
+        parts.append(f"{whole_units} {unit_name}")
+    if remainder or not whole_units:
+        parts.append(f"{qty(remainder)} {base_unit_name}")
+    return sign + " ".join(parts)
+
+
 @router.get("/products/{product_id:int}/stock-card", response_class=HTMLResponse)
 def stock_card(
     product_id: int, request: Request, back: str = "", unit: int = 0,
@@ -2205,6 +2228,7 @@ def stock_card(
     view_unit = next((u for u in product.units if u.id == unit), None) if unit else None
     view_factor = Decimal(str(view_unit.factor_to_base)) if view_unit and view_unit.factor_to_base else Decimal("1")
     view_unit_name = view_unit.name if view_unit else (product.unit_type.name if product.unit_type else "base unit")
+    base_unit_name = product.unit_type.name if product.unit_type else "unit"
 
     def _parse_range_date(s):
         try:
@@ -2357,15 +2381,19 @@ def stock_card(
             ref_link = None
 
         if delta > 0:
-            in_qty, out_qty = delta / view_factor, None
+            in_qty_raw, out_qty_raw = delta, None
         elif delta < 0:
-            in_qty, out_qty = None, -delta / view_factor
+            in_qty_raw, out_qty_raw = None, -delta
         elif m.reason in OUT_INTENT_REASONS:
-            in_qty, out_qty = None, Decimal("0")
+            in_qty_raw, out_qty_raw = None, Decimal("0")
         elif m.reason in IN_INTENT_REASONS:
-            in_qty, out_qty = Decimal("0"), None
+            in_qty_raw, out_qty_raw = Decimal("0"), None
         else:
-            in_qty, out_qty = None, None
+            in_qty_raw, out_qty_raw = None, None
+        in_qty = in_qty_raw / view_factor if in_qty_raw is not None else None
+        out_qty = out_qty_raw / view_factor if out_qty_raw is not None else None
+        in_qty_disp = _box_breakdown(in_qty_raw, view_factor, view_unit_name, base_unit_name) if in_qty_raw is not None else None
+        out_qty_disp = _box_breakdown(out_qty_raw, view_factor, view_unit_name, base_unit_name) if out_qty_raw is not None else None
 
         if value_delta > 0:
             value_in, value_out = value_delta, None
@@ -2383,7 +2411,13 @@ def stock_card(
             "label": MOVEMENT_LABELS.get(m.reason, (m.reason or "").replace("-", " ").title()),
             "in_qty": in_qty,
             "out_qty": out_qty,
+            "in_qty_raw": in_qty_raw,
+            "out_qty_raw": out_qty_raw,
+            "in_qty_disp": in_qty_disp,
+            "out_qty_disp": out_qty_disp,
             "balance": running / view_factor,
+            "balance_raw": running,
+            "balance_disp": _box_breakdown(running, view_factor, view_unit_name, base_unit_name),
             "value_in": value_in,
             "value_out": value_out,
             "balance_value": running_value,
@@ -2403,9 +2437,10 @@ def stock_card(
     # balance math. The range's own "opening" is just whatever balance sat
     # right before its first visible row (the true opening if the range
     # reaches back to the very first movement).
-    range_opening = opening
+    range_opening_raw = opening
     range_value_opening = opening_value
     range_in = range_out = Decimal("0")
+    range_in_raw = range_out_raw = Decimal("0")
     range_value_in = range_value_out = Decimal("0")
     if range_from or range_to:
         visible = []
@@ -2416,19 +2451,23 @@ def stock_card(
                 visible.append(r)
                 if r["in_qty"]:
                     range_in += r["in_qty"]
+                    range_in_raw += r["in_qty_raw"]
                 if r["out_qty"]:
                     range_out += r["out_qty"]
+                    range_out_raw += r["out_qty_raw"]
                 if r["value_in"]:
                     range_value_in += r["value_in"]
                 if r["value_out"]:
                     range_value_out += r["value_out"]
             elif not visible:
-                range_opening = r["balance"]
+                range_opening_raw = r["balance_raw"]
                 range_value_opening = r["balance_value"]
         rows = visible
     else:
         range_in, range_out = total_in / view_factor, total_out / view_factor
+        range_in_raw, range_out_raw = total_in, total_out
         range_value_in, range_value_out = total_value_in, total_value_out
+    range_opening = range_opening_raw / view_factor
 
     rows.reverse()  # newest first for display
 
@@ -2440,6 +2479,10 @@ def stock_card(
             "current_total": current_total / view_factor,
             "total_in": total_in / view_factor, "total_out": total_out / view_factor,
             "range_opening": range_opening, "range_in": range_in, "range_out": range_out,
+            "current_total_disp": _box_breakdown(current_total, view_factor, view_unit_name, base_unit_name),
+            "range_opening_disp": _box_breakdown(range_opening_raw, view_factor, view_unit_name, base_unit_name),
+            "range_in_disp": _box_breakdown(range_in_raw, view_factor, view_unit_name, base_unit_name),
+            "range_out_disp": _box_breakdown(range_out_raw, view_factor, view_unit_name, base_unit_name),
             "current_value": current_value,
             "opening_value": opening_value, "range_value_opening": range_value_opening,
             "range_value_in": range_value_in, "range_value_out": range_value_out,

@@ -78,9 +78,9 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
   <div class="mini-stat"><span class="mini-num">{{ range_value_out|peso }}</span><span>Total out (₱){{ ' · range' if (date_from or date_to) }}</span></div>
   <div class="mini-stat"><span class="mini-num">{{ range_count if (date_from or date_to) else count }}</span><span>Movements{{ ' · range' if (date_from or date_to) }}</span></div>
   {% else %}
-  <div class="mini-stat"><span class="mini-num">{{ current_total|qty }}</span><span>On hand now ({{ view_unit_name }})</span></div>
-  <div class="mini-stat"><span class="mini-num">{{ range_in|qty }}</span><span>Total in ({{ view_unit_name }}){{ ' · range' if (date_from or date_to) }}</span></div>
-  <div class="mini-stat"><span class="mini-num">{{ range_out|qty }}</span><span>Total out ({{ view_unit_name }}){{ ' · range' if (date_from or date_to) }}</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ current_total_disp if view_unit_id else current_total|qty }}</span><span>On hand now ({{ view_unit_name }})</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ range_in_disp if view_unit_id else range_in|qty }}</span><span>Total in ({{ view_unit_name }}){{ ' · range' if (date_from or date_to) }}</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ range_out_disp if view_unit_id else range_out|qty }}</span><span>Total out ({{ view_unit_name }}){{ ' · range' if (date_from or date_to) }}</span></div>
   <div class="mini-stat"><span class="mini-num">{{ range_count if (date_from or date_to) else count }}</span><span>Movements{{ ' · range' if (date_from or date_to) }}</span></div>
   {% endif %}
 </div>
@@ -133,9 +133,9 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
         <td class="muted">
           {% if r.ref_link %}<a class="btn-link" href="{{ r.ref_link }}">{{ m.ref }}</a>{% else %}{{ m.ref or '—' }}{% endif %}
         </td>
-        <td class="num" style="color:var(--ok);font-weight:600;">{{ ('+' ~ r.in_qty|qty) if r.in_qty is not none else '' }}</td>
-        <td class="num" style="color:var(--danger);font-weight:600;">{{ ('−' ~ r.out_qty|qty) if r.out_qty is not none else '' }}</td>
-        <td class="num strong">{{ r.balance|qty }}</td>
+        <td class="num" style="color:var(--ok);font-weight:600;">{{ ('+' ~ (r.in_qty_disp if view_unit_id else r.in_qty|qty)) if r.in_qty is not none else '' }}</td>
+        <td class="num" style="color:var(--danger);font-weight:600;">{{ ('−' ~ (r.out_qty_disp if view_unit_id else r.out_qty|qty)) if r.out_qty is not none else '' }}</td>
+        <td class="num strong">{{ r.balance_disp if view_unit_id else r.balance|qty }}</td>
         <td class="num muted">
           {% if r.unit_cost %}
             {{ r.unit_cost|peso }}{% if r.sold_unit %} <span style="font-size:11.5px;">/ {{ r.sold_unit }}</span>{% endif %}
@@ -157,7 +157,7 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
         <td class="muted" colspan="5" style="font-style:italic;">
           {% if date_from or date_to %}Opening balance for this range (before the earliest movement shown){% else %}Opening balance (implied — before the earliest movement){% endif %}
         </td>
-        <td class="num strong">{{ range_opening|qty }}</td>
+        <td class="num strong">{{ range_opening_disp if view_unit_id else range_opening|qty }}</td>
         <td colspan="2"></td>
       </tr>
       {% endif %}
