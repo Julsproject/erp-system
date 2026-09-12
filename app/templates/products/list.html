@@ -286,7 +286,13 @@
         </td>
         <td class="num">{{ p.beginning_stock|whole_qty }}</td>
         <td class="num">{{ p.stock_qty|whole_qty }}</td>
-        <td class="num strong">{{ p.total_qty|whole_qty }}</td>
+        <td class="num strong">
+          {% if p.unit_breakdown %}
+            {% set nonzero = p.unit_breakdown | rejectattr('qty', 'equalto', 0) | list %}
+            {% set tiers_shown = nonzero if nonzero else [p.unit_breakdown[-1]] %}
+            {%- for tier in tiers_shown -%}{{ tier.qty|qty }} {{ tier.name }}{{ ' ' if not loop.last }}{%- endfor -%}
+          {% else %}{{ p.total_qty|whole_qty }}{% endif %}
+        </td>
         <td class="row-actions">
           {% if is_admin_user %}<a class="btn-link" href="/products/{{ p.id }}/edit?back={{ cur_url|urlencode }}">Edit</a>{% endif %}
           {% if (user.role or '')|lower == 'admin' %}
