@@ -167,6 +167,12 @@
     </div>
   </details>
   {% endif %}
+
+  <a class="cat-pill {{ 'active' if alert }}"
+     href="/products?{{ ('q=' ~ q ~ '&' if q) }}{{ ('category_id=' ~ category_id ~ '&' if category_id) }}{{ ('subcategory_id=' ~ subcategory_id ~ '&' if subcategory_id) }}{{ ('shelf_id=' ~ shelf_id ~ '&' if shelf_id) }}alert={{ 0 if alert else 1 }}"
+     title="Selling price at or below cost — no price set, no margin, or a loss">
+    ⚠ No margin / below cost
+  </a>
 </div>
 
 <form class="toolbar" method="get" action="/products">
