@@ -412,7 +412,7 @@ def _invoice_taken(db: Session, invoice_no: str, receipt_type, exclude_sale_id: 
 
 
 @router.get("/pos", response_class=HTMLResponse)
-def pos_page(request: Request, expense_logged: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+def pos_page(request: Request, expense_logged: str = "", expense_logged_id: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     categories = db.query(models.Category).order_by(models.Category.name).all()
@@ -423,7 +423,7 @@ def pos_page(request: Request, expense_logged: str = "", db: Session = Depends(g
         "pos.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "categories": categories, "subcategories": subcategories, "unit_types": unit_types,
-         "encoders": encoders, "expense_logged": expense_logged},
+         "encoders": encoders, "expense_logged": expense_logged, "expense_logged_id": expense_logged_id},
     )
 
 

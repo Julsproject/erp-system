@@ -22,7 +22,10 @@
   {% endif %}
 </div>
 {% if expense_logged %}
-<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;margin-top:10px;">Expense {{ expense_logged }} recorded.</div>
+<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;margin-top:10px;">
+  Expense {{ expense_logged }} recorded.
+  {% if expense_logged_id %}<a href="/expenses/{{ expense_logged_id }}/receipt?back=%2Fpos" style="color:inherit;font-weight:700;text-decoration:underline;margin-left:6px;">🖨 Print receipt</a>{% endif %}
+</div>
 {% endif %}
 <div style="height:18px;"></div>
 

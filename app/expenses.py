@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import accounting, audit, models
+from . import accounting, audit, models, settings_store
 from .database import get_db
 from .deps import get_current_user, is_floor_staff, is_staff, safe_back_url
 from .templating import templates
@@ -169,6 +169,99 @@ def edit_expense(expense_id: int, request: Request, db: Session = Depends(get_db
     return _render_form(request, db, user, expense=expense)
 
 
+@router.get("/expenses/{expense_id:int}/receipt", response_class=HTMLResponse)
+def expense_receipt(expense_id: int, request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """A printable voucher for one expense — same permission as logging a
+    new one (floor staff, cashier included), so whoever just recorded it
+    from POS can print it immediately, not just admin/manager afterward."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_floor_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    expense = db.get(models.Expense, expense_id)
+    if not expense:
+        return RedirectResponse("/pos" if not is_staff(user) else "/expenses", status_code=302)
+    return templates.TemplateResponse(
+        "expenses/receipt.html",
+        {"request": request, "app_name": request.app.title, "user": user, "expense": expense,
+         "back": safe_back_url(back, "/pos" if not is_staff(user) else "/expenses")},
+    )
+
+
+@router.get("/expenses/{expense_id:int}/receipt/pdf")
+def expense_receipt_pdf(expense_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """A downloadable PDF version of the expense voucher — same shape as
+    the sales receipt's own PDF (see pos.pos_receipt_pdf), reusing the same
+    letterhead helper for a consistent look."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_floor_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    expense = db.get(models.Expense, expense_id)
+    if not expense:
+        return RedirectResponse("/pos" if not is_staff(user) else "/expenses", status_code=302)
+
+    import io
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from fastapi.responses import Response as FileResponse
+    from .pdf_utils import letterhead
+
+    biz = settings_store.get_all(db)
+    doc_meta = [f"Ref #: {expense.ref_no}", f"Date: {expense.expense_date.strftime('%b %d, %Y') if expense.expense_date else ''}"]
+    if expense.creator:
+        doc_meta.append(f"Recorded by: {expense.creator.full_name or expense.creator.username}")
+
+    payee_lines = [expense.payee or "Unspecified payee"]
+    if expense.tin:
+        payee_lines.append(f"TIN {expense.tin}")
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm, leftMargin=18 * mm, rightMargin=18 * mm)
+    styles = getSampleStyleSheet()
+    elements = letterhead(biz, "Expense Voucher", doc_meta, "Payee", payee_lines)
+
+    table_data = [
+        ["Category", expense.category.name if expense.category else "—"],
+        ["Payment Method", (expense.payment_method or "").replace("_", " ").title()],
+    ]
+    if expense.reference_no:
+        table_data.append(["Reference #", expense.reference_no])
+    if expense.receipt_no:
+        table_data.append(["Receipt # (OR#)", expense.receipt_no])
+    if expense.description:
+        table_data.append(["Description", expense.description])
+    if expense.notes:
+        table_data.append(["Notes", expense.notes])
+    table = Table(table_data, colWidths=[150, 340])
+    table.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9.5),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#64748b")),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+    ]))
+    elements.append(table)
+    elements.append(Spacer(1, 14))
+
+    if expense.vat_amount and expense.vat_amount > 0:
+        elements.append(Paragraph(f"Net of VAT: {expense.amount - expense.vat_amount:,.2f}", styles["Normal"]))
+        elements.append(Paragraph(f"VAT (12%): {expense.vat_amount:,.2f}", styles["Normal"]))
+        elements.append(Spacer(1, 4))
+    elements.append(Paragraph(f"<b>AMOUNT: {expense.amount:,.2f}</b>", styles["Heading3"]))
+
+    doc.build(elements)
+    buf.seek(0)
+    return FileResponse(
+        content=buf.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="expense_{expense.ref_no}.pdf"'},
+    )
+
+
 @router.get("/expenses/{expense_id:int}/attachment")
 def download_attachment(expense_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
@@ -264,10 +357,15 @@ def create_expense(
     safe_back = safe_back_url(back, "")
     if safe_back:
         sep = "&" if "?" in safe_back else "?"
-        return RedirectResponse(f"{safe_back}{sep}expense_logged={expense.ref_no}", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(
+            f"{safe_back}{sep}expense_logged={expense.ref_no}&expense_logged_id={expense.id}",
+            status_code=status.HTTP_302_FOUND,
+        )
     if is_staff(user):
         return RedirectResponse("/expenses", status_code=status.HTTP_302_FOUND)
-    return RedirectResponse(f"/pos?expense_logged={expense.ref_no}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(
+        f"/pos?expense_logged={expense.ref_no}&expense_logged_id={expense.id}", status_code=status.HTTP_302_FOUND
+    )
 
 
 @router.post("/expenses/{expense_id:int}")

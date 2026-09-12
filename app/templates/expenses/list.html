@@ -67,7 +67,10 @@
         <td>{{ e.description or '—' }}</td>
         <td>{{ e.payment_method|replace('_',' ')|title }}</td>
         <td class="num strong">{{ e.amount|peso }}</td>
-        <td class="row-actions"><a class="btn-link" href="/expenses/{{ e.id }}/edit">Edit</a></td>
+        <td class="row-actions">
+          <a class="btn-link" href="/expenses/{{ e.id }}/edit">Edit</a>
+          <a class="btn-link" href="/expenses/{{ e.id }}/receipt">Print</a>
+        </td>
       </tr>
       {% else %}
       <tr><td colspan="8" class="empty">No expenses {{ 'match that filter' if (q or category_id or date_from or date_to) else 'recorded yet' }}.</td></tr>
