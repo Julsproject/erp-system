@@ -2268,6 +2268,26 @@ def stock_card(
     total_delta = sum((Decimal(str(m.qty_base or 0)) for m in movements), Decimal("0"))
     opening = current_total - total_delta
 
+    # If some OTHER product is set up as this one's open/retail counterpart
+    # (its replenish_from_id points back here — see _replenish_from_source),
+    # a leftover that isn't a whole pack (e.g. 5 boxes + 29 loose pcs) can be
+    # moved over there with the "Move to open container" action below, so
+    # this product's own on-hand always reads as a clean pack count — the
+    # number the user actually checks before reordering.
+    container_counterpart = (
+        db.query(models.Product)
+        .filter(models.Product.replenish_from_id == product.id, models.Product.is_active.is_(True))
+        .first()
+    )
+    container_pack_factor = (
+        max((Decimal(str(u.factor_to_base or 0)) for u in product.units), default=Decimal("0"))
+        if container_counterpart else Decimal("0")
+    )
+    container_remainder = (
+        current_total - (current_total // container_pack_factor) * container_pack_factor
+        if container_pack_factor > 0 else Decimal("0")
+    )
+
     # Same anchor-and-work-backwards idea as the qty balance above, but in
     # pesos: each movement's own `value` is its valuation at the time (COGS
     # for a sale, cost received for a purchase, etc.), already computed
@@ -2492,8 +2512,76 @@ def stock_card(
             "back": safe_back_url(back, "/products"),
             "view_unit_id": unit, "view_unit_name": view_unit_name,
             "view_mode": view_mode,
+            "self_url": self_url,
+            "base_unit_name": base_unit_name,
+            "container_counterpart": container_counterpart,
+            "container_remainder": container_remainder,
         },
     )
+
+
+@router.post("/products/{product_id:int}/move-to-open-container")
+def move_to_open_container(
+    product_id: int, request: Request, back: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    """Move a sealed product's leftover, less-than-a-whole-pack stock over to
+    its linked open/retail counterpart (the product whose replenish_from_id
+    points back here — see pos._replenish_from_source, which already does
+    this same repack in the opposite direction to auto-open a pack when the
+    retail item runs low). Purely an inventory reclassification — the same
+    "repack-out"/"repack-in" reasons already used there never post to the
+    ledger (accounting.py only ever keys journal entries off sale, purchase,
+    expense, bank_transaction, reversal and settlement source types), so this
+    has no effect on COGS, VAT, or any other accounting figure. It only makes
+    the sealed product's on-hand read as a clean pack count."""
+    from .pos import _add_stock, _deduct_stock
+
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    product = db.get(models.Product, product_id)
+    if not product:
+        return RedirectResponse("/products", status_code=302)
+
+    redirect_to = safe_back_url(back, f"/products/{product_id}/stock-card")
+    counterpart = (
+        db.query(models.Product)
+        .filter(models.Product.replenish_from_id == product.id, models.Product.is_active.is_(True))
+        .first()
+    )
+    pack_factor = max((Decimal(str(u.factor_to_base or 0)) for u in product.units), default=Decimal("0"))
+    if not counterpart or pack_factor <= 0:
+        return RedirectResponse(redirect_to, status_code=status.HTTP_302_FOUND)
+
+    total = Decimal(str(product.total_qty or 0))
+    remainder = total - (total // pack_factor) * pack_factor
+    if remainder <= 0:
+        return RedirectResponse(redirect_to, status_code=status.HTTP_302_FOUND)
+
+    _deduct_stock(product, remainder)
+    _add_stock(counterpart, remainder)
+    cost = Decimal(str(product.cost_price or 0))
+    db.add(models.StockMovement(
+        product_id=product.id, qty_base=-remainder, reason="repack-out",
+        unit_cost=cost, value=-remainder * cost,
+        note=f"Moved loose stock to {counterpart.name}",
+    ))
+    db.add(models.StockMovement(
+        product_id=counterpart.id, qty_base=remainder, reason="repack-in",
+        unit_cost=cost, value=remainder * cost,
+        note=f"Received loose stock from {product.name}",
+    ))
+    counterpart.cost_price = product.cost_price  # keep the open item's cost in step with its source
+    audit.record(
+        db, user=user, request=request, action="adjust_stock", entity_type="product", entity_id=product.id,
+        entity_label=product.name,
+        summary=f"Moved {qty(remainder)} loose {product.unit_type.name if product.unit_type else 'unit'} from “{product.name}” to “{counterpart.name}”",
+        changes={"moved_to_open_container": [str(counterpart.name), str(remainder)]},
+    )
+    db.commit()
+    return RedirectResponse(redirect_to, status_code=status.HTTP_302_FOUND)
 
 
 @router.get("/products/{product_id:int}/history")

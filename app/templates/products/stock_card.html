@@ -45,6 +45,17 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
 </div>
 {% endif %}
 
+{% if container_counterpart and container_remainder > 0 and view_mode != 'value' %}
+<div class="alert" style="background:#fffbeb;border-color:#fde68a;color:#92400e;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+  <span>📦 {{ container_remainder|qty }} {{ base_unit_name }} loose — not a full pack. Move it to <b>{{ container_counterpart.name }}</b> so this product's on-hand always reads as a clean pack count.</span>
+  <form method="post" action="/products/{{ product.id }}/move-to-open-container" style="margin:0;"
+        onsubmit="return confirm('Move {{ container_remainder|qty }} {{ base_unit_name }} from {{ product.name|e }} to {{ container_counterpart.name|e }}?\n\nThis only reclassifies inventory — it does not affect accounting, VAT, or COGS.');">
+    <input type="hidden" name="back" value="{{ self_url }}">
+    <button class="btn-secondary" type="submit" style="white-space:nowrap;">Move to {{ container_counterpart.name }}</button>
+  </form>
+</div>
+{% endif %}
+
 <form class="filters-bar" method="get" style="display:flex;align-items:flex-end;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
   {% if view_unit_id %}<input type="hidden" name="unit" value="{{ view_unit_id }}">{% endif %}
   {% if view_mode == 'value' %}<input type="hidden" name="view" value="value">{% endif %}
