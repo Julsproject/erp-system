@@ -302,23 +302,6 @@
                   onclick="submitRowAction('/products/{{ p.id }}/delete', 'Delete {{ p.name|e }}? This cannot be undone.\n\nIf this product already has sales, purchases, or stock activity, deleting it will be blocked — use Archive for those instead.')">Delete</button>
         </td>
       </tr>
-      {% if p.unit_breakdown %}
-      {% set tiers = p.unit_breakdown %}
-      <tr class="container-row">
-        <td colspan="{{ 13 if is_admin_user else 12 }}" class="container-line">
-          ↳
-          {% for tier in tiers %}
-            {%- set is_last = loop.last and tiers|length > 1 -%}
-            {%- set is_neg = tier.qty < 0 -%}
-            {%- if loop.first %}Sealed:{% elif is_last %}Open container:{% endif %}
-            <strong{{ ' class="qty-negative"' if is_neg else ' class="open-hl"' if is_last }}>{{ tier.qty|qty }}</strong>
-            {{- ' ' }}{{ tier.name }}
-            {%- if is_neg %} ⚠{% endif -%}
-            {%- if not loop.last %}&nbsp;·&nbsp;{% endif %}
-          {% endfor %}
-        </td>
-      </tr>
-      {% endif %}
       {% for u in p.units %}
       {# Quantities here are the SAME stock as the parent row, just read in
          this unit — "how many Elf is 20.6 cubic meters worth". #}
@@ -703,7 +686,6 @@ function startUnitTypeEdit(id) {
   .sort-arrow { font-size:13px; color:var(--brand); font-weight:900; }
   .dd-flag-btn { color:#b45309; font-weight:700; font-size:12px; margin-left:4px; }
   .dd-flag-btn:hover { text-decoration:underline; }
-  .qty-negative { color:#b91c1c; }
 </style>
 
 <script>
