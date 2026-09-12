@@ -219,15 +219,27 @@
     {% if can_edit_invoice and not sale.is_voided %}
     <form id="editInvoiceForm" method="post" action="/pos/receipt/{{ sale.id }}/edit-invoice"
           style="display:none;margin:0 0 12px;padding:9px 11px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:12px;">
-      <label style="color:var(--ink);">Correct the invoice #
-        <input type="text" name="new_invoice_no" value="{{ sale.invoice_no }}"
-               style="display:block;margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;">
-      </label>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        {% if sale.receipt_type in ('DRS', 'DRB') %}
+        <label style="color:var(--ink);">Booklet
+          <select name="new_receipt_type" style="display:block;margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;">
+            <option value="DRS" {{ 'selected' if sale.receipt_type == 'DRS' }}>DRS</option>
+            <option value="DRB" {{ 'selected' if sale.receipt_type == 'DRB' }}>DRB</option>
+          </select>
+        </label>
+        {% else %}
+        <input type="hidden" name="new_receipt_type" value="{{ sale.receipt_type }}">
+        {% endif %}
+        <label style="color:var(--ink);">Correct the invoice #
+          <input type="text" name="new_invoice_no" value="{{ sale.invoice_no }}"
+                 style="display:block;margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;">
+        </label>
+      </div>
       <div style="margin-top:8px;display:flex;gap:8px;">
         <button type="submit" class="btn print" style="padding:6px 12px;font-size:12px;">Save</button>
         <button type="button" class="btn back" style="padding:6px 12px;font-size:12px;" onclick="hideEditInvoice()">Cancel</button>
       </div>
-      <p style="margin:8px 0 0;color:var(--muted);">For a typo on the booklet number — must not already be used by another sale.</p>
+      <p style="margin:8px 0 0;color:var(--muted);">For a typo on the booklet number, or picking the wrong booklet (DRS/DRB) — must not already be used by another sale in that booklet. Switching to/from SI isn't supported here.</p>
     </form>
     {% endif %}
 

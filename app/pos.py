@@ -1748,6 +1748,7 @@ EDIT_INVOICE_ERRORS = {
     "voided": "This sale is voided — its invoice # can't be edited.",
     "empty": "Invoice # is required.",
     "used": "That invoice # is already used by another sale in the same booklet.",
+    "si_locked": "Switching to or from SI isn't supported here — an SI carries its own VAT posting, which needs the proper Issue SI flow instead. Only DRS ⟷ DRB can be corrected on this form.",
 }
 
 EDIT_CUSTOMER_ERRORS = {
@@ -2028,12 +2029,21 @@ def edit_sale_invoice(
     sale_id: int,
     request: Request,
     new_invoice_no: str = Form(""),
+    new_receipt_type: str = Form(""),
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    """Correct the invoice # on an already-saved sale — for a typo when
-    copying the number off the physical booklet. Staff only, and the new
-    number must not collide with another sale's."""
+    """Correct the invoice # — and/or which booklet it was written on — on
+    an already-saved sale. For a typo copying the number off the physical
+    booklet, or picking DRS when it should've been DRB (or vice versa).
+    Staff only, and the number must not already be used in that booklet
+    (each booklet numbers independently — see _invoice_taken).
+
+    Switching to or from SI is deliberately not supported here: an SI
+    carries its own Output VAT posting (see accounting.post_si_conversion),
+    which only the proper Issue SI flow sets up correctly — relabeling a
+    booklet here would leave a VAT document with no VAT entry behind it, or
+    vice versa. Only a same-family DRS ⟷ DRB correction is allowed."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     sale = db.get(models.Sale, sale_id)
@@ -2050,20 +2060,29 @@ def edit_sale_invoice(
         return _back("voided")
 
     new_invoice_no = (new_invoice_no or "").strip()
+    new_receipt_type = (new_receipt_type or "").strip().upper() or sale.receipt_type
+    old_receipt_type = sale.receipt_type
+    dr_booklets = ("DRS", "DRB")
+    if new_receipt_type != old_receipt_type:
+        if new_receipt_type not in dr_booklets or old_receipt_type not in dr_booklets:
+            return _back("si_locked")
     if not new_invoice_no:
         return _back("empty")
-    if new_invoice_no == sale.invoice_no:
+    if new_invoice_no == sale.invoice_no and new_receipt_type == old_receipt_type:
         return _back()
-    if _invoice_taken(db, new_invoice_no, sale.receipt_type, exclude_sale_id=sale.id):
+    if _invoice_taken(db, new_invoice_no, new_receipt_type, exclude_sale_id=sale.id):
         return _back("used")
 
     old_invoice_no = sale.invoice_no
     sale.invoice_no = new_invoice_no
+    sale.receipt_type = new_receipt_type
     # Every journal entry already posted for this sale (its own "Sale
     # {invoice}" entry, and any payment settlements on top of it) baked the
     # old invoice # into its description/reference_no at posting time —
     # without this they'd keep showing the old number forever in the
     # General Ledger / Journal Entries, disagreeing with the sale itself.
+    # (The booklet prefix was never part of these — only the bare number —
+    # so a receipt_type-only correction needs no journal update here.)
     entries = (
         db.query(models.JournalEntry)
         .filter(
@@ -2079,11 +2098,18 @@ def edit_sale_invoice(
             entry.description = f"Sale {new_invoice_no}"
         elif entry.description == f"Payment on {old_invoice_no}":
             entry.description = f"Payment on {new_invoice_no}"
+    changes = {}
+    if new_invoice_no != old_invoice_no:
+        changes["invoice_no"] = [old_invoice_no, new_invoice_no]
+    if new_receipt_type != old_receipt_type:
+        changes["receipt_type"] = [old_receipt_type, new_receipt_type]
+    old_display = f"{old_receipt_type or ''}{old_invoice_no}"
+    new_display = f"{new_receipt_type or ''}{new_invoice_no}"
     audit.record(
         db, user=user, request=request, action="update", entity_type="sale",
         entity_id=sale.id, entity_label=sale.invoice_no,
-        summary=f"Corrected invoice # for sale: {old_invoice_no} → {new_invoice_no}",
-        changes={"invoice_no": [old_invoice_no, new_invoice_no]},
+        summary=f"Corrected invoice # for sale: {old_display} → {new_display}",
+        changes=changes,
     )
     db.commit()
     return _back()
