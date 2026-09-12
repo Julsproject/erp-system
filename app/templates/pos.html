@@ -727,7 +727,7 @@ function renderResults(products) {
       '<div class="pos-item-sub">' + peso(p.units[0].price) + ' / ' + escapeHtml(p.base_unit) +
       ' · <span class="' + (p.on_hand <= 0 ? 'oos' : '') + '">' + fmtQty(p.on_hand) + ' on hand</span>' +
       (p.container ? '<span class="open-bag">📦 ' + p.container.sealed + ' ' + escapeHtml(p.container.pack_name) +
-        (p.container.sealed === 1 ? '' : 's') + ' + <b>' + fmtQty(p.container.open) + ' ' + escapeHtml(p.container.loose_name) +
+        ' + <b>' + fmtQty(p.container.open) + ' ' + escapeHtml(p.container.loose_name) +
         '</b> in open bag</span>' : '') +
       '</div>';
     box.appendChild(el);

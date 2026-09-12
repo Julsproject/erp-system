@@ -306,7 +306,7 @@
             {%- set is_neg = tier.qty < 0 -%}
             {%- if loop.first %}Sealed:{% elif is_last %}Open container:{% endif %}
             <strong{{ ' class="qty-negative"' if is_neg else ' class="open-hl"' if is_last }}>{{ tier.qty|qty }}</strong>
-            {{- ' ' }}{{ tier.name }}{{ '' if tier.qty == 1 else 's' if not is_last }}
+            {{- ' ' }}{{ tier.name }}
             {%- if is_neg %} ⚠{% endif -%}
             {%- if not loop.last %}&nbsp;·&nbsp;{% endif %}
           {% endfor %}
