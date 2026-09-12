@@ -427,24 +427,41 @@ def pos_page(request: Request, expense_logged: str = "", expense_logged_id: int 
     )
 
 
-def _product_payload_for_pos(p: models.Product) -> dict:
+def _product_payload_for_pos(db: Session, p: models.Product) -> dict:
     """Shape a product for any POS-style picker (search results, quotation
-    editor, …): base unit at each of its three prices, plus its ladder units."""
+    editor, …): base unit at each of its three prices, plus its ladder units.
+
+    A product that has its own linked open/retail counterpart (some other
+    product whose replenish_from_id points back to `p` — see
+    _replenish_from_source) is meant to only ever be sold by the pack from
+    here — selling its base unit loose would leave stock split across two
+    products with no way to reconcile it automatically. So its base-unit
+    entries are left out of the offered units entirely; loose/retail sales
+    go through the counterpart product instead, found directly by name/
+    barcode like any other product."""
     base_unit = p.unit_type.name if p.unit_type else "Unit"
+    has_open_counterpart = (
+        db.query(models.Product.id)
+        .filter(models.Product.replenish_from_id == p.id, models.Product.is_active.is_(True))
+        .first()
+        is not None
+    )
     # The base unit is offered at each of the product's three prices, so the
     # cashier picks the price from the same dropdown they already use to pick
     # the unit. Markup/margin only appear once they've actually been set, so
     # products priced the old way look exactly as before.
     # `name` stays the plain unit (what's stored on the sale line); `label`
     # is what the dropdown shows; `tier` is recorded against the line.
-    units = [{"name": base_unit, "label": base_unit, "factor": 1.0,
-              "price": float(p.selling_price or 0), "tier": "fixed"}]
-    if (p.markup_price or 0) > 0:
-        units.append({"name": base_unit, "label": f"{base_unit} · Markup", "factor": 1.0,
-                      "price": float(p.markup_price), "tier": "markup"})
-    if (p.margin_price or 0) > 0:
-        units.append({"name": base_unit, "label": f"{base_unit} · Margin", "factor": 1.0,
-                      "price": float(p.margin_price), "tier": "margin"})
+    units = []
+    if not has_open_counterpart:
+        units.append({"name": base_unit, "label": base_unit, "factor": 1.0,
+                      "price": float(p.selling_price or 0), "tier": "fixed"})
+        if (p.markup_price or 0) > 0:
+            units.append({"name": base_unit, "label": f"{base_unit} · Markup", "factor": 1.0,
+                          "price": float(p.markup_price), "tier": "markup"})
+        if (p.margin_price or 0) > 0:
+            units.append({"name": base_unit, "label": f"{base_unit} · Margin", "factor": 1.0,
+                          "price": float(p.margin_price), "tier": "margin"})
     for u in p.units:
         # Same "one price stays plain, markup/margin only show up once set"
         # rule as the base unit above — an existing product with a flat
@@ -458,6 +475,12 @@ def _product_payload_for_pos(p: models.Product) -> dict:
         if (u.margin_price or 0) > 0:
             units.append({"name": u.name, "label": f"{u.name} · Margin", "factor": float(u.factor_to_base or 1),
                           "price": float(u.margin_price), "tier": "margin"})
+    if not units:
+        # No pack unit priced yet on a product whose base unit was left out
+        # above — fall back to the base unit rather than leaving it
+        # completely unsellable until that's set up.
+        units.append({"name": base_unit, "label": base_unit, "factor": 1.0,
+                      "price": float(p.selling_price or 0), "tier": "fixed"})
     c = p.container
     container = None if not c else {
         "pack_name": c["pack_name"],
@@ -491,7 +514,7 @@ def pos_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_curr
             .first()
         )
         if barcode_hit:
-            return {"products": [_product_payload_for_pos(barcode_hit)]}
+            return {"products": [_product_payload_for_pos(db, barcode_hit)]}
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
         # Every word has to appear somewhere in the name, in any order —
@@ -520,7 +543,7 @@ def pos_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_curr
             )
             query = query.filter(or_(name_match, models.Product.selling_price == price, unit_priced))
     products = query.order_by(models.Product.name).limit(30).all()
-    return {"products": [_product_payload_for_pos(p) for p in products]}
+    return {"products": [_product_payload_for_pos(db, p) for p in products]}
 
 
 @router.get("/pos/product/{product_id:int}")
@@ -533,7 +556,7 @@ def pos_product(product_id: int, db: Session = Depends(get_db), user=Depends(get
     p = db.get(models.Product, product_id)
     if not p or not p.is_active:
         return {"found": False}
-    return {"found": True, "product": _product_payload_for_pos(p)}
+    return {"found": True, "product": _product_payload_for_pos(db, p)}
 
 
 @router.post("/pos/quick-product")
@@ -557,7 +580,7 @@ def pos_quick_product(data: dict, db: Session = Depends(get_db), user=Depends(ge
         .first()
     )
     if existing:
-        return {"ok": True, "existed": True, "product": _product_payload_for_pos(existing)}
+        return {"ok": True, "existed": True, "product": _product_payload_for_pos(db, existing)}
 
     product = models.Product(
         name=name,
@@ -574,7 +597,7 @@ def pos_quick_product(data: dict, db: Session = Depends(get_db), user=Depends(ge
     db.add(product)
     db.commit()
     db.refresh(product)
-    return {"ok": True, "existed": False, "product": _product_payload_for_pos(product)}
+    return {"ok": True, "existed": False, "product": _product_payload_for_pos(db, product)}
 
 
 def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied, discount_total, lines, payments, txn_date=None, receipt_type=None, encoded_by_id=None, delivery_address=None, notes=None, force_stock_deduction=False):

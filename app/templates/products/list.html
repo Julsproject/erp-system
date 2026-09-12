@@ -240,9 +240,6 @@
       <tr>
         {% if is_admin_user %}<td><input type="checkbox" class="rowChk" name="ids" value="{{ p.id }}" onchange="updateBulkBar()"></td>{% endif %}
         <td class="strong">
-          {% if p.units %}
-          <button type="button" class="unit-toggle" onclick="toggleUnits(this, {{ p.id }})" title="Show units for this product">▸</button>
-          {% endif %}
           <span class="prod-name-text" id="prodName{{ p.id }}">{{ p.name }}</span>
           {% if is_admin_user %}
           <button type="button" class="btn-link rename-btn" onclick="startRename({{ p.id }})" title="Rename this product">✎</button>
@@ -302,35 +299,6 @@
                   onclick="submitRowAction('/products/{{ p.id }}/delete', 'Delete {{ p.name|e }}? This cannot be undone.\n\nIf this product already has sales, purchases, or stock activity, deleting it will be blocked — use Archive for those instead.')">Delete</button>
         </td>
       </tr>
-      {% for u in p.units %}
-      {# Quantities here are the SAME stock as the parent row, just read in
-         this unit — "how many Elf is 20.6 cubic meters worth". #}
-      {% set eq = u.stock_as_this_unit %}
-      <tr class="subunit-row" data-parent-id="{{ p.id }}" style="display:none;">
-        {% if is_admin_user %}<td></td>{% endif %}
-        <td class="strong">↳ {{ u.name }}</td>
-        <td class="muted">{{ p.barcode or '—' }}</td>
-        <td>{{ p.category.name if p.category else '—' }}</td>
-        <td>{{ p.subcategory.name if p.subcategory else '—' }}</td>
-        <td class="muted">1 = {{ u.factor_to_base|qty }} {{ p.unit_type.name if p.unit_type else 'base' }}</td>
-        <td class="num">
-          {% if u.cost_as_this_unit %}{{ u.cost_as_this_unit|peso }}
-          {% else %}<span class="muted">—</span>{% endif %}
-        </td>
-        <td class="num">
-          {% if u.price and u.price > 0 %}{{ u.price|peso }}
-          {% else %}<span class="muted">not set</span>{% endif %}
-        </td>
-        <td class="num">{% if eq %}{{ eq.beginning|qty }}{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td class="num">{% if eq %}{{ eq.stock|qty }}{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td class="num strong">{% if eq %}{{ eq.total|qty }}{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td class="row-actions">
-          {% if (user.role or '')|lower == 'admin' %}
-          <a class="btn-link" href="/products/{{ p.id }}/stock-card?unit={{ u.id }}&back={{ cur_url|urlencode }}">Stock card</a>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
       {% else %}
       <tr><td colspan="{{ 13 if is_admin_user else 12 }}" class="empty">No products yet. Click <strong>Add product</strong> to start encoding inventory.</td></tr>
       {% endfor %}
@@ -399,14 +367,6 @@ function clearAllChk() {
 {% endif %}
 
 <script>
-function toggleUnits(btn, productId) {
-  const open = btn.classList.toggle('open');
-  btn.textContent = open ? '▾' : '▸';
-  document.querySelectorAll('.subunit-row[data-parent-id="' + productId + '"]').forEach(row => {
-    row.style.display = open ? '' : 'none';
-  });
-}
-
 // Rename a product straight from this list — a typo or naming-convention
 // fix shouldn't need the full find -> Edit page -> Save -> search-again
 // round trip. Built with DOM methods (no innerHTML) so a name containing
