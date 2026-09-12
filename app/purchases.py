@@ -20,6 +20,7 @@ from . import accounting, audit, models, pricing, settings_store
 from .database import get_db
 from .deps import get_current_user, is_floor_staff, is_staff
 from .pos import _resolve_txn_datetime, _vat_of
+from .sales import _resolve_settlement_datetime
 from .products import _get_or_create_category, _get_or_create_unit_type
 from .search_utils import multi_word_ilike
 from .templating import templates
@@ -794,6 +795,7 @@ def settle_purchase_pay(
     purchase_id: int, request: Request,
     method: str = Form("cash"), amount: str = Form(""),
     cheque_date: str = Form(""), bank: str = Form(""), cheque_no: str = Form(""),
+    payment_date: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """Settle a payable — in full or in part. Stock and cost already moved
@@ -824,6 +826,10 @@ def settle_purchase_pay(
     if amount > outstanding:
         amount = outstanding  # never pay more than owed
 
+    payment_dt, date_err = _resolve_settlement_datetime(payment_date)
+    if date_err:
+        return back_with_error(date_err.replace(" ", "+"))
+
     if method == "cheque":
         # A post-dated cheque doesn't settle anything yet — same as the AR
         # side, it just goes into the PDC register until the bank honors it.
@@ -846,11 +852,17 @@ def settle_purchase_pay(
         db.commit()
         return RedirectResponse(f"/pdc/{pdc.id}", status_code=http_status.HTTP_302_FOUND)
 
-    db.add(models.PurchaseSettlement(
+    settlement = models.PurchaseSettlement(
         purchase_id=purchase.id, method=method, amount=_money(amount), created_by=user.id,
-    ))
+    )
+    if payment_dt:
+        settlement.created_at = payment_dt
+    db.add(settlement)
     try:
-        accounting.post_purchase_settlement(db, purchase, amount=_money(amount), method=method, entered_by_id=user.id)
+        accounting.post_purchase_settlement(
+            db, purchase, amount=_money(amount), method=method, entered_by_id=user.id,
+            txn_date=payment_dt.date() if payment_dt else None,
+        )
     except accounting.PostingError:
         pass
     new_outstanding = outstanding - amount

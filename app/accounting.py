@@ -169,16 +169,75 @@ def post_draft_entry(db: Session, entry: models.JournalEntry) -> bool:
     return True
 
 
+def manual_entry_is_editable(entry: models.JournalEntry) -> bool:
+    """A draft never affected any balance, so it's always fair game. A
+    posted entry can still be edited/deleted outright, but only on the same
+    calendar day it was actually entered (posted_at, not its possibly
+    backdated txn_date) — same cutoff every other same-day-correction flow
+    in this app uses (see pos.py's edit_sale, credits._apply_batch_payment).
+    Past that day, a report may already reflect it, so a real correction has
+    to go through Reverse instead, which leaves a visible trail. A reversed
+    entry (or the reversal itself) is never editable — that pair is already
+    permanent history."""
+    if entry.source_type != "manual" or entry.status not in ("draft", "posted"):
+        return False
+    if entry.status == "draft":
+        return True
+    posted_date = entry.posted_at.astimezone(MANILA).date() if entry.posted_at else None
+    return posted_date == _today()
+
+
 def delete_draft_entry(db: Session, entry: models.JournalEntry) -> bool:
-    """Drafts never affected any balance, so unlike a posted entry they can
-    just be deleted outright — no reversal needed. Returns False (no-op) if
-    it wasn't a draft."""
-    if entry.status != "draft":
+    """Deletes a draft, or a posted entry still within its same-day edit
+    window (see manual_entry_is_editable) — outright, no reversal needed,
+    since nothing outside this window could have relied on it yet. Returns
+    False (no-op) otherwise."""
+    if not manual_entry_is_editable(entry):
         return False
     for line in list(entry.lines):
         db.delete(line)
     db.delete(entry)
     return True
+
+
+def update_manual_entry(db: Session, entry: models.JournalEntry, *, txn_date, description: str,
+                         reference_no: str, lines: list) -> models.JournalEntry:
+    """Replaces a draft's or same-day posted entry's lines wholesale (see
+    manual_entry_is_editable) — simpler and safer than diffing old vs new
+    lines, and fine here because both cases are guaranteed to have no
+    dependent reversal or report relying on the old numbers yet. Raises
+    PostingError on the same validation post_journal applies (must balance,
+    must have at least one line)."""
+    resolved = []
+    total_debit = ZERO
+    total_credit = ZERO
+    for ln in lines:
+        amount = _money(ln["amount"])
+        if amount <= 0:
+            continue
+        account = db.get(models.Account, ln["_account_id"])
+        if not account or not account.is_active:
+            raise PostingError(f"Account #{ln['_account_id']} is missing or inactive.")
+        debit = amount if ln["side"] == "debit" else ZERO
+        credit = amount if ln["side"] == "credit" else ZERO
+        total_debit += debit
+        total_credit += credit
+        resolved.append({"account_id": account.id, "debit": debit, "credit": credit, "memo": ln.get("memo")})
+
+    if not resolved:
+        raise PostingError("Nothing to post — every line was zero.")
+    if total_debit != total_credit:
+        raise PostingError(f"Journal entry doesn't balance: debit {total_debit} vs credit {total_credit}.")
+
+    entry.txn_date = txn_date
+    entry.description = description
+    entry.reference_no = reference_no
+    for line in list(entry.lines):
+        db.delete(line)
+    db.flush()
+    for ln in resolved:
+        db.add(models.JournalLine(entry_id=entry.id, **ln))
+    return entry
 
 
 def reverse_journal(db: Session, entry: models.JournalEntry, *, reason: str = None, entered_by_id: int = None, txn_date=None) -> models.JournalEntry:
@@ -250,15 +309,17 @@ def post_sale(db: Session, sale: models.Sale, *, method_rows: list, receivable_a
     )
 
 
-def post_si_conversion(db: Session, si_sale: models.Sale, *, entered_by_id: int = None):
+def post_si_conversion(db: Session, si_sale: models.Sale, *, entered_by_id: int = None, txn_date=None):
     """An SI issued later, at collection, to formally invoice Output VAT on
     one or more DRs that already recognized their own revenue (and AR) at
     delivery time — a DR itself is never allowed to carry VAT, see
     pos._finalize_sale. Pure reclassification: debit Sales Revenue / credit
-    Output VAT for the VAT portion only, dated today (the SI's own issue
-    date is what determines its VAT period, not the DR's original date).
-    No cash or AR moves here — that already happened on the DR(s); si_sale
-    itself carries receivable_amount=0 for the same reason."""
+    Output VAT for the VAT portion only, dated to the SI's own issue date
+    (this is what determines its VAT period, not the DR's original date) —
+    defaults to today, or `txn_date` when the SI is being backdated to the
+    day it was actually paid. No cash or AR moves here — that already
+    happened on the DR(s); si_sale itself carries receivable_amount=0 for
+    the same reason."""
     vat = Decimal(str(si_sale.vat_amount or 0))
     if vat <= 0:
         return None
@@ -267,7 +328,7 @@ def post_si_conversion(db: Session, si_sale: models.Sale, *, entered_by_id: int 
         {"function_key": "OUTPUT_VAT", "amount": vat, "side": "credit"},
     ]
     return post_journal(
-        db, txn_date=_today(), source_type="sale", source_id=si_sale.id,
+        db, txn_date=txn_date or _today(), source_type="sale", source_id=si_sale.id,
         description=f"SI {si_sale.invoice_no}", reference_no=si_sale.invoice_no,
         lines=lines, entered_by_id=entered_by_id,
     )
@@ -412,17 +473,20 @@ def post_purchase_return(db: Session, purchase: models.Purchase, *, entered_by_i
     )
 
 
-def post_purchase_settlement(db: Session, purchase: models.Purchase, *, amount: Decimal, method: str, entered_by_id: int = None):
+def post_purchase_settlement(db: Session, purchase: models.Purchase, *, amount: Decimal, method: str, entered_by_id: int = None, txn_date=None):
     """Called from purchases.py's settle_purchase_pay, only on the branch
     that actually records a PurchaseSettlement (the cheque branch defers to
-    a PDC instead and posts nothing yet, same idea as Sales)."""
+    a PDC instead and posts nothing yet, same idea as Sales). `txn_date`
+    lets a backdated payment (paid to the supplier earlier, encoded now)
+    post to the day it actually happened instead of today; defaults to
+    today when not given."""
     credit_key = PURCHASE_PAY_FUNCTION_KEYS.get(method, "PURCHASE_PAY_OTHER")
     lines = [
         {"function_key": "AP", "amount": amount, "side": "debit"},
         {"function_key": credit_key, "amount": amount, "side": "credit", "memo": method},
     ]
     return post_journal(
-        db, txn_date=_today(), source_type="purchase_settlement", source_id=purchase.id,
+        db, txn_date=txn_date or _today(), source_type="purchase_settlement", source_id=purchase.id,
         description=f"Payment on {purchase.ref_no}", reference_no=purchase.ref_no,
         lines=lines, entered_by_id=entered_by_id,
     )
@@ -1467,7 +1531,7 @@ def export_vat_report(days: int = 30, date_from: str = "", date_to: str = "", db
     input_total_due = sum((r["total_due"] for r in input_detail if r["total_due"] is not None), Decimal(0))
 
     ws2 = wb.create_sheet("Output VAT")
-    ws2.append(["Date", "Invoice #", "Customer", "TIN #", "Net of VAT", "Output VAT", "Total Amount Due"])
+    ws2.append(["Date", "Invoice #", "Customer", "TIN #", "Sales", "Output VAT", "Total Amount"])
     for cell in ws2[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = header_fill
@@ -1484,7 +1548,7 @@ def export_vat_report(days: int = 30, date_from: str = "", date_to: str = "", db
     ws2.freeze_panes = "A2"
 
     ws3 = wb.create_sheet("Input VAT")
-    ws3.append(["Date", "Supplier Invoice #", "Supplier Name", "TIN #", "Net of VAT", "Input VAT", "Total Amount Due"])
+    ws3.append(["Date", "Supplier Invoice #", "Supplier Name", "TIN #", "Purchases", "Input VAT", "Total Amount"])
     for cell in ws3[1]:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = header_fill
@@ -1638,23 +1702,49 @@ def journal_entries_list(request: Request, db: Session = Depends(get_db), user=D
         .limit(100)
         .all()
     )
+    editable_ids = {e.id for e in entries if manual_entry_is_editable(e)}
     return templates.TemplateResponse(
         "accounting/journal_entries.html",
-        {"request": request, "app_name": request.app.title, "user": user, "entries": entries},
+        {"request": request, "app_name": request.app.title, "user": user, "entries": entries,
+         "editable_ids": editable_ids},
     )
 
 
+# Starting line sets for the "+ New Entry" shortcut linked from elsewhere in
+# the app, keyed by the `template` query param — e.g. Collect Payment links
+# here (see credits/collect.html) for a customer whose invoice isn't in its
+# own picker, pre-shaping the entry as "money received, VAT recognized on
+# it" (Dr Cash + Dr Sales Revenue / Cr Accounts Receivable + Cr Output VAT)
+# instead of a blank 2-line form. Amounts are deliberately left blank —
+# this exists precisely for a transaction the system has no figures for.
+JOURNAL_TEMPLATES = {
+    "customer_payment": [
+        ("SALE_CASH", "debit"), ("SALES_REVENUE", "debit"),
+        ("AR", "credit"), ("OUTPUT_VAT", "credit"),
+    ],
+}
+
+
 @router.get("/accounting/journal-entries/new", response_class=HTMLResponse)
-def journal_entry_new(request: Request, error: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+def journal_entry_new(request: Request, error: str = "", description: str = "", template: str = "",
+                       db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
     accounts = db.query(models.Account).filter(models.Account.is_active.is_(True)).order_by(models.Account.code).all()
+    template_lines = []
+    for function_key, side in JOURNAL_TEMPLATES.get(template, []):
+        try:
+            account = _resolve_mapping(db, function_key)
+        except PostingError:
+            continue  # not set up yet — fall back to a blank form instead of a half-filled one
+        template_lines.append({"account_id": account.id, "side": side})
     return templates.TemplateResponse(
         "accounting/journal_entry_form.html",
         {"request": request, "app_name": request.app.title, "user": user, "accounts": accounts,
-         "today": _today().isoformat(), "error": error},
+         "today": _today().isoformat(), "error": error, "prefill_description": description,
+         "template_lines": template_lines},
     )
 
 
@@ -1705,6 +1795,29 @@ def journal_entry_create(
     return RedirectResponse(f"/accounting/journal-entries?created={entry.journal_no}", status_code=302)
 
 
+@router.get("/accounting/journal-entries/{entry_id:int}/view", response_class=HTMLResponse)
+def journal_entry_view(entry_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+    entry = db.get(models.JournalEntry, entry_id)
+    if not entry or entry.source_type != "manual":
+        return RedirectResponse("/accounting/journal-entries", status_code=302)
+    reversal_of = db.get(models.JournalEntry, entry.is_reversal_of_id) if entry.is_reversal_of_id else None
+    reversed_by = (
+        db.query(models.JournalEntry)
+        .filter(models.JournalEntry.is_reversal_of_id == entry.id)
+        .first()
+    )
+    return templates.TemplateResponse(
+        "accounting/journal_entry_view.html",
+        {"request": request, "app_name": request.app.title, "user": user, "entry": entry,
+         "reversal_of": reversal_of, "reversed_by": reversed_by,
+         "editable": manual_entry_is_editable(entry)},
+    )
+
+
 @router.post("/accounting/journal-entries/{entry_id:int}/post")
 def journal_entry_post(entry_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
@@ -1731,6 +1844,64 @@ def journal_entry_delete(entry_id: int, db: Session = Depends(get_db), user=Depe
     return RedirectResponse("/accounting/journal-entries", status_code=302)
 
 
+@router.get("/accounting/journal-entries/{entry_id:int}/edit", response_class=HTMLResponse)
+def journal_entry_edit_form(entry_id: int, request: Request, error: str = "",
+                             db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+    entry = db.get(models.JournalEntry, entry_id)
+    if not entry or not manual_entry_is_editable(entry):
+        return RedirectResponse("/accounting/journal-entries", status_code=302)
+    accounts = db.query(models.Account).filter(models.Account.is_active.is_(True)).order_by(models.Account.code).all()
+    return templates.TemplateResponse(
+        "accounting/journal_entry_form.html",
+        {"request": request, "app_name": request.app.title, "user": user, "accounts": accounts,
+         "today": _today().isoformat(), "error": error, "entry": entry},
+    )
+
+
+@router.post("/accounting/journal-entries/{entry_id:int}/edit")
+def journal_entry_edit_submit(
+    entry_id: int,
+    txn_date: str = Form(""),
+    description: str = Form(""),
+    reference_no: str = Form(""),
+    account_id: list[str] = Form([]),
+    side: list[str] = Form([]),
+    amount: list[str] = Form([]),
+    memo: list[str] = Form([]),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+    entry = db.get(models.JournalEntry, entry_id)
+    if not entry or not manual_entry_is_editable(entry):
+        return RedirectResponse("/accounting/journal-entries", status_code=302)
+
+    parsed_date = _parse_date(txn_date) or _today()
+    description = (description or "").strip()
+    reference_no = (reference_no or "").strip() or None
+    if not description:
+        return RedirectResponse(f"/accounting/journal-entries/{entry_id}/edit?error=Description+is+required.", status_code=302)
+
+    lines = []
+    for aid, sd, amt, mm in zip(account_id, side, amount, memo):
+        if not aid or not amt:
+            continue
+        lines.append({"_account_id": int(aid), "amount": amt, "side": sd, "memo": (mm or "").strip() or None})
+
+    try:
+        update_manual_entry(db, entry, txn_date=parsed_date, description=description, reference_no=reference_no, lines=lines)
+    except PostingError as e:
+        return RedirectResponse(f"/accounting/journal-entries/{entry_id}/edit?error={str(e)}", status_code=302)
+    db.commit()
+    return RedirectResponse(f"/accounting/journal-entries/{entry_id}/view", status_code=302)
+
+
 @router.post("/accounting/journal-entries/{entry_id:int}/reverse")
 def journal_entry_reverse(entry_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
@@ -1739,7 +1910,11 @@ def journal_entry_reverse(entry_id: int, db: Session = Depends(get_db), user=Dep
         return RedirectResponse("/pos", status_code=302)
     entry = db.get(models.JournalEntry, entry_id)
     if entry and entry.source_type == "manual" and entry.status == "posted":
-        reverse_journal(db, entry, reason="Manual reversal", entered_by_id=user.id)
+        # Dated to the original entry's own txn_date (not today) so the
+        # mistake and its reversal always net to zero within the period the
+        # entry was actually posted in, instead of leaking into whatever
+        # period the reversal happens to be clicked in.
+        reverse_journal(db, entry, reason="Manual reversal", entered_by_id=user.id, txn_date=entry.txn_date)
         db.commit()
     return RedirectResponse("/accounting/journal-entries", status_code=302)
 

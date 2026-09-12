@@ -35,12 +35,20 @@
         <td class="num">{{ e.lines|sum(attribute='debit')|peso }}</td>
         <td class="num">{{ e.lines|sum(attribute='credit')|peso }}</td>
         <td style="white-space:nowrap;">
+          <a class="btn-link" href="/accounting/journal-entries/{{ e.id }}/view">View</a>
+          {% if e.id in editable_ids %}
+          <a class="btn-link" href="/accounting/journal-entries/{{ e.id }}/edit">Edit</a>
+          {% endif %}
           {% if e.status == 'draft' %}
           <form method="post" action="/accounting/journal-entries/{{ e.id }}/post" style="display:inline;">
             <button class="btn-link" type="submit" onclick="return confirm('Post this entry? It will start affecting every report immediately.')">Post</button>
           </form>
           <form method="post" action="/accounting/journal-entries/{{ e.id }}/delete" style="display:inline;">
             <button class="btn-link" type="submit" onclick="return confirm('Delete this draft?')">Delete</button>
+          </form>
+          {% elif e.status == 'posted' and e.id in editable_ids %}
+          <form method="post" action="/accounting/journal-entries/{{ e.id }}/delete" style="display:inline;">
+            <button class="btn-link" type="submit" onclick="return confirm('Delete this entry? Since it was posted today, this removes it outright with no trace — past today, use Reverse instead.')">Delete</button>
           </form>
           {% elif e.status == 'posted' %}
           <form method="post" action="/accounting/journal-entries/{{ e.id }}/reverse" style="display:inline;">

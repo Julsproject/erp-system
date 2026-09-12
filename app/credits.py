@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from . import accounting, audit, models, settings_store
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_admin, is_staff
 from .pos import _invoice_taken, _money, _vat_of
 from .sales import MANILA, SETTLE_METHODS, _resolve_settlement_datetime
 from .templating import templates
@@ -420,6 +420,7 @@ def collect_payment(
             "owed": owed, "total": total, "methods": SETTLE_METHODS,
             "si_eligible_ids": si_eligible_ids, "si_error": si_error,
             "today_iso": datetime.now(MANILA).date().isoformat(),
+            "is_admin": is_admin(user),
         },
     )
 
@@ -427,14 +428,17 @@ def collect_payment(
 @router.post("/credits/{customer_id:int}/issue-si")
 def issue_si(
     customer_id: int, request: Request,
-    dr_sale_ids: list[str] = Form([]), si_invoice_no: str = Form(""),
+    dr_sale_ids: list[str] = Form([]), si_invoice_no: str = Form(""), si_date: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """Issue a single consolidated SI recognizing Output VAT on one or more
     DR sales, at collection — a DR itself is never allowed to carry VAT
     (see pos._finalize_sale). Pure paperwork/VAT event: doesn't touch the
     DRs' own receivable/settlement history, which keeps working exactly as
-    it does today via /pay-selected, completely independent of this."""
+    it does today via /pay-selected, completely independent of this.
+    `si_date` optionally backdates the SI (and its Output VAT posting) to
+    the day it was actually paid, instead of the day it's being encoded —
+    same pattern as payment_date on /pay-selected."""
     def _back(err=None):
         suffix = f"&si_error={quote(err)}" if err else ""
         return RedirectResponse(f"/credits/collect?customer_id={customer_id}{suffix}", status_code=status.HTTP_302_FOUND)
@@ -456,6 +460,10 @@ def issue_si(
     ids = {int(i) for i in dr_sale_ids if i.isdigit()}
     if not ids:
         return _back("Tick at least one Delivery Receipt to issue an SI for.")
+
+    si_dt, date_err = _resolve_settlement_datetime(si_date)
+    if date_err:
+        return _back(date_err)
 
     # Re-derive eligibility server-side — never trust which boxes the client
     # says were checked. Same rule as the GET page: still outstanding for
@@ -490,6 +498,8 @@ def issue_si(
         vat_amount=vat_amount, net_amount=net_amount, total=_money(total),
         receivable_amount=Decimal("0"),
     )
+    if si_dt:
+        si.created_at = si_dt
     for dr in drs:
         for ln in dr.lines:
             si.lines.append(models.SaleLine(
@@ -504,7 +514,7 @@ def issue_si(
         db.add(models.SiApplication(si_sale_id=si.id, dr_sale_id=dr.id, amount=dr.total))
 
     try:
-        accounting.post_si_conversion(db, si, entered_by_id=user.id)
+        accounting.post_si_conversion(db, si, entered_by_id=user.id, txn_date=si_dt.date() if si_dt else None)
     except accounting.PostingError as e:
         db.rollback()
         return _back(str(e))

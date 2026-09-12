@@ -82,12 +82,15 @@
   </div>
   {% endif %}
 
+  {% if output_vat_detail %}
+  <input class="search" type="search" id="outputVatSearch" placeholder="Search invoice #, customer, or TIN…" oninput="filterVatTable('outputVatBody', 'outputVatSearch', 'outputVatNoMatch')" style="width:100%;margin-bottom:10px;">
+  {% endif %}
   <div class="table-wrap">
     <table class="grid">
-      <thead><tr><th>Date</th><th>Invoice #</th><th>Customer</th><th>TIN #</th><th class="num">Net of VAT</th><th class="num">Output VAT</th><th class="num">Total Amount Due</th></tr></thead>
-      <tbody>
+      <thead><tr><th>Date</th><th>Invoice #</th><th>Customer</th><th>TIN #</th><th class="num">Sales</th><th class="num">Output VAT</th><th class="num">Total Amount</th></tr></thead>
+      <tbody id="outputVatBody">
         {% for r in output_vat_detail %}
-        <tr>
+        <tr data-search="{{ (r.invoice_no ~ ' ' ~ r.customer_name ~ ' ' ~ (r.customer_tin or ''))|lower }}">
           <td>{{ r.date.strftime('%b %d, %Y') }}</td>
           <td class="strong">{% if r.source_link %}<a href="{{ r.source_link }}">{{ r.invoice_no }}</a>{% else %}{{ r.invoice_no }}{% endif %}</td>
           <td>{{ r.customer_name }}</td>
@@ -99,6 +102,9 @@
         {% else %}
         <tr><td colspan="7" class="empty">No Output VAT activity in this period.</td></tr>
         {% endfor %}
+        {% if output_vat_detail %}
+        <tr id="outputVatNoMatch" class="empty" style="display:none;"><td colspan="7" class="empty">No rows match your search.</td></tr>
+        {% endif %}
       </tbody>
       {% if output_vat_detail %}
       <tfoot><tr><td colspan="4" class="strong">Total</td><td class="num strong">{{ output_vat_net_total|peso }}</td><td class="num strong">{{ output_vat|peso }}</td><td class="num strong">{{ output_vat_total_due|peso }}</td></tr></tfoot>
@@ -110,12 +116,15 @@
 <div class="card" style="margin-top:18px;">
   <h3 style="margin-top:0;">Input VAT detail</h3>
   <p class="muted">Every Purchase or Expense posting that contributed to Input VAT this period.</p>
+  {% if input_vat_detail %}
+  <input class="search" type="search" id="inputVatSearch" placeholder="Search invoice #, supplier, or TIN…" oninput="filterVatTable('inputVatBody', 'inputVatSearch', 'inputVatNoMatch')" style="width:100%;margin-bottom:10px;">
+  {% endif %}
   <div class="table-wrap">
     <table class="grid">
-      <thead><tr><th>Date</th><th>Supplier Invoice #</th><th>Supplier Name</th><th>TIN #</th><th class="num">Net of VAT</th><th class="num">Input VAT</th><th class="num">Total Amount Due</th></tr></thead>
-      <tbody>
+      <thead><tr><th>Date</th><th>Supplier Invoice #</th><th>Supplier Name</th><th>TIN #</th><th class="num">Purchases</th><th class="num">Input VAT</th><th class="num">Total Amount</th></tr></thead>
+      <tbody id="inputVatBody">
         {% for r in input_vat_detail %}
-        <tr>
+        <tr data-search="{{ (r.supplier_invoice ~ ' ' ~ r.supplier_name ~ ' ' ~ (r.supplier_tin or ''))|lower }}">
           <td>{{ r.date.strftime('%b %d, %Y') }}</td>
           <td class="strong">{% if r.source_link %}<a href="{{ r.source_link }}">{{ r.supplier_invoice }}</a>{% else %}{{ r.supplier_invoice }}{% endif %}</td>
           <td>{{ r.supplier_name }}</td>
@@ -127,6 +136,9 @@
         {% else %}
         <tr><td colspan="7" class="empty">No Input VAT activity in this period.</td></tr>
         {% endfor %}
+        {% if input_vat_detail %}
+        <tr id="inputVatNoMatch" class="empty" style="display:none;"><td colspan="7" class="empty">No rows match your search.</td></tr>
+        {% endif %}
       </tbody>
       {% if input_vat_detail %}
       <tfoot><tr><td colspan="4" class="strong">Total</td><td class="num strong">{{ input_vat_net_total|peso }}</td><td class="num strong">{{ input_vat|peso }}</td><td class="num strong">{{ input_vat_total_due|peso }}</td></tr></tfoot>
@@ -134,4 +146,19 @@
     </table>
   </div>
 </div>
+
+<script>
+  function filterVatTable(bodyId, searchId, noMatchId) {
+    const q = document.getElementById(searchId).value.trim().toLowerCase();
+    const rows = document.querySelectorAll('#' + bodyId + ' tr[data-search]');
+    let visible = 0;
+    rows.forEach(row => {
+      const match = !q || row.dataset.search.includes(q);
+      row.style.display = match ? '' : 'none';
+      if (match) visible++;
+    });
+    const noMatch = document.getElementById(noMatchId);
+    if (noMatch) noMatch.style.display = visible === 0 ? '' : 'none';
+  }
+</script>
 {% endblock %}

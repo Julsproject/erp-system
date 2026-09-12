@@ -25,6 +25,7 @@ from . import accounting, audit, models
 from .credits import _outstanding_sales
 from .database import get_db
 from .deps import get_current_user, is_staff
+from .sales import _resolve_settlement_datetime
 from .suppliers import _outstanding_purchases
 from .templating import templates
 
@@ -136,8 +137,11 @@ def deposit_pdc(pdc_id: int, request: Request, deposit_date: str = "", db: Sessi
 
 
 @router.post("/pdc/{pdc_id:int}/clear")
-def clear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    """The bank honored it: apply the payment it represents, only now."""
+def clear_pdc(pdc_id: int, request: Request, clear_date: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """The bank honored it: apply the payment it represents, only now.
+    `clear_date` backdates the resulting settlement (and its posting) to
+    when the cheque actually cleared, for a cheque that's only being marked
+    cleared in the system after the fact — defaults to now."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -145,6 +149,10 @@ def clear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user
     pdc = db.get(models.PostDatedCheque, pdc_id)
     if not pdc or pdc.status not in ("pending", "deposited"):
         return RedirectResponse(f"/pdc/{pdc_id}", status_code=302)
+    # Lenient like deposit_pdc's own date handling above — an invalid or
+    # future date just falls back to live 'now' rather than blocking the
+    # whole action over a date field.
+    clear_dt, _ = _resolve_settlement_datetime(clear_date)
 
     applications = list(pdc.applications)
     if not applications:
@@ -169,11 +177,16 @@ def clear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user
                 bank=pdc.bank, cheque_no=pdc.cheque_no, cheque_date=pdc.cheque_date.isoformat(),
                 cashier_id=user.id,
             )
+            if clear_dt:
+                settlement.created_at = clear_dt
             db.add(settlement)
             db.flush()
             last_settlement_id = settlement.id
             try:
-                accounting.post_receivable_settlement(db, sale, amount=app.amount, method="cheque", entered_by_id=user.id)
+                accounting.post_receivable_settlement(
+                    db, sale, amount=app.amount, method="cheque", entered_by_id=user.id,
+                    txn_date=clear_dt.date() if clear_dt else None,
+                )
             except accounting.PostingError:
                 pass
         # Informational only when a cheque covers one invoice; with several,
@@ -191,13 +204,19 @@ def clear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user
             # purchase only flips to "paid" once that brings its own balance
             # to zero — independently per purchase, since one cheque can now
             # cover several at once.
-            db.add(models.PurchaseSettlement(
+            purchase_settlement = models.PurchaseSettlement(
                 purchase_id=purchase.id, method="cheque", amount=app.amount,
                 bank=pdc.bank, cheque_no=pdc.cheque_no, cheque_date=pdc.cheque_date.isoformat(),
                 created_by=user.id,
-            ))
+            )
+            if clear_dt:
+                purchase_settlement.created_at = clear_dt
+            db.add(purchase_settlement)
             try:
-                accounting.post_purchase_settlement(db, purchase, amount=app.amount, method="cheque", entered_by_id=user.id)
+                accounting.post_purchase_settlement(
+                    db, purchase, amount=app.amount, method="cheque", entered_by_id=user.id,
+                    txn_date=clear_dt.date() if clear_dt else None,
+                )
             except accounting.PostingError:
                 pass
             db.flush()
@@ -209,10 +228,10 @@ def clear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user
             if Decimal(str(paid_so_far or 0)) >= (purchase.total or Decimal("0")):
                 purchase.status = "paid"
                 purchase.payment_method = "cheque"
-                purchase.paid_at = func.now()
+                purchase.paid_at = clear_dt or func.now()
 
     pdc.status = "cleared"
-    pdc.resolved_at = func.now()
+    pdc.resolved_at = clear_dt or func.now()
     audit.record(
         db, user=user, request=request, action="clear", entity_type="post_dated_cheque",
         entity_id=pdc.id, entity_label=pdc.cheque_no or f"PDC-{pdc.id}",

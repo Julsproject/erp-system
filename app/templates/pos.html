@@ -306,6 +306,9 @@
           <label>Bank <input id="fullChequeBank" type="text" placeholder="Optional"></label>
           <label>Cheque # <input id="fullChequeNo" type="text" placeholder="Optional"></label>
         </div>
+        <label class="pay-full-method" id="fullRefNoWrap" style="display:none;">Reference # <span class="muted">— optional</span>
+          <input id="fullRefNo" type="text" placeholder="e.g. GCash reference number" autocomplete="off">
+        </label>
         <label class="pay-full-method" id="fullTenderedWrap" style="display:none;">Amount received <span class="muted">— optional, for change</span>
           <input id="fullTendered" type="number" step="0.01" min="0" oninput="computeTotals()">
         </label>
@@ -352,6 +355,9 @@
           <label>Bank <input id="retChequeBank" type="text" placeholder="Optional"></label>
           <label>Cheque # <input id="retChequeNo" type="text" placeholder="Optional"></label>
         </div>
+        <label class="pay-full-method" id="retRefNoWrap" style="display:none;">Reference # <span class="muted">— optional</span>
+          <input id="retRefNo" type="text" placeholder="e.g. GCash reference number" autocomplete="off">
+        </label>
         <label class="pay-full-method" id="retTenderedWrap" style="display:none;">Amount received <span class="muted">— optional, for change</span>
           <input id="retTendered" type="number" step="0.01" min="0" oninput="computeTotals()">
         </label>
@@ -667,9 +673,15 @@ function setPaymentMode(m) {
   computeTotals();
 }
 
+// Methods that typically come with their own reference/transaction number —
+// cash has none, cheque already has its own cheque # field, and receivable
+// isn't money changing hands yet.
+const REF_NO_METHODS = ['gcash', 'maya', 'other_ewallet', 'bank_transfer'];
+
 function onFullMethodChange() {
   const method = document.getElementById('fullMethod').value;
   document.getElementById('fullChequeFields').style.display = method === 'cheque' ? 'flex' : 'none';
+  document.getElementById('fullRefNoWrap').style.display = REF_NO_METHODS.includes(method) ? 'flex' : 'none';
   document.getElementById('fullTenderedWrap').style.display = method === 'cash' ? 'flex' : 'none';
   computeTotals();
 }
@@ -979,6 +991,11 @@ function renderPayments() {
         '<label>Bank <input type="text" placeholder="Optional" value="' + (p.bank || '') + '" oninput="setPayChequeField(' + i + ', \'bank\', this.value)"></label>' +
         '<label>Cheque # <input type="text" placeholder="Optional" value="' + (p.cheque_no || '') + '" oninput="setPayChequeField(' + i + ', \'cheque_no\', this.value)"></label>';
       wrap.appendChild(cf);
+    } else if (REF_NO_METHODS.includes(p.method)) {
+      const rf = document.createElement('div');
+      rf.className = 'cheque-fields';
+      rf.innerHTML = '<label>Reference # <span class="muted">— optional</span><input type="text" placeholder="e.g. GCash reference number" autocomplete="off" value="' + (p.ref_no || '') + '" oninput="setPayChequeField(' + i + ', \'ref_no\', this.value)"></label>';
+      wrap.appendChild(rf);
     }
     box.appendChild(wrap);
   });
@@ -1309,6 +1326,7 @@ function computeTotals() {
     const refundRow = document.getElementById('retRefundRow');
     const receivableRow = document.getElementById('retReceivableRow');
     const chequeFields = document.getElementById('retChequeFields');
+    const refNoWrap = document.getElementById('retRefNoWrap');
     const method = document.getElementById('retMethod').value;
     const hasTxn = (r.net > 0 || subtotal > 0);
     let ok = hasTxn;
@@ -1329,6 +1347,7 @@ function computeTotals() {
     receivableRow.style.display = 'none';
     receivableRow.querySelector('span').textContent = 'Credits (Receivable)';
     chequeFields.style.display = 'none';
+    refNoWrap.style.display = 'none';
 
     if (diff > 0) {
       const m = document.getElementById('retMethod').value;
@@ -1350,6 +1369,8 @@ function computeTotals() {
         const change = Math.max(tendered - diff, 0);
         document.getElementById('retChange').textContent = peso(change);
         changeRow.style.display = change > 0.001 ? 'flex' : 'none';
+      } else if (REF_NO_METHODS.includes(m)) {
+        refNoWrap.style.display = 'flex';
       }
     } else if (diff < 0) {
       // If the matched invoice still has a credit balance, this refund
@@ -1451,12 +1472,15 @@ async function checkout() {
         row.cheque_date = document.getElementById('fullChequeDate').value;
         row.bank = document.getElementById('fullChequeBank').value;
         row.cheque_no = document.getElementById('fullChequeNo').value;
+      } else if (REF_NO_METHODS.includes(method)) {
+        row.ref_no = document.getElementById('fullRefNo').value;
       }
       payList = [row];
     } else {
       payList = payments.map(p => {
         const row = { method: p.method, amount: parseFloat(p.amount) || 0 };
         if (p.method === 'cheque') { row.cheque_date = p.cheque_date || ''; row.bank = p.bank || ''; row.cheque_no = p.cheque_no || ''; }
+        else if (REF_NO_METHODS.includes(p.method)) { row.ref_no = p.ref_no || ''; }
         return row;
       }).filter(p => p.amount > 0);
     }
@@ -1593,6 +1617,8 @@ async function checkout() {
     payload.cheque_date = document.getElementById('retChequeDate').value;
     payload.bank = document.getElementById('retChequeBank').value;
     payload.cheque_no = document.getElementById('retChequeNo').value;
+  } else if (REF_NO_METHODS.includes(document.getElementById('retMethod').value)) {
+    payload.ref_no = document.getElementById('retRefNo').value;
   }
   // Same fix as the refund branch above — key off whether an invoice was
   // actually matched, not the manual-mode toggle.

@@ -135,7 +135,11 @@ def _filtered_sales_query(db: Session, q: str, type_filter: str, date_from, date
         )
     if q:
         like = f"%{q}%"
-        query = query.filter(or_(models.Sale.invoice_no.ilike(like), models.Sale.customer_name.ilike(like)))
+        query = query.filter(or_(
+            models.Sale.invoice_no.ilike(like),
+            models.Sale.customer_name.ilike(like),
+            models.Sale.payments.any(models.Payment.ref_no.ilike(like)),
+        ))
     if type_filter == "sale":
         # An exchange is labeled "Sale x Exchange" precisely because it
         # includes a sale — filtering to "Sale" should catch those too.

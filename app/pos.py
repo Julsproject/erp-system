@@ -752,6 +752,7 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
     receivable_amount = Decimal("0")
     paid_amount = Decimal("0")
     method_rows = []
+    method_ref_nos = []
     cheque_rows = []
     for pay in payments or []:
         method = (pay.get("method") or "").strip().lower()
@@ -759,6 +760,7 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
         if amount <= 0 or method not in METHOD_LABELS:
             continue
         method_rows.append((method, amount))
+        method_ref_nos.append((pay.get("ref_no") or "").strip() or None)
         if method in ("receivable", "cheque"):
             receivable_amount += amount
         else:
@@ -805,8 +807,8 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
             base_date = backdated.date() if backdated else date.today()
             sale.due_date = base_date + timedelta(days=int(days))
 
-    for method, amount in method_rows:
-        sale.payments.append(models.Payment(method=method, amount=_money(amount)))
+    for (method, amount), ref_no in zip(method_rows, method_ref_nos):
+        sale.payments.append(models.Payment(method=method, amount=_money(amount), ref_no=ref_no))
 
     sale.subtotal = _money(subtotal)
     sale.discount_total = _money(discount_total)
@@ -1558,7 +1560,8 @@ def pos_exchange(data: dict, db: Session = Depends(get_db), user=Depends(get_cur
             else:
                 tendered = diff
             change = _money(tendered - diff)
-            ex.payments.append(models.Payment(method=method, amount=_money(tendered)))
+            ref_no = (data.get("ref_no") or "").strip() or None
+            ex.payments.append(models.Payment(method=method, amount=_money(tendered), ref_no=ref_no))
             ex.amount_tendered = _money(tendered)
             ex.change_amount = change
             ex.payment_method = METHOD_LABELS[method]
@@ -1799,7 +1802,11 @@ def _can_edit_sale_items(db: Session, sale: models.Sale):
             return "partially_paid"
     elif len(sale.payments) != 1:
         return "split"
-    if db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id).first():
+    # A voided refund/exchange already had its own stock/payment effect
+    # undone, so it no longer refers to anything real on this sale — only a
+    # still-live one is worth blocking a correction over (same reasoning as
+    # the cheque check right below, and purchases.py's equivalent).
+    if db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id, models.Sale.is_voided.is_(False)).first():
         return "linked"
     # Only a still-live cheque (pending/deposited/cleared) is worth blocking
     # over — one that's cancelled or bounced never left a real financial
@@ -1827,7 +1834,9 @@ def _can_edit_sale_payment(db: Session, sale: models.Sale):
         return "voided"
     if sale.txn_type != "sale":
         return "type"
-    if db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id).first():
+    # A voided refund/exchange no longer refers to anything real — see
+    # _can_edit_sale_items's identical check just above.
+    if db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id, models.Sale.is_voided.is_(False)).first():
         return "linked"
     # Only a still-live cheque (pending/deposited/cleared) is worth blocking
     # over — same reasoning as _can_edit_sale_items/void_sale's equivalent check.
@@ -1875,7 +1884,9 @@ def void_sale(
         return _back("reason")
     if (sale.receivable_amount or 0) > 0:
         return _back("credit")
-    linked_exists = db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id).first()
+    # A voided refund/exchange already had its own effect undone, so it no
+    # longer refers to anything real — only a still-live one blocks voiding.
+    linked_exists = db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id, models.Sale.is_voided.is_(False)).first()
     if linked_exists:
         return _back("linked")
     # Only a still-live cheque (pending/deposited/cleared) is worth blocking
@@ -1970,7 +1981,9 @@ def unvoid_sale(
         return _back("type")
     if " + " in (sale.payment_method or ""):
         return _back("split")
-    linked_exists = db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id).first()
+    # Same reasoning as void_sale's own check: a voided refund/exchange no
+    # longer refers to anything real, so it shouldn't keep blocking restore.
+    linked_exists = db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id, models.Sale.is_voided.is_(False)).first()
     if linked_exists:
         return _back("linked")
 
@@ -2046,6 +2059,26 @@ def edit_sale_invoice(
 
     old_invoice_no = sale.invoice_no
     sale.invoice_no = new_invoice_no
+    # Every journal entry already posted for this sale (its own "Sale
+    # {invoice}" entry, and any payment settlements on top of it) baked the
+    # old invoice # into its description/reference_no at posting time —
+    # without this they'd keep showing the old number forever in the
+    # General Ledger / Journal Entries, disagreeing with the sale itself.
+    entries = (
+        db.query(models.JournalEntry)
+        .filter(
+            models.JournalEntry.source_type.in_(("sale", "sale_settlement")),
+            models.JournalEntry.source_id == sale.id,
+        )
+        .all()
+    )
+    for entry in entries:
+        if entry.reference_no == old_invoice_no:
+            entry.reference_no = new_invoice_no
+        if entry.description == f"Sale {old_invoice_no}":
+            entry.description = f"Sale {new_invoice_no}"
+        elif entry.description == f"Payment on {old_invoice_no}":
+            entry.description = f"Payment on {new_invoice_no}"
     audit.record(
         db, user=user, request=request, action="update", entity_type="sale",
         entity_id=sale.id, entity_label=sale.invoice_no,
@@ -2161,6 +2194,19 @@ def edit_sale_date(
         return _back()
 
     sale.created_at = new_created_at
+    # The journal entry already posted for this sale (revenue, VAT, tender)
+    # has its own txn_date, independent of sale.created_at — without this,
+    # correcting a backlog sale's date moves it in Sales History/Reports but
+    # leaves its VAT sitting in whatever period it was originally entered
+    # in, silently splitting one transaction across two VAT periods.
+    entry = (
+        db.query(models.JournalEntry)
+        .filter(models.JournalEntry.source_type == "sale", models.JournalEntry.source_id == sale.id,
+                models.JournalEntry.status == "posted")
+        .first()
+    )
+    if entry:
+        entry.txn_date = new_d
     audit.record(
         db, user=user, request=request, action="update", entity_type="sale",
         entity_id=sale.id, entity_label=sale.invoice_no,
@@ -2226,7 +2272,9 @@ def edit_sale_payment_method(
             return _back("voided")
         if sale.txn_type != "sale":
             return _back("type")
-        if db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id).first():
+        # A voided refund/exchange no longer refers to anything real — same
+        # reasoning as _can_edit_sale_items's identical check.
+        if db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id, models.Sale.is_voided.is_(False)).first():
             return _back("linked")
         # Only a still-live cheque is worth blocking over — same reasoning
         # as _can_edit_sale_items/void_sale/_can_edit_sale_payment's checks.
@@ -2378,11 +2426,6 @@ def edit_sale_items_form(sale_id: int, request: Request, db: Session = Depends(g
 
 
 @router.post("/pos/receipt/{sale_id:int}/edit")
-# TODO(accounting): this recomputes sale.total/net_amount/vat_amount after the
-# original sale already posted a journal entry (see accounting.post_sale) —
-# the ledger currently does NOT get a correcting entry when items are edited,
-# so a sale corrected here will disagree with its own journal entry until this
-# is extended to post a delta (or edits are blocked once a sale has posted).
 def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
@@ -2487,6 +2530,22 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
         payment.amount = _money(total)
         sale.amount_tendered = _money(total)
         sale.change_amount = Decimal("0")
+
+    # The original posting (see accounting.post_sale) reflected the
+    # pre-correction revenue/VAT/tender split — without re-posting here, the
+    # ledger (and anything reading from it, like the VAT Report) keeps
+    # showing the old numbers forever, disagreeing with the sale itself.
+    # same_date=True keeps the reversal + replacement in the entry's own
+    # original period rather than today's, so the mistake and its fix
+    # always net to zero within that period.
+    accounting.reverse_sale_posting(db, sale, reason=f"Items corrected on sale {sale.invoice_no}", entered_by_id=user.id, same_date=True)
+    try:
+        accounting.post_sale(
+            db, sale, method_rows=[(p.method, p.amount) for p in sale.payments],
+            receivable_amount=sale.receivable_amount or Decimal("0"), entered_by_id=user.id,
+        )
+    except accounting.PostingError:
+        pass
 
     audit.record(
         db, user=user, request=request, action="update", entity_type="sale",

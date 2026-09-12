@@ -172,6 +172,33 @@
   <script>
     function peso(n) { return '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
 
+    // Remembers which invoices were ticked here so they're still ticked if
+    // you navigate away (e.g. to another menu) and come back before moving
+    // on to Pay Selected — same idea as Collect Payment's own draft.
+    const SELECTION_KEY = 'statementSelection:{{ customer.id }}';
+    const SELECTION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+    function saveSelection() {
+      try {
+        const ids = Array.from(document.querySelectorAll('.payChk:checked')).map(c => c.value);
+        localStorage.setItem(SELECTION_KEY, JSON.stringify({savedAt: Date.now(), saleIds: ids}));
+      } catch (e) { /* private browsing, storage full, etc. — best-effort */ }
+    }
+
+    function restoreSelection() {
+      try {
+        const raw = localStorage.getItem(SELECTION_KEY);
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        if (!saved.savedAt || Date.now() - saved.savedAt > SELECTION_MAX_AGE_MS) return;
+        const all = document.querySelectorAll('.payChk');
+        if (!all.length || !Array.isArray(saved.saleIds)) return;
+        all.forEach(c => { c.checked = saved.saleIds.includes(c.value); });
+        const selectAllChk = document.getElementById('selectAllChk');
+        if (selectAllChk) selectAllChk.checked = document.querySelectorAll('.payChk:checked').length === all.length;
+      } catch (e) {}
+    }
+
     function toggleAllChk(master) {
       document.querySelectorAll('.payChk').forEach(c => { c.checked = master.checked; });
       updateBatchBar();
@@ -180,7 +207,7 @@
     function updateBatchBar() {
       const checked = Array.from(document.querySelectorAll('.payChk:checked'));
       const bar = document.getElementById('batchBar');
-      if (!checked.length) { bar.style.display = 'none'; return; }
+      if (!checked.length) { bar.style.display = 'none'; saveSelection(); return; }
       bar.style.display = 'flex';
       let total = 0;
       checked.forEach(c => {
@@ -189,6 +216,7 @@
       });
       document.getElementById('batchCount').textContent = checked.length;
       document.getElementById('batchTotal').textContent = peso(total);
+      saveSelection();
     }
 
     function goPaySelected() {
@@ -196,6 +224,9 @@
       if (!ids.length) return;
       window.location.href = '/credits/{{ customer.id }}/pay-selected?' + ids.join('&');
     }
+
+    restoreSelection();
+    updateBatchBar();
   </script>
 </body>
 </html>

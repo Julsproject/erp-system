@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}{{ entry.journal_no }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{{ entry.journal_no }}</h1>
+    <p class="muted">{{ entry.txn_date.strftime('%b %d, %Y') }}{% if entry.reference_no %} · Ref: {{ entry.reference_no }}{% endif %}</p>
+  </div>
+  <a class="btn-link" href="/accounting/journal-entries">← Manual Journal Entries</a>
+</div>
+
+<div class="card" style="max-width:720px;">
+  <p style="margin:0 0 4px;"><strong>Description:</strong> {{ entry.description }}</p>
+  <p style="margin:0 0 4px;">
+    <strong>Status:</strong>
+    {% if entry.status == 'draft' %}<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:4px;font-size:12px;">Draft</span>
+    {% elif entry.status == 'reversed' %}<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:4px;font-size:12px;">Reversed</span>
+    {% else %}<span style="background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:4px;font-size:12px;">Posted</span>{% endif %}
+  </p>
+  {% if reversal_of %}
+  <p class="muted" style="margin:0 0 4px;">This reverses <a href="/accounting/journal-entries/{{ reversal_of.id }}/view">{{ reversal_of.journal_no }}</a>.</p>
+  {% endif %}
+  {% if reversed_by %}
+  <p class="muted" style="margin:0 0 4px;">Reversed by <a href="/accounting/journal-entries/{{ reversed_by.id }}/view">{{ reversed_by.journal_no }}</a>.</p>
+  {% endif %}
+
+  <div class="table-wrap" style="margin-top:14px;">
+    <table class="grid">
+      <thead><tr><th>Account</th><th>Memo</th><th class="num">Debit</th><th class="num">Credit</th></tr></thead>
+      <tbody>
+        {% for line in entry.lines %}
+        <tr>
+          <td>{{ line.account.code }} · {{ line.account.name }}</td>
+          <td>{{ line.memo or '—' }}</td>
+          <td class="num">{{ line.debit|peso if line.debit else '—' }}</td>
+          <td class="num">{{ line.credit|peso if line.credit else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="2" class="strong">Total</td>
+          <td class="num strong">{{ entry.lines|sum(attribute='debit')|peso }}</td>
+          <td class="num strong">{{ entry.lines|sum(attribute='credit')|peso }}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <div class="form-actions" style="margin-top:16px;">
+    {% if editable %}
+    <a class="btn-secondary" href="/accounting/journal-entries/{{ entry.id }}/edit">Edit</a>
+    {% endif %}
+    {% if entry.status == 'draft' %}
+    <form method="post" action="/accounting/journal-entries/{{ entry.id }}/post" style="display:inline;">
+      <button class="btn" type="submit" onclick="return confirm('Post this entry? It will start affecting every report immediately.')">Post</button>
+    </form>
+    <form method="post" action="/accounting/journal-entries/{{ entry.id }}/delete" style="display:inline;">
+      <button class="btn-secondary" type="submit" onclick="return confirm('Delete this draft?')">Delete</button>
+    </form>
+    {% elif entry.status == 'posted' and editable %}
+    <form method="post" action="/accounting/journal-entries/{{ entry.id }}/delete" style="display:inline;">
+      <button class="btn-secondary" type="submit" onclick="return confirm('Delete this entry? Since it was posted today, this removes it outright with no trace — past today, use Reverse instead.')">Delete</button>
+    </form>
+    {% elif entry.status == 'posted' %}
+    <form method="post" action="/accounting/journal-entries/{{ entry.id }}/reverse" style="display:inline;">
+      <button class="btn-secondary" type="submit" onclick="return confirm('Reverse this entry? A mirror-image entry will be posted; this one will never be edited or deleted.')">Reverse</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

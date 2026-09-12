@@ -106,7 +106,8 @@
     <button class="btn-secondary" type="submit">🏦 Mark Deposited</button>
   </form>
   {% endif %}
-  <form method="post" action="/pdc/{{ pdc.id }}/clear">
+  <form method="post" action="/pdc/{{ pdc.id }}/clear" style="display:flex;gap:8px;align-items:center;">
+    <input type="date" name="clear_date" value="" max="{{ today.isoformat() }}" title="When it actually cleared — optional, defaults to now" style="padding:8px;border:1px solid var(--line-2);border-radius:8px;">
     <button class="btn" type="submit">✓ Mark Cleared</button>
   </form>
   <form method="post" action="/pdc/{{ pdc.id }}/bounce" onsubmit="return confirm('Mark this cheque as bounced?');">

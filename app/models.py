@@ -586,6 +586,7 @@ class Payment(Base):
     sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False)
     method = Column(String(20), nullable=False)  # cash | gcash | maya | other_ewallet | card | bank_transfer | receivable
     amount = Column(Numeric(12, 2), nullable=False, server_default="0")
+    ref_no = Column(String(60), nullable=True)  # GCash/bank-transfer/other reference, non-cash methods only
 
     sale = relationship("Sale", back_populates="payments")
 

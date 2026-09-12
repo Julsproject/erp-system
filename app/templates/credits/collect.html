@@ -32,7 +32,13 @@
 
 {% else %}
 <h3 style="margin:0 0 2px;">{{ customer.name }}</h3>
-<p class="muted" style="margin:0 0 16px;font-size:12.5px;"><a class="btn-link" href="/credits/{{ customer.id }}">View full statement →</a></p>
+<p class="muted" style="margin:0 0 16px;font-size:12.5px;">
+  <a class="btn-link" href="/credits/{{ customer.id }}">View full statement →</a>
+  {% if is_admin %}
+  · <a class="btn-link" href="/accounting/journal-entries/new?template=customer_payment&description={{ ('Payment received from ' ~ customer.name)|urlencode }}">+ New Entry</a>
+  <span class="muted">— no matching invoice below? Record the payment directly as a journal entry instead.</span>
+  {% endif %}
+</p>
 
 {% if si_error %}<div class="alert" style="margin-bottom:14px;max-width:620px;">{{ si_error }}</div>{% endif %}
 
@@ -47,6 +53,10 @@
 <form class="form" method="post" action="/credits/{{ customer.id }}/pay-selected" id="collectForm"></form>
 {% if si_eligible_ids %}<form method="post" action="/credits/{{ customer.id }}/issue-si" id="issueSiForm"></form>{% endif %}
 
+<div style="max-width:680px;margin-bottom:10px;">
+  <input class="search" type="search" id="invoiceSearch" placeholder="Search invoice #…" oninput="filterInvoices()" style="width:100%;">
+</div>
+
 <div class="table-wrap" style="max-width:680px;">
   <table class="grid">
     <thead>
@@ -56,9 +66,9 @@
         {% if si_eligible_ids %}<th title="Recognize Output VAT for this Delivery Receipt via a new SI">Output VAT</th>{% endif %}
       </tr>
     </thead>
-    <tbody>
+    <tbody id="invoiceBody">
       {% for sale, outstanding in owed %}
-      <tr>
+      <tr data-invoice="{{ sale.invoice_no|lower }}">
         <td><input type="checkbox" class="payChk" name="sale_ids" value="{{ sale.id }}" data-outstanding="{{ outstanding }}" checked onchange="updateTotal()" form="collectForm"></td>
         <td class="strong">{{ sale.invoice_no }}</td>
         <td>{{ sale.created_at.strftime('%b %d, %Y') if sale.created_at else '' }}</td>
@@ -72,11 +82,14 @@
         {% endif %}
       </tr>
       {% endfor %}
+      <tr id="noInvoiceMatch" class="empty" style="display:none;">
+        <td colspan="{{ 5 if si_eligible_ids else 4 }}" class="empty">No invoice matches your search.</td>
+      </tr>
     </tbody>
     <tfoot>
       <tr>
         <td colspan="3" class="strong">Total selected</td><td class="num strong owed" id="selTotal">{{ total|peso }}</td>
-        {% if si_eligible_ids %}<td></td>{% endif %}
+        {% if si_eligible_ids %}<td class="num strong" id="siVatTotal">₱0.00</td>{% endif %}
       </tr>
     </tfoot>
   </table>
@@ -120,6 +133,10 @@
     <label>SI Invoice # <span class="muted">(new — from the SI booklet)</span>
       <input name="si_invoice_no" type="text" placeholder="e.g. 000210" autocomplete="off" form="issueSiForm">
     </label>
+    <label>SI date <span class="muted">(optional — defaults to today)</span>
+      <input name="si_date" type="date" value="" max="{{ today_iso }}" form="issueSiForm">
+      <small class="hint">Set this if the payment/SI was actually done earlier and you're only encoding it now.</small>
+    </label>
     <div class="form-actions" style="margin-top:14px;">
       <button class="btn-secondary" type="submit" id="issueSiSubmit" form="issueSiForm" disabled>Issue SI</button>
     </div>
@@ -128,7 +145,7 @@
 </div>
 
 <div class="form-actions" style="margin-top:14px;">
-  <a class="btn-secondary" href="/credits/collect">Cancel</a>
+  <a class="btn-secondary" href="/credits/collect" onclick="clearDraft()">Cancel</a>
 </div>
 {% endif %}
 {% endif %}
@@ -136,8 +153,108 @@
 <script>
   function peso(n) { return '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
 
+  // Remembers in-progress work on this customer's collection so it's still
+  // there if you navigate away (e.g. to another menu) and come back before
+  // submitting. Cleared once a form here actually gets submitted.
+  const DRAFT_KEY = 'collectDraft:{{ customer.id }}';
+  const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+  function loadDraft() {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (!raw) return null;
+      const draft = JSON.parse(raw);
+      if (!draft.savedAt || Date.now() - draft.savedAt > DRAFT_MAX_AGE_MS) return null;
+      return draft;
+    } catch (e) { return null; }
+  }
+
+  function fieldValue(name) {
+    const el = document.querySelector('[name=' + name + ']');
+    return el ? el.value : '';
+  }
+
+  function saveDraft() {
+    try {
+      const draft = {
+        savedAt: Date.now(),
+        saleIds: Array.from(document.querySelectorAll('.payChk:checked')).map(c => c.value),
+        method: fieldValue('method'),
+        refNo: fieldValue('ref_no'),
+        paymentDate: fieldValue('payment_date'),
+        bank: fieldValue('bank'),
+        chequeNo: fieldValue('cheque_no'),
+        chequeDate: fieldValue('cheque_date'),
+        vatSaleIds: Array.from(document.querySelectorAll('.vatChk:checked')).map(c => c.value),
+        siInvoiceNo: fieldValue('si_invoice_no'),
+        siDate: fieldValue('si_date'),
+      };
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    } catch (e) { /* private browsing, storage full, etc. — draft is best-effort */ }
+  }
+
+  function clearDraft() {
+    try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
+  }
+
+  function clearVatDraft() {
+    try {
+      const draft = loadDraft();
+      if (!draft) return;
+      delete draft.vatSaleIds;
+      delete draft.siInvoiceNo;
+      delete draft.siDate;
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    } catch (e) {}
+  }
+
+  function setFieldValue(name, value) {
+    const el = document.querySelector('[name=' + name + ']');
+    if (el && value) el.value = value;
+  }
+
+  function restoreDraft() {
+    const draft = loadDraft();
+    if (!draft) return;
+    const all = document.querySelectorAll('.payChk');
+    const selectAllChk = document.getElementById('selectAllChk');
+    if (Array.isArray(draft.saleIds) && all.length) {
+      all.forEach(c => { c.checked = draft.saleIds.includes(c.value); });
+      if (selectAllChk) selectAllChk.checked = document.querySelectorAll('.payChk:checked').length === all.length;
+    }
+    setFieldValue('method', draft.method);
+    setFieldValue('ref_no', draft.refNo);
+    setFieldValue('payment_date', draft.paymentDate);
+    setFieldValue('bank', draft.bank);
+    setFieldValue('cheque_no', draft.chequeNo);
+    setFieldValue('cheque_date', draft.chequeDate);
+    if (Array.isArray(draft.vatSaleIds)) {
+      document.querySelectorAll('.vatChk').forEach(c => { c.checked = draft.vatSaleIds.includes(c.value); });
+    }
+    setFieldValue('si_invoice_no', draft.siInvoiceNo);
+    setFieldValue('si_date', draft.siDate);
+  }
+
+  function filterInvoices() {
+    const q = document.getElementById('invoiceSearch').value.trim().toLowerCase();
+    const rows = document.querySelectorAll('#invoiceBody tr[data-invoice]');
+    let visible = 0;
+    rows.forEach(row => {
+      const match = !q || row.dataset.invoice.includes(q);
+      row.style.display = match ? '' : 'none';
+      if (match) visible++;
+    });
+    const noMatch = document.getElementById('noInvoiceMatch');
+    if (noMatch) noMatch.style.display = visible === 0 ? '' : 'none';
+  }
+
   function toggleAllChk(master) {
-    document.querySelectorAll('.payChk').forEach(c => { c.checked = master.checked; });
+    document.querySelectorAll('#invoiceBody tr[data-invoice]').forEach(row => {
+      if (row.style.display !== 'none') {
+        const chk = row.querySelector('.payChk');
+        if (chk) chk.checked = master.checked;
+      }
+    });
     updateTotal();
   }
 
@@ -149,6 +266,7 @@
     const btn = document.getElementById('collectSubmit');
     btn.textContent = 'Pay Selected — ' + peso(total);
     btn.disabled = checked.length === 0;
+    saveDraft();
   }
 
   function toggleCheque() {
@@ -156,6 +274,7 @@
     document.getElementById('chequeFields').style.display = isCheque ? 'block' : 'none';
     document.getElementById('refNoField').style.display = isCheque ? 'none' : 'flex';
     document.getElementById('paymentDateField').style.display = isCheque ? 'none' : 'flex';
+    saveDraft();
   }
 
   // VAT-inclusive: the 12% contained in each checked DR's own total (same
@@ -169,17 +288,30 @@
     const vat = total * 0.12 / 1.12;
     btn.textContent = checked.length ? ('Issue SI — recognize ' + peso(vat) + ' VAT') : 'Issue SI';
     btn.disabled = checked.length === 0;
+    const vatTotalCell = document.getElementById('siVatTotal');
+    if (vatTotalCell) vatTotalCell.textContent = peso(vat);
+    saveDraft();
   }
+
+  restoreDraft();
+
+  ['ref_no', 'payment_date', 'bank', 'cheque_no', 'cheque_date', 'si_invoice_no', 'si_date'].forEach(function (name) {
+    const el = document.querySelector('[name=' + name + ']');
+    if (el) el.addEventListener('input', saveDraft);
+  });
 
   const collectForm = document.getElementById('collectForm');
   if (collectForm) {
     toggleCheque();
+    updateTotal();
     collectForm.addEventListener('submit', function (e) {
       const checked = document.querySelectorAll('.payChk:checked').length;
       if (!checked) { e.preventDefault(); return; }
       if (!confirm('Mark ' + checked + ' invoice(s) totaling ' + document.getElementById('selTotal').textContent + ' as paid?')) {
         e.preventDefault();
+        return;
       }
+      clearDraft();
     });
   }
 
@@ -197,7 +329,9 @@
       }
       if (!confirm('Issue SI ' + invoiceNo + ' recognizing VAT on ' + checked + ' Delivery Receipt(s)?')) {
         e.preventDefault();
+        return;
       }
+      clearVatDraft();
     });
   }
 </script>

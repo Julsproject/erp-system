@@ -57,18 +57,85 @@
   </div>
 
   <div class="form-actions full">
-    <button class="btn" type="submit" onclick="return confirm('Mark {{ owed|length }} invoice(s) totaling {{ total|peso }} as paid?');">Pay {{ owed|length }} Invoice{{ '' if owed|length == 1 else 's' }} — {{ total|peso }}</button>
-    <a class="btn-secondary" href="/credits/{{ customer.id }}">Cancel</a>
+    <button class="btn" type="submit">Pay {{ owed|length }} Invoice{{ '' if owed|length == 1 else 's' }} — {{ total|peso }}</button>
+    <a class="btn-secondary" href="/credits/{{ customer.id }}" onclick="clearDraft()">Cancel</a>
   </div>
 </form>
 
 <script>
+  // Remembers in-progress payment details for this customer so they're
+  // still there if you navigate away (e.g. to another menu) and come back
+  // before submitting — same idea as Collect Payment's own draft. Cleared
+  // once this form actually gets submitted, or on Cancel.
+  const DRAFT_KEY = 'paySelectedDraft:{{ customer.id }}';
+  const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+  function loadDraft() {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (!raw) return null;
+      const draft = JSON.parse(raw);
+      if (!draft.savedAt || Date.now() - draft.savedAt > DRAFT_MAX_AGE_MS) return null;
+      return draft;
+    } catch (e) { return null; }
+  }
+
+  function fieldValue(name) {
+    const el = document.querySelector('[name=' + name + ']');
+    return el ? el.value : '';
+  }
+
+  function setFieldValue(name, value) {
+    const el = document.querySelector('[name=' + name + ']');
+    if (el && value) el.value = value;
+  }
+
+  function saveDraft() {
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({
+        savedAt: Date.now(),
+        method: fieldValue('method'), refNo: fieldValue('ref_no'), paymentDate: fieldValue('payment_date'),
+        bank: fieldValue('bank'), chequeNo: fieldValue('cheque_no'), chequeDate: fieldValue('cheque_date'),
+      }));
+    } catch (e) { /* private browsing, storage full, etc. — draft is best-effort */ }
+  }
+
+  function clearDraft() {
+    try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
+  }
+
+  function restoreDraft() {
+    const draft = loadDraft();
+    if (!draft) return;
+    setFieldValue('method', draft.method);
+    setFieldValue('ref_no', draft.refNo);
+    setFieldValue('payment_date', draft.paymentDate);
+    setFieldValue('bank', draft.bank);
+    setFieldValue('cheque_no', draft.chequeNo);
+    setFieldValue('cheque_date', draft.chequeDate);
+  }
+
   function toggleCheque() {
     const isCheque = document.getElementById('method').value === 'cheque';
     document.getElementById('chequeFields').style.display = isCheque ? 'block' : 'none';
     document.getElementById('refNoField').style.display = isCheque ? 'none' : 'flex';
     document.getElementById('paymentDateField').style.display = isCheque ? 'none' : 'flex';
+    saveDraft();
   }
+
+  restoreDraft();
   toggleCheque();
+  ['ref_no', 'payment_date', 'bank', 'cheque_no', 'cheque_date'].forEach(function (name) {
+    const el = document.querySelector('[name=' + name + ']');
+    if (el) el.addEventListener('input', saveDraft);
+  });
+
+  document.getElementById('paySelectedForm').addEventListener('submit', function (e) {
+    if (!confirm('Mark {{ owed|length }} invoice(s) totaling {{ total|peso }} as paid?')) {
+      e.preventDefault();
+      return;
+    }
+    clearDraft();
+  });
 </script>
 {% endblock %}

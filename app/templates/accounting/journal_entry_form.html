@@ -1,23 +1,23 @@
 {% extends "base.html" %}
-{% block title %}New Journal Entry · {{ app_name }}{% endblock %}
+{% block title %}{{ "Edit " ~ entry.journal_no if entry else "New Journal Entry" }} · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1 class="page-title">New Journal Entry</h1>
-  <a class="btn-link" href="/accounting/journal-entries">← Manual Journal Entries</a>
+  <h1 class="page-title">{{ "Edit " ~ entry.journal_no if entry else "New Journal Entry" }}</h1>
+  <a class="btn-link" href="{{ '/accounting/journal-entries/' ~ entry.id ~ '/view' if entry else '/accounting/journal-entries' }}">← {{ 'Back to entry' if entry else 'Manual Journal Entries' }}</a>
 </div>
 {% include "accounting/_subnav.html" %}
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
 
-<form class="card form" method="post" action="/accounting/journal-entries" novalidate id="jeForm">
+<form class="card form" method="post" action="{{ '/accounting/journal-entries/' ~ entry.id ~ '/edit' if entry else '/accounting/journal-entries' }}" novalidate id="jeForm">
   <label>Date
-    <input name="txn_date" type="date" value="{{ today }}" required>
+    <input name="txn_date" type="date" value="{{ entry.txn_date.isoformat() if entry else today }}" required>
   </label>
   <label>Reference # <span class="muted">— optional</span>
-    <input name="reference_no">
+    <input name="reference_no" value="{{ entry.reference_no or '' if entry else '' }}">
   </label>
   <label class="full">Description
-    <input name="description" required placeholder="e.g. Owner capital injection, year-end correction">
+    <input name="description" required placeholder="e.g. Owner capital injection, year-end correction" value="{{ entry.description or '' if entry else (prefill_description or '') }}">
   </label>
 
   <div class="full">
@@ -38,11 +38,15 @@
   </div>
 
   <div class="form-actions full">
-    <button class="btn" type="submit">Save as Draft</button>
-    <a class="btn-secondary" href="/accounting/journal-entries">Cancel</a>
+    <button class="btn" type="submit">{{ 'Save changes' if entry else 'Save as Draft' }}</button>
+    <a class="btn-secondary" href="{{ '/accounting/journal-entries/' ~ entry.id ~ '/view' if entry else '/accounting/journal-entries' }}">Cancel</a>
   </div>
+  {% if entry %}
+  <p class="muted full">{{ 'Still a draft' if entry.status == 'draft' else 'Already posted' }} — saving replaces its lines immediately{{ '' if entry.status == 'draft' else ", updating every report that reads from it." }} Editing is only available today; past that, use Reverse instead.</p>
+  {% else %}
   <p class="muted full">Saved as a draft first — it won't affect any report or balance until someone explicitly
     Posts it from the Manual Journal Entries list.</p>
+  {% endif %}
 </form>
 
 <script>
@@ -50,21 +54,31 @@ const ACCOUNTS = [
   {% for a in accounts %}{id: {{ a.id }}, label: {{ (a.code ~ " · " ~ a.name)|tojson }}},{% endfor %}
 ];
 
+const EXISTING_LINES = [
+  {% if entry %}{% for line in entry.lines %}{accountId: {{ line.account_id }}, side: {{ ('debit' if line.debit else 'credit')|tojson }}, amount: {{ (line.debit if line.debit else line.credit)|float }}, memo: {{ (line.memo or '')|tojson }}},{% endfor %}{% endif %}
+];
+
+const TEMPLATE_LINES = [
+  {% if not entry %}{% for line in template_lines %}{accountId: {{ line.account_id }}, side: {{ line.side|tojson }}},{% endfor %}{% endif %}
+];
+
 function accountOptions(selected) {
   return ACCOUNTS.map(a => `<option value="${a.id}" ${a.id === selected ? 'selected' : ''}>${a.label}</option>`).join('');
 }
 
-function addLine(side) {
+function addLine(prefill) {
+  prefill = prefill || {};
+  const side = prefill.side || 'debit';
   const tbody = document.getElementById('lineBody');
   const row = document.createElement('tr');
   row.innerHTML = `
-    <td><select name="account_id">${accountOptions(null)}</select></td>
+    <td><select name="account_id">${accountOptions(prefill.accountId || null)}</select></td>
     <td><select name="side">
       <option value="debit" ${side === 'debit' ? 'selected' : ''}>Debit</option>
       <option value="credit" ${side === 'credit' ? 'selected' : ''}>Credit</option>
     </select></td>
-    <td><input name="amount" type="number" step="0.01" min="0.01" oninput="recalc()"></td>
-    <td><input name="memo" placeholder="optional"></td>
+    <td><input name="amount" type="number" step="0.01" min="0.01" value="${prefill.amount || ''}" oninput="recalc()"></td>
+    <td><input name="memo" placeholder="optional" value="${prefill.memo || ''}"></td>
     <td><button type="button" class="btn-link" onclick="this.closest('tr').remove(); recalc();">Remove</button></td>
   `;
   tbody.appendChild(row);
@@ -90,7 +104,13 @@ function recalc() {
   }
 }
 
-addLine('debit');
-addLine('credit');
+if (EXISTING_LINES.length) {
+  EXISTING_LINES.forEach(addLine);
+} else if (TEMPLATE_LINES.length) {
+  TEMPLATE_LINES.forEach(addLine);
+} else {
+  addLine({side: 'debit'});
+  addLine({side: 'credit'});
+}
 </script>
 {% endblock %}
