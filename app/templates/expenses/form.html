@@ -3,13 +3,14 @@
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">{{ 'Edit expense' if expense else 'Add expense' }}</h1>
-  <a class="btn-link" href="/expenses">← Back to expenses</a>
+  <a class="btn-link" href="{{ back }}">← Back</a>
 </div>
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
 
 <form class="card form" method="post" novalidate enctype="multipart/form-data"
       action="{{ '/expenses/' ~ expense.id if expense else '/expenses' }}">
+  {% if not expense %}<input type="hidden" name="back" value="{{ back }}">{% endif %}
 
   <label>Category
     <input name="category" list="expense-category-list" placeholder="Type or pick… e.g. Rent, Utilities"
@@ -58,6 +59,10 @@
     <input name="payee" value="{{ expense.payee or '' if expense else '' }}" placeholder="e.g. Meralco, Landlord, Juan Dela Cruz">
   </label>
 
+  <label>Payee TIN <span class="muted">(for VAT purposes, if this has VAT)</span>
+    <input name="tin" value="{{ expense.tin or '' if expense else '' }}" placeholder="e.g. 123-456-789-000">
+  </label>
+
   <label>Reference # <span class="muted">(cheque #, transfer ref)</span>
     <input name="reference_no" value="{{ expense.reference_no or '' if expense else '' }}">
   </label>
@@ -83,7 +88,7 @@
 
   <div class="form-actions full">
     <button class="btn" type="submit">{{ 'Save changes' if expense else 'Save expense' }}</button>
-    <a class="btn-secondary" href="/expenses">Cancel</a>
+    <a class="btn-secondary" href="{{ back }}">Cancel</a>
   </div>
 </form>
 

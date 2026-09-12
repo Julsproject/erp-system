@@ -953,6 +953,11 @@ class Expense(Base):
     ref_no = Column(String(20), unique=True, index=True)   # EXP-000001
     category_id = Column(Integer, ForeignKey("expense_categories.id"), nullable=True)
     payee = Column(String(150))                # who got paid — vendor, landlord, employee...
+    # The payee's TIN, for the Input VAT report's TIN # column — there's no
+    # linked Supplier record here (payee is free text), so unlike a
+    # Purchase's Supplier.tin this is captured per-expense. Only meaningful
+    # when vat_amount > 0; optional otherwise.
+    tin = Column(String(30))
     description = Column(String(255))
     amount = Column(Numeric(12, 2), nullable=False, server_default="0")
     # VAT portion already included in `amount`, same inclusive convention as

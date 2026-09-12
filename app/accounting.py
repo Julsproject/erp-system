@@ -1274,7 +1274,8 @@ def _vat_input_detail(db: Session, period_start: date, period_end: date):
     (date / invoice / party name / TIN) — a Purchase's own supplier invoice
     # (invoice_no, not the internal ref_no) and its Supplier.tin; an Expense
     has no linked supplier record, so it falls back to its receipt # and
-    payee name, with TIN blank (nothing on Expense carries one)."""
+    payee name, with Expense.tin (entered per-expense — see the Log Expense
+    form) instead of a supplier's."""
     account = db.query(models.Account).filter(models.Account.system_key == "INPUT_VAT").first()
     if not account:
         return []
@@ -1313,7 +1314,7 @@ def _vat_input_detail(db: Session, period_start: date, period_end: date):
             if expense:
                 supplier_invoice = expense.receipt_no or expense.reference_no or expense.ref_no
                 supplier_name = expense.payee or "Unspecified payee"
-                supplier_tin = ""
+                supplier_tin = expense.tin or ""
                 source_link = f"/expenses/{expense.id}/edit"
                 net_of_vat, total_due = expense.amount - expense.vat_amount, expense.amount
         # A reversal (e.g. a cancelled purchase) posts the opposite sign of

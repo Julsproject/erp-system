@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from . import accounting, audit, models
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_floor_staff, is_staff, safe_back_url
 from .templating import templates
 
 router = APIRouter()
@@ -124,7 +124,7 @@ def list_expenses(
     )
 
 
-def _render_form(request, db, user, expense=None, error=None):
+def _render_form(request, db, user, expense=None, error=None, back=""):
     categories = db.query(models.ExpenseCategory).order_by(models.ExpenseCategory.name).all()
     paid_from_accounts = (
         db.query(models.BankAccount)
@@ -139,17 +139,22 @@ def _render_form(request, db, user, expense=None, error=None):
             "expense": expense, "categories": categories, "methods": PAYMENT_METHODS,
             "paid_from_accounts": paid_from_accounts, "paid_from_methods": PAID_FROM_METHODS,
             "today": date.today().isoformat(), "error": error,
+            "back": safe_back_url(back, "/expenses" if is_staff(user) else "/pos"),
         },
     )
 
 
 @router.get("/expenses/new", response_class=HTMLResponse)
-def new_expense(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def new_expense(request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Logging a NEW expense is open to any floor staff (cashier included —
+    see the POS shortcut), not just admin/manager. Editing, voiding, and the
+    full expenses list stay admin/manager-only below — a cashier can record
+    one, but doesn't get to browse or change everyone else's."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
-    return _render_form(request, db, user)
+    return _render_form(request, db, user, back=back)
 
 
 @router.get("/expenses/{expense_id:int}/edit", response_class=HTMLResponse)
@@ -196,6 +201,7 @@ def _save_attachment(form):
 def _apply_form(expense: models.Expense, db: Session, form):
     expense.category = _get_or_create_category(db, form.get("category"))
     expense.payee = (form.get("payee") or "").strip() or None
+    expense.tin = (form.get("tin") or "").strip() or None
     expense.description = (form.get("description") or "").strip() or None
     expense.amount = _dec(form.get("amount"))
     expense.vat_amount = _dec(form.get("vat_amount"))
@@ -213,26 +219,27 @@ def _apply_form(expense: models.Expense, db: Session, form):
 @router.post("/expenses")
 def create_expense(
     request: Request,
-    category: str = Form(""), payee: str = Form(""), description: str = Form(""),
+    category: str = Form(""), payee: str = Form(""), tin: str = Form(""), description: str = Form(""),
     amount: str = Form(""), vat_amount: str = Form(""), expense_date: str = Form(""),
     payment_method: str = Form("cash"), paid_from_account_id: str = Form(""),
     reference_no: str = Form(""), receipt_no: str = Form(""), notes: str = Form(""),
+    back: str = Form(""),
     attachment: UploadFile | None = File(None),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
     form = {
-        "category": category, "payee": payee, "description": description,
+        "category": category, "payee": payee, "tin": tin, "description": description,
         "amount": amount, "vat_amount": vat_amount, "expense_date": expense_date,
         "payment_method": payment_method, "paid_from_account_id": paid_from_account_id,
         "reference_no": reference_no, "receipt_no": receipt_no, "notes": notes,
         "attachment": attachment,
     }
     if _dec(form.get("amount")) <= 0:
-        return _render_form(request, db, user, error="Enter an amount greater than zero.")
+        return _render_form(request, db, user, error="Enter an amount greater than zero.", back=back)
     expense = models.Expense(created_by=user.id)
     _apply_form(expense, db, form)
     attachment_path = _save_attachment(form)
@@ -251,7 +258,16 @@ def create_expense(
         summary=f"Recorded expense {expense.ref_no} — {expense.amount} to {expense.payee or 'payee'}",
     )
     db.commit()
-    return RedirectResponse("/expenses", status_code=status.HTTP_302_FOUND)
+    # Prefer wherever they actually came from (e.g. the POS shortcut) over
+    # the default — a cashier can't see the full expenses list (admin/manager
+    # only), so without this they'd just bounce off a page they can't view.
+    safe_back = safe_back_url(back, "")
+    if safe_back:
+        sep = "&" if "?" in safe_back else "?"
+        return RedirectResponse(f"{safe_back}{sep}expense_logged={expense.ref_no}", status_code=status.HTTP_302_FOUND)
+    if is_staff(user):
+        return RedirectResponse("/expenses", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(f"/pos?expense_logged={expense.ref_no}", status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/expenses/{expense_id:int}")
