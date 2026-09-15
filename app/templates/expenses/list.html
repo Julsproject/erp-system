@@ -1,12 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Expenses · {{ app_name }}{% endblock %}
 {% block content %}
+{# Where Add/Edit/Print send you back to — this exact page, search, and filters. #}
+{% set cur_url = '/expenses?page=' ~ page ~ ('&q=' ~ q|urlencode if q else '') ~ ('&category_id=' ~ category_id if category_id else '')
+   ~ ('&date_from=' ~ date_from if date_from else '') ~ ('&date_to=' ~ date_to if date_to else '') %}
 <div class="page-head">
   <div>
     <h1 class="page-title">Expenses</h1>
     <p class="muted">Business costs outside of inventory purchases — rent, utilities, salaries, and so on</p>
   </div>
-  <a class="btn" href="/expenses/new">+ Add expense</a>
+  <a class="btn" href="/expenses/new?back={{ cur_url|urlencode }}">+ Add expense</a>
 </div>
 
 <div class="stat-row">
@@ -68,8 +71,8 @@
         <td>{{ e.payment_method|replace('_',' ')|title }}</td>
         <td class="num strong">{{ e.amount|peso }}</td>
         <td class="row-actions">
-          <a class="btn-link" href="/expenses/{{ e.id }}/edit">Edit</a>
-          <a class="btn-link" href="/expenses/{{ e.id }}/receipt">Print</a>
+          <a class="btn-link" href="/expenses/{{ e.id }}/edit?back={{ cur_url|urlencode }}">Edit</a>
+          <a class="btn-link" href="/expenses/{{ e.id }}/receipt?back={{ cur_url|urlencode }}">Print</a>
         </td>
       </tr>
       {% else %}

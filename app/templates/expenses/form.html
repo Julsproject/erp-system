@@ -10,7 +10,7 @@
 
 <form class="card form" method="post" novalidate enctype="multipart/form-data"
       action="{{ '/expenses/' ~ expense.id if expense else '/expenses' }}">
-  {% if not expense %}<input type="hidden" name="back" value="{{ back }}">{% endif %}
+  <input type="hidden" name="back" value="{{ back }}">
 
   <label>Category
     <input name="category" list="expense-category-list" placeholder="Type or pick… e.g. Rent, Utilities"
@@ -95,6 +95,7 @@
 {% if expense %}
 <form method="post" action="/expenses/{{ expense.id }}/void" style="margin-top:14px;"
       onsubmit="return confirm('Void this expense? It will no longer count toward totals.');">
+  <input type="hidden" name="back" value="{{ back }}">
   <button class="btn-link danger" type="submit">Void this expense</button>
 </form>
 {% endif %}

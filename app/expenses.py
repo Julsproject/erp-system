@@ -158,15 +158,15 @@ def new_expense(request: Request, back: str = "", db: Session = Depends(get_db),
 
 
 @router.get("/expenses/{expense_id:int}/edit", response_class=HTMLResponse)
-def edit_expense(expense_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def edit_expense(expense_id: int, request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     expense = db.get(models.Expense, expense_id)
     if not expense:
-        return RedirectResponse("/expenses", status_code=302)
-    return _render_form(request, db, user, expense=expense)
+        return RedirectResponse(safe_back_url(back, "/expenses"), status_code=302)
+    return _render_form(request, db, user, expense=expense, back=back)
 
 
 @router.get("/expenses/{expense_id:int}/receipt", response_class=HTMLResponse)
@@ -355,6 +355,11 @@ def create_expense(
     # the default — a cashier can't see the full expenses list (admin/manager
     # only), so without this they'd just bounce off a page they can't view.
     safe_back = safe_back_url(back, "")
+    if safe_back and not safe_back.startswith("/pos"):
+        # Back to the same searched/filtered Expenses list, or the same
+        # Dashboard period, it was opened from — the expense_logged banner
+        # below is a POS-only thing, so don't tack it onto other pages.
+        return RedirectResponse(safe_back, status_code=status.HTTP_302_FOUND)
     if safe_back:
         sep = "&" if "?" in safe_back else "?"
         return RedirectResponse(
@@ -377,6 +382,7 @@ def update_expense(
     amount: str = Form(""), vat_amount: str = Form(""), expense_date: str = Form(""),
     payment_method: str = Form("cash"), paid_from_account_id: str = Form(""),
     reference_no: str = Form(""), receipt_no: str = Form(""), notes: str = Form(""),
+    back: str = Form(""),
     attachment: UploadFile | None = File(None),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
@@ -384,9 +390,11 @@ def update_expense(
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
+    # Return to the exact filtered/searched list page Edit was opened from.
+    back = safe_back_url(back, "/expenses")
     expense = db.get(models.Expense, expense_id)
     if not expense:
-        return RedirectResponse("/expenses", status_code=302)
+        return RedirectResponse(back, status_code=302)
     form = {
         "category": category, "payee": payee, "description": description,
         "amount": amount, "vat_amount": vat_amount, "expense_date": expense_date,
@@ -395,7 +403,7 @@ def update_expense(
         "attachment": attachment,
     }
     if _dec(form.get("amount")) <= 0:
-        return _render_form(request, db, user, expense=expense, error="Enter an amount greater than zero.")
+        return _render_form(request, db, user, expense=expense, error="Enter an amount greater than zero.", back=back)
     before = audit.snapshot(expense, ["amount", "payee", "description", "expense_date", "payment_method", "reference_no"])
     # Everything that actually determines what post_expense() would post —
     # if none of this changes, skip the reverse/repost below so a plain
@@ -438,11 +446,14 @@ def update_expense(
             summary=f"Edited expense {expense.ref_no}", changes=changes,
         )
     db.commit()
-    return RedirectResponse("/expenses", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(back, status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/expenses/{expense_id:int}/void")
-def void_expense(expense_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def void_expense(
+    expense_id: int, request: Request, back: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -457,4 +468,4 @@ def void_expense(expense_id: int, request: Request, db: Session = Depends(get_db
             summary=f"Voided expense {expense.ref_no} ({expense.amount})",
         )
         db.commit()
-    return RedirectResponse("/expenses", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(safe_back_url(back, "/expenses"), status_code=status.HTTP_302_FOUND)
