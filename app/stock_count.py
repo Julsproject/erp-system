@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from . import audit, models
 from .database import SessionLocal, get_db
 from .deps import get_current_user, is_floor_staff, is_staff
-from .pos import _apply_stock_count_correction
+from .pos import MANILA, _apply_stock_count_correction
 from .products import ADJUSTMENT_REASON_LABELS, ADJUSTMENT_REASONS, _parse_upload
 from .search_utils import multi_word_ilike
 from .templating import templates
@@ -39,6 +39,40 @@ PAGE_SIZE = 15
 # harmless since _apply_effective_date_rebase only ever runs once per count
 # (guarded by effective_applied_at, not by this).
 _last_effective_date_check_day = None
+
+
+def movement_ref_date(db: Session, m: models.StockMovement) -> date:
+    """The transaction (reference) date a stock movement belongs to, in
+    Manila time. Almost every movement is already stamped with its
+    transaction's own date (backdated sales/deliveries, edits, repacks) —
+    except the few that undo an earlier record, which are stamped whenever
+    someone clicked them: a void/un-void belongs to its sale's date, a
+    cancelled purchase to the purchase's date, a double-deduction correction
+    to the movement it corrects."""
+    stamp = m.created_at
+    if m.reason in ("void", "unvoid") and m.ref:
+        display = func.concat(func.coalesce(models.Sale.receipt_type, ""), models.Sale.invoice_no)
+        sale = db.query(models.Sale).filter(display == m.ref).order_by(models.Sale.id.desc()).first()
+        stamp = sale.created_at if sale and sale.created_at else stamp
+    elif m.reason == "purchase-cancelled" and m.ref:
+        purchase = db.query(models.Purchase).filter(models.Purchase.ref_no == m.ref).first()
+        stamp = purchase.created_at if purchase and purchase.created_at else stamp
+    elif m.corrects_movement_id:
+        original = db.get(models.StockMovement, m.corrects_movement_id)
+        stamp = original.created_at if original and original.created_at else stamp
+    return stamp.astimezone(MANILA).date()
+
+
+def qty_dated_after(db: Session, product_id: int, cutoff: date) -> Decimal:
+    """Net stock movement for a product dated (by reference date — see
+    movement_ref_date) after `cutoff`, however late it was encoded. Stock
+    count corrections are excluded; they aren't transactions."""
+    rows = (
+        db.query(models.StockMovement)
+        .filter(models.StockMovement.product_id == product_id, models.StockMovement.reason != "stock_count")
+        .all()
+    )
+    return sum((Decimal(str(m.qty_base or 0)) for m in rows if movement_ref_date(db, m) > cutoff), Decimal("0"))
 
 
 def _default_effective_date(from_date: date) -> date:
@@ -1014,11 +1048,18 @@ def stock_count_complete(count_id: int, request: Request, reason: str = Form("co
 
     reason_label = ADJUSTMENT_REASON_LABELS.get(reason, reason)
     for line in count.lines:
-        variance = Decimal(str(line.counted_qty or 0)) - Decimal(str(line.system_qty or 0))
-        if variance == 0:
-            continue
         product = db.get(models.Product, line.product_id, with_for_update=True)
         if not product:
+            continue
+        scanned_on = line.first_scanned_at.astimezone(MANILA).date() if line.first_scanned_at else None
+        if count.count_date and scanned_on and scanned_on > count.count_date:
+            # Counted on paper and typed in days later: the snapshot taken at
+            # scan time already includes sales/deliveries dated after the
+            # count, which this count must not cancel out. Compare against
+            # what was on hand as of the count date instead.
+            line.system_qty = Decimal(str(product.total_qty or 0)) - qty_dated_after(db, product.id, count.count_date)
+        variance = Decimal(str(line.counted_qty or 0)) - Decimal(str(line.system_qty or 0))
+        if variance == 0:
             continue
         before_beginning = Decimal(str(product.beginning_stock or 0))
         before_stock = Decimal(str(product.stock_qty or 0))
