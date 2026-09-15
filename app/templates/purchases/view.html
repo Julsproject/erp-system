@@ -139,7 +139,8 @@
       <input type="text" name="invoice_no" value="{{ purchase.invoice_no or '' }}">
     </label>
     <label class="pos-customer" style="margin-top:8px;display:block;">Delivery date
-      <input type="text" name="delivery_date" value="{{ purchase.delivery_date or '' }}" placeholder="as printed on the DR">
+      <input type="date" name="delivery_date" value="{{ purchase.delivery_date or '' }}">
+      <small class="hint">The DR date is this delivery's real date — changing it moves the purchase and its stock entries to that date.</small>
     </label>
     {% if purchase.txn_type == 'receive' %}
     <label class="checkbox" style="margin-top:10px;display:flex;align-items:center;gap:6px;{{ '' if can_edit_payment else 'opacity:.55;cursor:not-allowed;' }}">

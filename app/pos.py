@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import accounting, audit, models, settings_store
+from . import accounting, audit, models, settings_store, stock_dates
 from .customers import get_or_create_customer
 from .database import get_db
 from .deps import get_current_user, is_staff, safe_back_url
@@ -2254,6 +2254,36 @@ def edit_sale_date(
         return _back()
 
     sale.created_at = new_created_at
+
+    # Its stock movements follow it — the Stock Card shows the invoice date,
+    # not when it was encoded or corrected — and if the move crosses the
+    # latest stock count its stock effect follows (see stock_dates).
+    old_d = old_created_at.astimezone(MANILA).date() if old_created_at else new_d
+    ref = _display_invoice(sale)
+    pids = {l.product_id for l in sale.lines if l.product_id}
+    moves = (
+        db.query(models.StockMovement)
+        .filter(models.StockMovement.ref == ref,
+                or_(models.StockMovement.product_id.in_(pids), models.StockMovement.reason.in_(["repack-in", "repack-out"])))
+        .all()
+    )
+    display = func.concat(func.coalesce(models.Sale.receipt_type, ""), models.Sale.invoice_no)
+    if db.query(models.Sale.id).filter(display == ref, models.Sale.id != sale.id).first():
+        # another sale shares this invoice # — only take the ones on this sale's date
+        moves = [m for m in moves if stock_dates.local_date(m.created_at) == old_d]
+    for m in moves:
+        m.created_at = stock_dates.on_date(m.created_at, new_d)
+    if sale.txn_type == "sale":
+        for pid in pids:
+            product = db.get(models.Product, pid, with_for_update=True)
+            if not product:
+                continue
+            natural = -sum((Decimal(str(l.qty or 0)) * Decimal(str(l.unit_factor or 1)) for l in sale.lines if l.product_id == pid), Decimal("0"))
+            current = sum((Decimal(str(m.qty_base or 0)) for m in moves
+                           if m.product_id == pid and m.reason in ("sale", "sale-edit-reverse", "correction")), Decimal("0"))
+            stock_dates.settle_redate(db, product, old_date=old_d, new_date=new_d, current_effect=current,
+                                      natural_effect=natural, ref=ref, created_at=new_created_at)
+
     # The journal entry already posted for this sale (revenue, VAT, tender)
     # has its own txn_date, independent of sale.created_at — without this,
     # correcting a backlog sale's date moves it in Sales History/Reports but

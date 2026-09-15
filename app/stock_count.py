@@ -10,7 +10,7 @@ correct even if sales happen elsewhere on the system while counting.
 """
 import io
 import json
-from datetime import date
+from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
 
 import openpyxl
@@ -1052,12 +1052,15 @@ def stock_count_complete(count_id: int, request: Request, reason: str = Form("co
         if not product:
             continue
         scanned_on = line.first_scanned_at.astimezone(MANILA).date() if line.first_scanned_at else None
+        stamp = {}
         if count.count_date and scanned_on and scanned_on > count.count_date:
             # Counted on paper and typed in days later: the snapshot taken at
             # scan time already includes sales/deliveries dated after the
             # count, which this count must not cancel out. Compare against
-            # what was on hand as of the count date instead.
+            # what was on hand as of the count date instead — and date the
+            # correction on the count date, not the day it was typed in.
             line.system_qty = Decimal(str(product.total_qty or 0)) - qty_dated_after(db, product.id, count.count_date)
+            stamp = {"created_at": datetime.combine(count.count_date, time(23, 59, 59), tzinfo=MANILA)}
         variance = Decimal(str(line.counted_qty or 0)) - Decimal(str(line.system_qty or 0))
         if variance == 0:
             continue
@@ -1067,7 +1070,7 @@ def stock_count_complete(count_id: int, request: Request, reason: str = Form("co
         unit_cost = Decimal(str(product.cost_price or 0))
         db.add(models.StockMovement(
             product_id=product.id, qty_base=variance, reason="stock_count", ref=count.ref_no,
-            unit_cost=unit_cost, value=variance * unit_cost, note=reason_label,
+            unit_cost=unit_cost, value=variance * unit_cost, note=reason_label, **stamp,
         ))
         changes = {}
         if product.beginning_stock != before_beginning:

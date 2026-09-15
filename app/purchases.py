@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import accounting, audit, models, pricing, settings_store
+from . import accounting, audit, models, pricing, settings_store, stock_dates
 from .database import get_db
 from .deps import get_current_user, is_floor_staff, is_staff
 from .pos import MANILA, _find_backdated_stock_conflicts, _resolve_txn_datetime, _vat_of
@@ -116,6 +116,18 @@ def _parse_date(s: str):
         return date.fromisoformat(s) if s else None
     except ValueError:
         return None
+
+
+def _parse_dr_date(s: str):
+    """A DR date as typed: YYYY-MM-DD (the date picker) or MM/DD/YYYY."""
+    s = (s or "").strip()
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        try:
+            return datetime.strptime(s, "%m/%d/%Y").date()
+        except ValueError:
+            return None
 
 
 def _local_date(col):
@@ -1267,6 +1279,44 @@ def edit_purchase_details(
     purchase.supplier_id = new_supplier_id
     purchase.invoice_no = new_invoice_no
     purchase.delivery_date = new_delivery_date
+
+    # The DR date is the delivery's real date: move the purchase itself, its
+    # ledger entry and its stock movements to it (keeping time of day), the
+    # same way a sale's date correction does — see stock_dates.
+    new_d = _parse_dr_date(new_delivery_date)
+    old_d = stock_dates.local_date(purchase.created_at)
+    if new_d and old_d and new_d != old_d:
+        if new_d > datetime.now(MANILA).date():
+            db.rollback()
+            return _back("The+delivery+date+can%27t+be+in+the+future.")
+        delta = new_d - old_d
+        old_created_at = purchase.created_at
+        purchase.created_at = stock_dates.on_date(old_created_at, new_d)
+        for attr in ("confirmed_at", "paid_at"):
+            if getattr(purchase, attr) == old_created_at:  # stamped together at creation
+                setattr(purchase, attr, purchase.created_at)
+        if purchase.due_date:
+            purchase.due_date = purchase.due_date + delta
+        entry = (
+            db.query(models.JournalEntry)
+            .filter(models.JournalEntry.source_type == "purchase", models.JournalEntry.source_id == purchase.id,
+                    models.JournalEntry.status == "posted")
+            .first()
+        )
+        if entry:
+            entry.txn_date = new_d
+        moves = db.query(models.StockMovement).filter(models.StockMovement.ref == purchase.ref_no).all()
+        for m in moves:
+            m.created_at = stock_dates.on_date(m.created_at, new_d)
+        sign = Decimal("-1") if purchase.txn_type == "return" else Decimal("1")
+        for pid in {l.product_id for l in purchase.lines if l.product_id}:
+            product = db.get(models.Product, pid, with_for_update=True)
+            if not product:
+                continue
+            natural = sign * sum((Decimal(str(l.qty or 0)) * Decimal(str(l.unit_factor or 1)) for l in purchase.lines if l.product_id == pid), Decimal("0"))
+            current = sum((Decimal(str(m.qty_base or 0)) for m in moves if m.product_id == pid), Decimal("0"))
+            stock_dates.settle_redate(db, product, old_date=old_d, new_date=new_d, current_effect=current,
+                                      natural_effect=natural, ref=purchase.ref_no, created_at=purchase.created_at)
 
     if vat_changed:
         purchase.vat_amount = _vat_of(purchase.total) if new_vat_applied else Decimal("0")
