@@ -216,6 +216,12 @@ class Product(Base):
     # whole-pack sales, and vice versa. Never chained more than one level
     # deep — enforced at link time, not here.
     replenish_from_id = Column(Integer, ForeignKey("products.id"), nullable=True)
+    # Only for a counterpart whose source uses a DIFFERENT base unit (sealed
+    # by the bag, sold loose by the Kg): how many of this product's base
+    # units one of the source's base units opens into — "1 bag = 20 Kg".
+    # Same-unit links keep taking the pack size from the source's own units
+    # ladder instead (see pos._replenish_from_source).
+    replenish_factor = Column(Numeric(14, 4), nullable=True)
 
     category = relationship("Category")
     subcategory = relationship("SubCategory")

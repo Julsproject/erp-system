@@ -190,7 +190,14 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
     {% if product.replenish_from_id %}
     <button type="button" class="btn-link" onclick="clearReplenishLink()" style="margin-top:4px;">✕ Unlink</button>
     {% endif %}
-    <small class="hint">When this product's own stock can't cover a sale, the system automatically opens a whole pack (its largest unit, e.g. Bag) from the linked product and adds it here. Both products need the same base unit.</small>
+    <small class="hint">When this product's own stock can't cover a sale, the system automatically opens a whole pack (its largest unit, e.g. Bag) from the linked product and adds it here.</small>
+    <label style="margin-top:10px;display:block;">1 {{ product.replenish_from.unit_type.name if product.replenish_from and product.replenish_from.unit_type else 'sealed unit' }} opens into
+      <input name="replenish_factor" type="number" step="any" min="0" inputmode="decimal" placeholder="e.g. 20"
+             style="max-width:110px;display:inline-block;"
+             value="{{ product.replenish_factor|qty_input if product.replenish_factor else '' }}">
+      {{ product.unit_type.name if product.unit_type else 'units' }}
+    </label>
+    <small class="hint">Only needed when the sealed product is counted in a different unit than this one — e.g. sealed by the bag, sold here by the Kg: "1 bag opens into 20 Kg".</small>
   </div>
 
   {% if not product.replenish_from_id %}

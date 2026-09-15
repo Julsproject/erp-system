@@ -877,12 +877,14 @@ def set_product_unit_type(product_id: int, data: dict, request: Request, db: Ses
     # sense while both sides share a base unit; _save_from_form enforces that
     # at link time, but this quick editor bypasses that form entirely, so it
     # has to re-check the same invariant itself.
-    if product.replenish_from_id:
+    # A link with a "1 bag opens into N Kg" conversion (replenish_factor) is
+    # meant to span two different units, so it's exempt.
+    if product.replenish_from_id and not product.replenish_factor:
         source = db.get(models.Product, product.replenish_from_id)
         if source and source.unit_type_id != new_unit_type_id:
             return JSONResponse({"ok": False, "error": "This product replenishes from another product with a different base unit — change that link first."}, status_code=400)
     counterpart = db.query(models.Product).filter(models.Product.replenish_from_id == product.id).first()
-    if counterpart and counterpart.unit_type_id != new_unit_type_id:
+    if counterpart and not counterpart.replenish_factor and counterpart.unit_type_id != new_unit_type_id:
         return JSONResponse({"ok": False, "error": f"“{counterpart.name}” replenishes from this product and needs the same base unit — change that link first."}, status_code=400)
 
     product.unit_type = new_unit_type_obj
@@ -1133,8 +1135,20 @@ def _save_from_form(product: models.Product, db: Session, form):
         # unit type on a form submission that changes both the unit type
         # and this link at once.
         product_unit_type_id = product.unit_type.id if product.unit_type else None
+        replenish_factor = _to_decimal(form.get("replenish_factor"))
         if source.unit_type_id != product_unit_type_id:
-            raise ValueError("The replenish source must use the same base unit as this product.")
+            # Sealed in one unit, sold loose in another (bag → Kg): opening
+            # one needs to know how many of this product's units it yields.
+            if replenish_factor <= 0:
+                source_unit = source.unit_type.name if source.unit_type else "sealed unit"
+                my_unit = product.unit_type.name if product.unit_type else "units"
+                raise ValueError(
+                    f"“{source.name}” is counted by the {source_unit} and this product by the {my_unit} — "
+                    f"fill in how many {my_unit} 1 {source_unit} opens into."
+                )
+            product.replenish_factor = replenish_factor
+        else:
+            product.replenish_factor = None  # same unit: pack size comes from the source's units ladder
         if source.replenish_from_id:
             raise ValueError("That product is itself an open/retail counterpart — pick its sealed source instead.")
         # Same flat-2-tier rule from the other direction: this product can't
@@ -1145,6 +1159,7 @@ def _save_from_form(product: models.Product, db: Session, form):
         product.replenish_from_id = source.id
     else:
         product.replenish_from_id = None
+        product.replenish_factor = None
 
     # Units ladder (extra sellable units). Parallel arrays from the form.
     # Each row's factor can be typed relative to another unit already on the

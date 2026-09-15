@@ -136,26 +136,37 @@ def _replenish_from_source(db: Session, product: models.Product, needed_base_qty
     source = db.get(models.Product, product.replenish_from_id, with_for_update=True)
     if not source or not source.is_active:
         return
-    pack_factor = max((Decimal(str(u.factor_to_base or 0)) for u in source.units), default=Decimal("0"))
-    if pack_factor <= 0:
+    if source.unit_type_id != product.unit_type_id:
+        # Sealed in a different unit than it's sold loose in (e.g. SKIMCOAT
+        # by the bag, its Open/Retail by the Kg): one of the source's own
+        # base units opens into product.replenish_factor of this product's.
+        take = Decimal("1")
+        give = Decimal(str(product.replenish_factor or 0))
+    else:
+        # Same base unit on both sides: a pack is the source's biggest ladder
+        # unit (e.g. box = 25 Kg), moved over as that many base units.
+        take = give = max((Decimal(str(u.factor_to_base or 0)) for u in source.units), default=Decimal("0"))
+    if give <= 0:
         return
+    pack_cost = take * Decimal(str(source.cost_price or 0))
+    per_unit_cost = (pack_cost / give).quantize(Decimal("0.01"))
     extra = {"created_at": created_at} if created_at is not None else {}
     guard = 0
     while available < needed_base_qty and guard < 10000:
-        _deduct_stock(source, pack_factor)
-        _add_stock(product, pack_factor)
+        _deduct_stock(source, take)
+        _add_stock(product, give)
         db.add(models.StockMovement(
-            product_id=source.id, qty_base=-pack_factor, reason="repack-out",
-            unit_cost=source.cost_price, value=-pack_factor * (source.cost_price or Decimal("0")),
+            product_id=source.id, qty_base=-take, reason="repack-out",
+            unit_cost=source.cost_price, value=-pack_cost,
             ref=ref, note=note, **extra,
         ))
         db.add(models.StockMovement(
-            product_id=product.id, qty_base=pack_factor, reason="repack-in",
-            unit_cost=source.cost_price, value=pack_factor * (source.cost_price or Decimal("0")),
+            product_id=product.id, qty_base=give, reason="repack-in",
+            unit_cost=per_unit_cost, value=pack_cost,
             ref=ref, note=note, **extra,
         ))
-        product.cost_price = source.cost_price  # keep the open item's cost in step with its source
-        available += pack_factor
+        product.cost_price = per_unit_cost  # keep the open item's cost in step with its source
+        available += give
         guard += 1
 
 
