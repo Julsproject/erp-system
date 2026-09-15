@@ -170,6 +170,16 @@ def _has_open_counterpart(db: Session, p: models.Product) -> bool:
     )
 
 
+def _must_receive_by_pack(db: Session, p: models.Product) -> bool:
+    """True if receiving `p` in its base unit should be refused: it has an
+    open/retail counterpart AND a pack unit to receive it in instead. A
+    product whose base unit already IS the sealed container (e.g. SKIMCOAT
+    ABC by the bag, with the loose Kg on its counterpart) has no bigger unit —
+    its base unit is the only right way to receive it, the same fallback the
+    picker already applies (see _purchase_product_payload)."""
+    return bool(p.units) and _has_open_counterpart(db, p)
+
+
 def _purchase_product_payload(db: Session, p: models.Product, *, keep_unit_name: str | None = None) -> dict:
     """Shape a product for the purchase form's picker (units by name+factor
     only — a purchase line's cost is typed in, not chosen from a price).
@@ -724,7 +734,7 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
         if (
             txn_type == "receive" and product.unit_type_id
             and (ln.get("unit_name") or "").strip() == product.unit_type.name
-            and _has_open_counterpart(db, product)
+            and _must_receive_by_pack(db, product)
         ):
             # The picker already steers away from this (see
             # _purchase_product_payload) — this is a defense against a stale
@@ -1340,7 +1350,7 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
             product.unit_type_id
             and (ln.get("unit_name") or "").strip() == product.unit_type.name
             and old_unit_by_product.get(product.id) != product.unit_type.name
-            and _has_open_counterpart(db, product)
+            and _must_receive_by_pack(db, product)
         ):
             db.rollback()
             return JSONResponse({
