@@ -112,8 +112,10 @@
 <div class="card" style="padding:18px; margin-bottom:16px;">
   <div class="r-meta" style="display:flex;gap:26px;flex-wrap:wrap;font-size:13.5px;">
     <span class="muted">Supplier: <strong style="color:var(--ink,#0f172a);">{{ purchase.supplier.name if purchase.supplier else '—' }}</strong></span>
-    <span class="muted">Supplier Invoice: <strong style="color:var(--ink,#0f172a);">{{ purchase.invoice_no or '—' }}</strong></span>
-    <span class="muted">Delivered: <strong style="color:var(--ink,#0f172a);">{{ purchase.delivery_date or '—' }}</strong></span>
+    <span class="muted">Supplier Invoice: <strong style="color:var(--ink,#0f172a);">{{ purchase.invoice_no or '—' }}</strong>
+      {% if can_edit_details %}<a href="#" onclick="showEditDetails(event, 'invoice_no')" title="Edit supplier invoice" style="font-size:12px;margin-left:4px;">✎ edit</a>{% endif %}</span>
+    <span class="muted">Delivered: <strong style="color:var(--ink,#0f172a);">{{ purchase.delivery_date or '—' }}</strong>
+      {% if can_edit_details %}<a href="#" onclick="showEditDetails(event, 'delivery_date')" title="Edit delivery date" style="font-size:12px;margin-left:4px;">✎ edit</a>{% endif %}</span>
     {% if purchase.txn_type == 'receive' %}
     <span class="muted">VAT: <strong style="color:var(--ink,#0f172a);">{{ 'Yes' if purchase.vat_amount else 'No' }}</strong></span>
     {% endif %}
@@ -316,7 +318,14 @@
 
 {% if can_edit_details %}
 <script>
-function showEditDetails(e) { e.preventDefault(); document.getElementById('editDetailsForm').style.display = 'block'; }
+function showEditDetails(e, field) {
+  e.preventDefault();
+  const form = document.getElementById('editDetailsForm');
+  form.style.display = 'block';
+  // Opened from a specific field's ✎ — put the cursor straight in that box.
+  const input = field && form.querySelector('[name="' + field + '"]');
+  if (input) { input.focus(); input.select(); }
+}
 function hideEditDetails() { document.getElementById('editDetailsForm').style.display = 'none'; }
 </script>
 {% endif %}
