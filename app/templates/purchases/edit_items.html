@@ -72,11 +72,31 @@ async function loadCartUnits() {
   ids.forEach((id, i) => { if (results[i] && results[i].found) byId[id] = results[i].product; });
   cart.forEach(line => {
     const p = byId[line.productId];
-    if (!p || !p.units || p.units.length < 2) return;
-    line.units = p.units;
-    const match = p.units.findIndex(u => u.name === line.unitName);
+    if (!p) return;
+    line.baseUnit = p.base_unit || null;
+    if (!p.units) return;
+    // A product with a linked open/retail counterpart has its base unit left
+    // out of p.units (see _purchase_product_payload's steering) — if that's
+    // exactly the unit this line was already recorded under (e.g. bought
+    // before the counterpart existed), keep it available here so it isn't
+    // silently swapped for whatever now sits at index 0.
+    let units = p.units;
+    if (!units.some(u => u.name === line.unitName)) {
+      units = [{ name: line.unitName, factor: Number(line.factor) || 1 }].concat(units);
+    }
+    if (units.length < 2) return;
+    line.units = units;
+    const match = units.findIndex(u => u.name === line.unitName);
     line.unitIndex = match >= 0 ? match : 0;
   });
+}
+
+/* "= 20 Kg"-style hint for a line currently set to a pack unit (factor != 1)
+   — mirrors the same hint on the New Purchase form. */
+function baseQtyHint(line) {
+  const factor = Number(line.factor) || 1;
+  if (!line.baseUnit || factor === 1) return '';
+  return '= ' + fmtQty((Number(line.qty) || 0) * factor) + ' ' + escapeHtml(line.baseUnit);
 }
 
 function peso(v) { return '₱' + (Math.round((Number(v) || 0) * 100) / 100).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
@@ -132,9 +152,24 @@ function renderResults(products) {
   });
 }
 function addToCart(p) {
+  // A product with a linked open/retail counterpart offers its pack unit(s)
+  // only — p.base_unit itself may not even be in p.units (see
+  // _purchase_product_payload) — so this can't just default to the base
+  // unit/factor 1 the way it used to; it has to follow whatever's actually
+  // offered, same as the New Purchase form's pickRowProduct.
+  let units = null, unitIndex = 0, unitName = p.base_unit, factor = 1;
+  if (p.units && p.units.length > 1) {
+    units = p.units;
+    unitName = units[0].name;
+    factor = units[0].factor || 1;
+  } else if (p.units && p.units.length === 1) {
+    unitName = p.units[0].name;
+    factor = p.units[0].factor || 1;
+  }
   cart.push({
-    productId: p.id, name: p.name, unitName: p.base_unit, factor: 1, qty: 1, unitCost: p.cost_price,
-    units: (p.units && p.units.length > 1) ? p.units : null, unitIndex: 0,
+    productId: p.id, name: p.name, unitName: unitName, factor: factor, qty: 1,
+    unitCost: (p.cost_price || 0) * factor,
+    units: units, unitIndex: unitIndex, baseUnit: p.base_unit || null,
   });
   renderCart();
 }
@@ -152,7 +187,7 @@ function setUnitIndex(i, v) {
   l.factor = newFactor;
   renderCart();
 }
-function setQty(i, v) { cart[i].qty = parseFloat(v) || 0; refreshCartComputed(); }
+function setQty(i, v) { cart[i].qty = parseFloat(v) || 0; refreshCartComputed(); refreshCartHint(i); }
 function setCost(i, v) { cart[i].unitCost = parseFloat(v) || 0; refreshCartComputed(); }
 function setTotal(i, v) {
   const t = parseFloat(v) || 0;
@@ -178,7 +213,7 @@ function renderCart() {
     const tr = document.createElement('tr');
     tr.innerHTML =
       '<td class="strong">' + escapeHtml(line.name) + '</td>' +
-      '<td>' + unitCell + '</td>' +
+      '<td>' + unitCell + '<div class="hint row-baseqty">' + baseQtyHint(line) + '</div></td>' +
       '<td class="num"><input class="cart-qty" type="number" step="0.001" min="0" value="' + fmtQty(line.qty) + '" oninput="setQty(' + i + ', this.value)"></td>' +
       '<td class="num"><input class="cart-disc line-cost" type="number" step="0.01" min="0" value="' + round4(line.unitCost) + '" oninput="setCost(' + i + ', this.value)"></td>' +
       '<td class="num"><input class="cart-disc line-total" type="number" step="0.01" min="0" value="' + round2(lineTotalOf(line)) + '" oninput="setTotal(' + i + ', this.value)"></td>' +
@@ -202,6 +237,12 @@ function refreshCartComputed() {
     if (totalInput && document.activeElement !== totalInput) totalInput.value = round2(lineTotalOf(line));
   });
   computeTotals();
+}
+
+function refreshCartHint(i) {
+  const tr = document.querySelectorAll('#cartBody tr')[i];
+  const hintEl = tr && tr.querySelector('.row-baseqty');
+  if (hintEl) hintEl.textContent = baseQtyHint(cart[i]);
 }
 
 function computeTotals() {

@@ -154,13 +154,42 @@ def margin_alert(product: models.Product):
     return _margin_check(product.cost_price, product.selling_price)
 
 
-def _purchase_product_payload(p: models.Product) -> dict:
+def _has_open_counterpart(db: Session, p: models.Product) -> bool:
+    """True if some other active product is set up as p's open/retail
+    counterpart (its replenish_from_id points back at p) — see
+    pos._replenish_from_source. A product in that state is meant to only
+    ever be received whole: splitting a shipment into loose base units here
+    would land stock on the wrong side of that split with no automatic way
+    to reconcile it, and silently understate the box/sack conversion (a
+    "1" typed against the loose product isn't 1 box)."""
+    return (
+        db.query(models.Product.id)
+        .filter(models.Product.replenish_from_id == p.id, models.Product.is_active.is_(True))
+        .first()
+        is not None
+    )
+
+
+def _purchase_product_payload(db: Session, p: models.Product, *, keep_unit_name: str | None = None) -> dict:
     """Shape a product for the purchase form's picker (units by name+factor
-    only — a purchase line's cost is typed in, not chosen from a price)."""
+    only — a purchase line's cost is typed in, not chosen from a price).
+
+    A product with a linked open/retail counterpart has its base unit left
+    out of the offered units — same steering as pos._product_payload_for_pos
+    — so a whole-container delivery can only be received by the pack.
+    `keep_unit_name` re-adds the base unit anyway when it's the unit an
+    existing line was already recorded under (e.g. a return being prefilled,
+    or a PO raised before the counterpart existed), so that history is never
+    silently reinterpreted as a different unit."""
     base_unit = p.unit_type.name if p.unit_type else "Unit"
-    units = [{"name": base_unit, "factor": 1.0}]
+    hide_base = _has_open_counterpart(db, p) and keep_unit_name != base_unit
+    units = [] if hide_base else [{"name": base_unit, "factor": 1.0}]
     for u in p.units:
         units.append({"name": u.name, "factor": float(u.factor_to_base or 1)})
+    if not units:
+        # Nothing left to receive it in at all — fall back to the base unit
+        # rather than leaving it completely unreceivable.
+        units.append({"name": base_unit, "factor": 1.0})
     return {
         "id": p.id,
         "name": p.name,
@@ -185,7 +214,7 @@ def purchase_search(q: str = "", db: Session = Depends(get_db), user=Depends(get
     if q:
         query = query.filter(multi_word_ilike(models.Product.name, q))
     products = query.order_by(models.Product.name).limit(30).all()
-    return {"products": [_purchase_product_payload(p) for p in products]}
+    return {"products": [_purchase_product_payload(db, p) for p in products]}
 
 
 @router.get("/purchases/product/{product_id:int}")
@@ -199,7 +228,7 @@ def purchase_product(product_id: int, db: Session = Depends(get_db), user=Depend
     p = db.get(models.Product, product_id)
     if not p or not p.is_active:
         return {"found": False}
-    return {"found": True, "product": _purchase_product_payload(p)}
+    return {"found": True, "product": _purchase_product_payload(db, p)}
 
 
 @router.get("/purchases", response_class=HTMLResponse)
@@ -479,7 +508,7 @@ def new_purchase(
                 product = db.get(models.Product, pl.product_id)
                 if not product:
                     continue
-                payload = _product_payload(product)
+                payload = _product_payload(db, product, keep_unit_name=pl.unit_name)
                 unit_index = next(
                     (i for i, u in enumerate(payload["units"]) if u["name"] == pl.unit_name), 0
                 )
@@ -507,12 +536,17 @@ def new_purchase(
     )
 
 
-def _product_payload(p: models.Product) -> dict:
-    """Shape a product the way the purchase form expects it."""
+def _product_payload(db: Session, p: models.Product, *, keep_unit_name: str | None = None) -> dict:
+    """Shape a product the way the purchase form expects it — see
+    _purchase_product_payload for the base-unit steering/`keep_unit_name` rules,
+    which apply the same way here."""
     base_unit = p.unit_type.name if p.unit_type else "Unit"
-    units = [{"name": base_unit, "factor": 1.0}]
+    hide_base = _has_open_counterpart(db, p) and keep_unit_name != base_unit
+    units = [] if hide_base else [{"name": base_unit, "factor": 1.0}]
     for u in p.units:
         units.append({"name": u.name, "factor": float(u.factor_to_base or 1)})
+    if not units:
+        units.append({"name": base_unit, "factor": 1.0})
     return {
         "id": p.id,
         "name": p.name,
@@ -544,7 +578,7 @@ def quick_product(data: dict, db: Session = Depends(get_db), user=Depends(get_cu
     )
     if existing:
         # Already there — just hand it back so the cashier can carry on.
-        return {"ok": True, "existed": True, "product": _product_payload(existing)}
+        return {"ok": True, "existed": True, "product": _product_payload(db, existing)}
 
     # Cost may be typed here so the markup/margin prices can be worked out up
     # front; it also pre-fills this purchase line. Confirming the purchase still
@@ -564,7 +598,7 @@ def quick_product(data: dict, db: Session = Depends(get_db), user=Depends(get_cu
     db.add(product)
     db.commit()
     db.refresh(product)
-    return {"ok": True, "existed": False, "product": _product_payload(product)}
+    return {"ok": True, "existed": False, "product": _product_payload(db, product)}
 
 
 
@@ -687,6 +721,22 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
             typed_unit = (ln.get("unit_name") or "").strip()
             if typed_unit:
                 product.unit_type = _get_or_create_unit_type(db, typed_unit)
+        if (
+            txn_type == "receive" and product.unit_type_id
+            and (ln.get("unit_name") or "").strip() == product.unit_type.name
+            and _has_open_counterpart(db, product)
+        ):
+            # The picker already steers away from this (see
+            # _purchase_product_payload) — this is a defense against a stale
+            # page or a hand-built request still landing a whole-container
+            # delivery on the wrong side of the sealed/open split.
+            return JSONResponse({
+                "ok": False,
+                "error": (
+                    f"“{product.name}” has a linked open/retail counterpart — "
+                    f"receive it by the pack, not by {product.unit_type.name}."
+                ),
+            }, status_code=400)
         qty = _dec(ln.get("qty"))
         if qty <= 0:
             continue
@@ -1258,9 +1308,16 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
     # add compensating entries. The weighted-average cost blend itself isn't
     # unwound (same accepted simplification as Cancel): later purchases may
     # have already blended on top of it.
+    # Remembered so a product that has since gained an open/retail counterpart
+    # doesn't get permanently stuck uneditable just because its original line
+    # (recorded before the counterpart existed) was in the base unit — the
+    # counterpart steering below only blocks a *newly chosen* base-unit line,
+    # not the same one this purchase already had.
+    old_unit_by_product = {}
     for line in purchase.lines:
         if not line.product_id:
             continue
+        old_unit_by_product[line.product_id] = line.unit_name
         product = db.get(models.Product, line.product_id, with_for_update=True)
         if not product:
             continue
@@ -1279,6 +1336,20 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
         product = db.get(models.Product, int(ln["product_id"]), with_for_update=True) if ln.get("product_id") else None
         if not product:
             continue
+        if (
+            product.unit_type_id
+            and (ln.get("unit_name") or "").strip() == product.unit_type.name
+            and old_unit_by_product.get(product.id) != product.unit_type.name
+            and _has_open_counterpart(db, product)
+        ):
+            db.rollback()
+            return JSONResponse({
+                "ok": False,
+                "error": (
+                    f"“{product.name}” has a linked open/retail counterpart — "
+                    f"receive it by the pack, not by {product.unit_type.name}."
+                ),
+            }, status_code=400)
         qty = _dec(ln.get("qty"))
         if qty <= 0:
             continue

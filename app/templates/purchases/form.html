@@ -196,7 +196,7 @@ function renderReturnLines() {
     const tr = document.createElement('tr');
     tr.innerHTML =
       '<td class="num"><input class="cart-qty" type="number" step="any" min="0" value="' + fmtQty(l.qty) + '" oninput="setReturnQty(' + i + ', this.value)"></td>' +
-      '<td><select class="cart-unit" onchange="setReturnUnit(' + i + ', this.value)">' + opts + '</select></td>' +
+      '<td><select class="cart-unit" onchange="setReturnUnit(' + i + ', this.value)">' + opts + '</select><div class="hint row-baseqty">' + returnBaseQtyHint(l) + '</div></td>' +
       '<td class="strong">' + escapeHtml(l.product.name) + '</td>' +
       '<td class="num"><input class="cart-disc line-cost" type="number" step="any" min="0" value="' + round2(l.unitCost) + '" oninput="setReturnCost(' + i + ', this.value)"></td>' +
       '<td class="num"><input class="cart-disc line-total" type="number" step="any" min="0" value="' + round2(lineTotal(l)) + '" oninput="setReturnTotal(' + i + ', this.value)"></td>' +
@@ -205,8 +205,18 @@ function renderReturnLines() {
   });
   recompute();
 }
+function returnBaseQtyHint(l) {
+  const factor = l.product.units[l.unitIndex].factor || 1;
+  if (!l.product.base_unit || factor === 1) return '';
+  return '= ' + fmtQty((Number(l.qty) || 0) * factor) + ' ' + escapeHtml(l.product.base_unit);
+}
+function refreshReturnHint(i) {
+  const tr = document.querySelectorAll('#linesBody tr')[i];
+  const hintEl = tr && tr.querySelector('.row-baseqty');
+  if (hintEl) hintEl.textContent = returnBaseQtyHint(returnLines[i]);
+}
 function setReturnUnit(i, v) { returnLines[i].unitIndex = parseInt(v); renderReturnLines(); }
-function setReturnQty(i, v) { returnLines[i].qty = parseFloat(v) || 0; recompute(); }
+function setReturnQty(i, v) { returnLines[i].qty = parseFloat(v) || 0; refreshReturnHint(i); recompute(); }
 function setReturnCost(i, v) { returnLines[i].unitCost = parseFloat(v) || 0; recompute(); }
 function setReturnTotal(i, v) {
   const t = parseFloat(v) || 0;
@@ -293,7 +303,17 @@ function restorePurchaseDraft() {
 let receiveLines = txnType === 'receive' ? [blankRow()] : [];
 let searchTimers = {};
 
-function blankRow() { return { productId: null, name: '', unitName: '', unitCost: '', qty: '', knownCost: null, unitLocked: false, units: null, unitIndex: 0 }; }
+function blankRow() { return { productId: null, name: '', unitName: '', unitCost: '', qty: '', knownCost: null, unitLocked: false, units: null, unitIndex: 0, unitFactor: 1, baseUnit: null }; }
+
+/* "= 20 Kg"-style hint for a row currently set to a pack unit (factor != 1),
+   so whoever's typing a purchase can see the base-unit size of a whole
+   container before saving — same idea as the "1 Box = 20 Kg" line already
+   shown in the product search results, but live against the qty typed in. */
+function baseQtyHint(l) {
+  const factor = l.units ? (l.units[l.unitIndex].factor || 1) : (l.unitFactor || 1);
+  if (!l.baseUnit || factor === 1) return '';
+  return '= ' + fmtQty((Number(l.qty) || 0) * factor) + ' ' + escapeHtml(l.baseUnit);
+}
 
 function addBlankRow(focus) {
   receiveLines.push(blankRow());
@@ -322,7 +342,7 @@ function rowHtml(l, i) {
       ' oninput="setRUnit(' + i + ', this.value)">';
   return (
     '<td class="num"><input class="cart-qty" type="number" step="any" min="0" value="' + (l.qty === '' ? '' : fmtQty(l.qty)) + '" oninput="setRQty(' + i + ', this.value)"></td>' +
-    '<td>' + unitCell + '</td>' +
+    '<td>' + unitCell + '<div class="hint row-baseqty">' + baseQtyHint(l) + '</div></td>' +
     '<td style="position:relative;">' +
       '<input class="row-name" type="text" autocomplete="off" placeholder="Type to search or create…" value="' + escapeHtml(l.name) + '" ' +
       'oninput="onNameInput(' + i + ', this.value)" onfocus="onNameInput(' + i + ', this.value)" onblur="setTimeout(function(){hideRowResults(' + i + ')}, 150)">' +
@@ -356,8 +376,8 @@ function appendRowDom(i) {
   document.getElementById('linesBody').appendChild(tr);
 }
 
-/* Updates just Unit Price / Subtotal for one row in place (never rebuilds
-   the DOM), so typing digit-by-digit in either field keeps focus. */
+/* Updates just Unit Price / Subtotal / base-qty hint for one row in place
+   (never rebuilds the DOM), so typing digit-by-digit in any field keeps focus. */
 function refreshRow(i, skipField) {
   const tr = document.querySelectorAll('#linesBody tr')[i];
   if (!tr) return;
@@ -366,6 +386,8 @@ function refreshRow(i, skipField) {
   const totalEl = tr.querySelector('.line-total');
   if (costEl && skipField !== 'cost') costEl.value = l.unitCost === '' ? '' : round2(l.unitCost);
   if (totalEl && skipField !== 'total') totalEl.value = round2(lineTotal(l));
+  const hintEl = tr.querySelector('.row-baseqty');
+  if (hintEl) hintEl.textContent = baseQtyHint(l);
 }
 
 function setRQty(i, v) { receiveLines[i].qty = v === '' ? '' : (parseFloat(v) || 0); refreshRow(i, 'qty'); recompute(); }
@@ -400,6 +422,8 @@ function onNameInput(i, v) {
   receiveLines[i].units = null;
   receiveLines[i].unitIndex = 0;
   receiveLines[i].unitLocked = false;
+  receiveLines[i].unitFactor = 1;
+  receiveLines[i].baseUnit = null;
   const tr = document.querySelectorAll('#linesBody tr')[i];
   const hint = tr && tr.querySelector('.row-hint');
   if (hint) { hint.style.display = v.trim() ? 'block' : 'none'; hint.textContent = 'will be created as a new product'; }
@@ -424,10 +448,12 @@ async function runRowSearch(i) {
     el.type = 'button'; el.className = 'pos-item';
     el.onmousedown = (e) => e.preventDefault();  // survive the input's blur
     el.onclick = () => pickRowProduct(i, p);
-    // p.units[0] is always the base unit itself (factor 1) — anything after
-    // that is a real conversion worth showing, e.g. "1 Piece = 0.002 Box",
-    // so it's clear you can buy in that other unit too.
-    const conversions = (p.units || []).slice(1)
+    // Any offered unit other than a plain 1:1 base unit is a real conversion
+    // worth showing, e.g. "1 Box = 20 Kg" — a product with a linked open/
+    // retail counterpart has its base unit left out of `units` entirely
+    // (see _purchase_product_payload), so this can't assume units[0] is it.
+    const conversions = (p.units || [])
+      .filter(u => !(u.name === p.base_unit && u.factor === 1))
       .map(u => '1 ' + escapeHtml(u.name) + ' = ' + fmtQty(u.factor) + ' ' + escapeHtml(p.base_unit))
       .join(' · ');
     el.innerHTML =
@@ -446,25 +472,41 @@ function pickRowProduct(i, p) {
   l.productId = p.id;
   l.name = p.name;
   l.knownCost = p.cost_price;
+  l.baseUnit = p.has_unit_type ? p.base_unit : null;
   if (p.has_unit_type && p.units && p.units.length > 1) {
-    // A real units ladder is on file (e.g. Box + Piece) — offer all of them
-    // in a dropdown so you can buy in whichever one this delivery is in.
+    // More than one unit is offered — a real units ladder (e.g. Box + Piece),
+    // or a product steered to pack-only because it has a linked open/retail
+    // counterpart (its base unit is left out — see _purchase_product_payload,
+    // so index 0 here may already be a pack, not the base unit itself).
     l.units = p.units;
-    l.unitIndex = 0;   // defaults to the base unit; switch it in the row
+    l.unitIndex = 0;
     l.unitLocked = false;
+  } else if (p.has_unit_type && p.units && p.units.length === 1) {
+    // Exactly one unit is receivable — nothing to choose between, but (same
+    // counterpart steering) it isn't necessarily the base unit, so it can't
+    // just default to p.base_unit like the no-ladder case below.
+    l.units = null;
+    l.unitLocked = true;
+    l.unitName = p.units[0].name;
+    l.unitFactor = p.units[0].factor || 1;
   } else if (p.has_unit_type) {
     // Only a base unit, no ladder — nothing to choose between.
     l.units = null;
     l.unitLocked = true;
     l.unitName = p.base_unit;
+    l.unitFactor = 1;
   } else {
     // Inventory has no Unit Type on file at all — leave it blank/editable
     // instead of prefilling the "Unit" fallback label.
     l.units = null;
     l.unitLocked = false;
     l.unitName = '';
+    l.unitFactor = 1;
   }
-  if (!l.unitCost) l.unitCost = p.cost_price;
+  // Starting cost is per-base cost scaled to whichever unit ended up
+  // selected above, so a pack unit doesn't default to showing its base cost.
+  const startFactor = l.units ? (l.units[l.unitIndex].factor || 1) : (l.unitFactor || 1);
+  if (!l.unitCost) l.unitCost = (p.cost_price || 0) * startFactor;
   hideRowResults(i);
   ensureTrailingBlankRow();
   renderReceiveLines();
@@ -580,7 +622,7 @@ async function savePurchase() {
           return {
             product_id: l.productId, product_name: l.name,
             unit_name: u ? u.name : (l.unitName || 'Piece'),
-            factor: u ? u.factor : 1,
+            factor: u ? u.factor : (l.unitFactor || 1),
             qty: l.qty, unit_cost: l.unitCost, line_total: lineTotal(l),
           };
         }),
