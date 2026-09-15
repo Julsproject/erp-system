@@ -8,7 +8,7 @@ A receive-type purchase has a status lifecycle, same idea as Quotations:
 A return has no staging — it removes stock immediately, same as before.
 """
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from fastapi import APIRouter, Depends, Form, Request, status as http_status
@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from . import accounting, audit, models, pricing, settings_store
 from .database import get_db
 from .deps import get_current_user, is_floor_staff, is_staff
-from .pos import _resolve_txn_datetime, _vat_of
+from .pos import MANILA, _find_backdated_stock_conflicts, _resolve_txn_datetime, _vat_of
 from .sales import _resolve_settlement_datetime
 from .products import _get_or_create_category, _get_or_create_unit_type
 from .search_utils import multi_word_ilike
@@ -637,6 +637,23 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
         return JSONResponse({"ok": False, "error": date_err}, status_code=400)
     stamp = backdated if backdated else func.now()
 
+    # Same rule as a backdated sale (see pos._find_backdated_stock_conflicts):
+    # a delivery or return dated on/before a completed Stock Count that
+    # counted the product is already reflected in that count's number, so
+    # adding/removing it again would double it. Its stock effect is skipped
+    # by default; force_stock_effect is the admin/manager-only override,
+    # checked here rather than trusted from the caller. The form always sends
+    # the DR date, so today's date means a live delivery — one that arrives
+    # after a count taken earlier today still adds stock normally.
+    conflicts, conflicting_ids = [], set()
+    if backdated and backdated.astimezone(MANILA).date() < datetime.now(MANILA).date():
+        conflicts = _find_backdated_stock_conflicts(
+            db, backdated, [int(ln["product_id"]) for ln in lines if ln.get("product_id")]
+        )
+        conflicting_ids = {c["product_id"] for c in conflicts}
+    force_stock_effect = bool(data.get("force_stock_effect")) and is_staff(user)
+    skip_stock_ids = set() if force_stock_effect else conflicting_ids
+
     # For a return: optionally link back to the delivery it's coming from.
     original_purchase_id = None
     if txn_type == "return":
@@ -763,12 +780,16 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
         base_qty = qty * factor
         old_cost = Decimal(str(product.cost_price or 0))
         new_cost = old_cost
+        # Already counted (see conflicts above): record the line and a 0-qty
+        # movement so it still shows on the Stock Card, but leave on-hand be.
+        stock_qty = Decimal("0") if product.id in skip_stock_ids else base_qty
+        note = "Already counted in a stock count covering this date — no stock effect" if product.id in skip_stock_ids else None
 
         if txn_type == "return":
-            product.stock_qty = (product.stock_qty or Decimal("0")) - base_qty
+            product.stock_qty = (product.stock_qty or Decimal("0")) - stock_qty
             movement = models.StockMovement(
-                product_id=product.id, qty_base=-base_qty, reason="purchase-return",
-                unit_cost=old_cost, value=-base_qty * old_cost, created_at=stamp,
+                product_id=product.id, qty_base=-stock_qty, reason="purchase-return",
+                unit_cost=old_cost, value=-stock_qty * old_cost, created_at=stamp, note=note,
             )
             db.add(movement)
             new_movements.append(movement)
@@ -776,10 +797,10 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
             if unit_cost > 0:
                 new_cost = _weighted_avg_cost(product, base_qty, unit_cost / factor)
                 product.cost_price = new_cost
-            product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
+            product.stock_qty = (product.stock_qty or Decimal("0")) + stock_qty
             movement = models.StockMovement(
-                product_id=product.id, qty_base=base_qty, reason="purchase",
-                unit_cost=new_cost, value=base_qty * new_cost, created_at=stamp,
+                product_id=product.id, qty_base=stock_qty, reason="purchase",
+                unit_cost=new_cost, value=stock_qty * new_cost, created_at=stamp, note=note,
             )
             db.add(movement)
             new_movements.append(movement)
@@ -817,6 +838,28 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
     purchase.ref_no = ref_no or f"{prefix}-{purchase.id:06d}"
     for movement in new_movements:
         movement.ref = purchase.ref_no
+
+    # Real-clock trail, same shape as _finalize_sale's, so /reports/
+    # backdated-conflicts can list purchases next to sales.
+    conflicts = [c for c in conflicts if any(l.product_id == c["product_id"] for l in purchase.lines)]
+    if conflicts:
+        audit.record(
+            db, user=user, request=request, action="stock_conflict", entity_type="purchase",
+            entity_id=purchase.id, entity_label=purchase.ref_no,
+            summary=(
+                f"Backdated {'return' if txn_type == 'return' else 'delivery'} {purchase.ref_no}: {len(conflicts)} item(s) "
+                f"already counted in a stock count covering this date — stock effect was "
+                + (f"force-applied anyway by {user.username} (admin override)." if force_stock_effect
+                   else "skipped for those item(s) automatically.")
+            ),
+            changes={
+                "conflicts": [
+                    {"product_id": c["product_id"], "product": c["name"], "count_ref": c["count_ref"]}
+                    for c in conflicts
+                ],
+                "stock_effect": "forced" if force_stock_effect else "skipped",
+            },
+        )
 
     if txn_type == "receive" and payment_method == "cheque":
         raw_date = (data.get("cheque_date") or "").strip()

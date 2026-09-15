@@ -1246,6 +1246,8 @@ def backdated_conflicts(
         rows.append({
             "created_at": e.created_at, "username": e.username, "sale_id": e.entity_id,
             "invoice_no": e.entity_label, "conflicts": parsed.get("conflicts", []),
+            # A backdated delivery/return logs the same way (purchases.create_purchase).
+            "is_purchase": e.entity_type == "purchase",
             # Older rows (logged before the skip-by-default behavior existed)
             # have no stock_effect at all — they're all from when everything
             # still deducted regardless, so "deducted" is the accurate label.

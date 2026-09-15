@@ -627,6 +627,33 @@ async function savePurchase() {
           };
         }),
   };
+  // Same heads-up as POS's backdated checkout: an item already physically
+  // counted on/after this delivery date is already in that count's number,
+  // so the server skips its stock effect by default (the purchase itself
+  // still records normally). Staff can force it anyway.
+  if (payload.txn_date && payload.txn_date < new Date().toLocaleDateString('en-CA')) {  // today = live delivery, no check
+    const ids = [...new Set(payload.lines.map(l => l.product_id).filter(Boolean))].join(',');
+    try {
+      const chk = ids ? await fetch('/pos/backdated-conflicts?txn_date=' + encodeURIComponent(payload.txn_date) + '&product_ids=' + ids) : null;
+      const conflicts = chk ? ((await chk.json()).conflicts || []) : [];
+      if (conflicts.length) {
+        const noun = txnType === 'return' ? 'return' : 'delivery';
+        const list = conflicts.map(c => '• ' + c.name + ' — counted in ' + c.count_ref + ' (' + c.count_date + ')').join('\n');
+        if ({{ 'true' if (user.role or '')|lower in ('admin', 'manager') else 'false' }}) {
+          payload.force_stock_effect = confirm(
+            conflicts.length + ' item(s) in this ' + noun + ' were already physically counted, on or after ' +
+            payload.txn_date + ':\n\n' + list +
+            '\n\nBy default these will NOT change stock (that count already includes them) — ' +
+            'the ' + noun + ' itself still records normally either way.\n\n' +
+            'Click OK to change stock for these item(s) anyway, or Cancel to leave stock as counted (recommended).'
+          );
+        } else {
+          alert('Note: ' + conflicts.length + ' item(s) in this ' + noun + ' won\'t change stock — already counted ' +
+                'on or after ' + payload.txn_date + ':\n\n' + list + '\n\nThe ' + noun + ' itself will still be recorded normally.');
+        }
+      }
+    } catch (e) { /* check failed (offline?) — don't block saving over it */ }
+  }
   try {
     const res = await fetch('/purchases', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
     const data = await res.json();
