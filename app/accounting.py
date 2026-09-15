@@ -558,9 +558,16 @@ def post_expense(db: Session, expense: models.Expense, *, entered_by_id: int = N
     )
 
 
-def reverse_expense_posting(db: Session, expense: models.Expense, *, reason: str, entered_by_id: int = None):
-    """Called from expenses.py's void_expense. No-op if this expense predates
-    Phase 3 and never got a journal entry."""
+def reverse_expense_posting(db: Session, expense: models.Expense, *, reason: str, entered_by_id: int = None, same_date: bool = False):
+    """Called from expenses.py's void_expense and update_expense. No-op if
+    this expense predates Phase 3 and never got a journal entry.
+
+    `same_date=True` is for a correction that immediately re-posts a
+    replacement entry (see reverse_journal) — it dates this reversal to
+    match the entry being reversed instead of today, so the mistake and its
+    fix always net to zero within the expense's own original period. Leave
+    it False for an actual void, which has no replacement and should hit
+    the books on the day it was voided."""
     entry = (
         db.query(models.JournalEntry)
         .filter(models.JournalEntry.source_type == "expense", models.JournalEntry.source_id == expense.id,
@@ -569,7 +576,8 @@ def reverse_expense_posting(db: Session, expense: models.Expense, *, reason: str
     )
     if not entry:
         return None
-    return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id)
+    return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id,
+                            txn_date=entry.txn_date if same_date else None)
 
 
 def post_bank_transaction(db: Session, txn: models.BankTransaction, *, entered_by_id: int = None):

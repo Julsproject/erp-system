@@ -397,11 +397,38 @@ def update_expense(
     if _dec(form.get("amount")) <= 0:
         return _render_form(request, db, user, expense=expense, error="Enter an amount greater than zero.")
     before = audit.snapshot(expense, ["amount", "payee", "description", "expense_date", "payment_method", "reference_no"])
+    # Everything that actually determines what post_expense() would post —
+    # if none of this changes, skip the reverse/repost below so a plain
+    # notes/receipt-no edit doesn't clutter the ledger with a no-op pair.
+    posting_before = (
+        expense.category_id, Decimal(str(expense.amount or 0)), Decimal(str(expense.vat_amount or 0)),
+        expense.expense_date, expense.payment_method, expense.paid_from_account_id,
+    )
     _apply_form(expense, db, form)
     attachment_path = _save_attachment(form)
     if attachment_path:
         expense.attachment_path = attachment_path
     db.flush()
+    posting_after = (
+        expense.category_id, Decimal(str(expense.amount or 0)), Decimal(str(expense.vat_amount or 0)),
+        expense.expense_date, expense.payment_method, expense.paid_from_account_id,
+    )
+    if posting_after != posting_before and not expense.is_voided:
+        # The original posting (see accounting.post_expense) reflected the
+        # pre-correction amount/VAT/category/payment split — without
+        # re-posting here, the ledger (and anything reading from it, like
+        # the VAT Report) keeps showing the old numbers forever, disagreeing
+        # with the expense record itself. same_date=True keeps the reversal
+        # + replacement in the entry's own original period rather than
+        # today's, so the mistake and its fix always net to zero within
+        # that period. Same pattern as pos.py's sale-correction flows.
+        accounting.reverse_expense_posting(
+            db, expense, reason=f"Expense {expense.ref_no} corrected", entered_by_id=user.id, same_date=True,
+        )
+        try:
+            accounting.post_expense(db, expense, entered_by_id=user.id)
+        except accounting.PostingError:
+            pass
     after = audit.snapshot(expense, ["amount", "payee", "description", "expense_date", "payment_method", "reference_no"])
     changes = audit.diff(before, after)
     if changes:
