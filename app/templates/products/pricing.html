@@ -75,6 +75,11 @@
 
     <div class="form-actions" style="margin-top:14px;">
       <button class="btn" type="button" onclick="peSave()">Save price</button>
+      {% if is_admin %}
+      {# Opens in its own tab on purpose — checking the ledger mid-edit shouldn't
+         throw away a price that's been typed but not saved yet. #}
+      <a class="btn-secondary" id="peStockCard" href="#" target="_blank" rel="noopener">📋 Stock card</a>
+      {% endif %}
       <button class="btn-secondary" type="button" onclick="peCancel()">Close</button>
     </div>
     <div id="peMsg" class="alert" style="display:none;margin-top:12px;"></div>
@@ -188,6 +193,12 @@ function peSelectProduct(id, skipScroll) {
   const flag = document.getElementById('peFlag');
   if (p.needs_review) { flag.style.display = 'inline-block'; flag.textContent = '⚠ ' + (p.review_reason || 'Needs review'); }
   else { flag.style.display = 'none'; }
+
+  const stockCard = document.getElementById('peStockCard');
+  if (stockCard) {
+    stockCard.href = '/products/' + id + '/stock-card?back='
+      + encodeURIComponent('/products/pricing?product_id=' + id);
+  }
 
   document.getElementById('peCost').value = (p.cost_price || 0).toFixed(2);
   document.getElementById('peFixedPrice').value = (p.selling_price || 0).toFixed(2);
