@@ -221,6 +221,20 @@ function toggleUnitRow(lineId) {
 const countId = {{ count.id }};
 const missingNegatives = {{ missing_negatives|length }};
 
+// A mouse wheel over a FOCUSED <input type="number"> silently changes its
+// value in every browser. Every quantity box on this sheet auto-saves on
+// change, so one stray scroll while reading a long count sheet could rewrite
+// a counted quantity with nothing on screen to show for it — and Complete
+// then applies that as a real stock correction. Blur on wheel instead: the
+// page scrolls normally and the number is left alone. Bound once on the
+// document so it also covers the rows built in JS below.
+document.addEventListener('wheel', function (e) {
+  const el = e.target;
+  if (el && el.tagName === 'INPUT' && el.type === 'number' && el === document.activeElement) {
+    el.blur();
+  }
+}, { passive: true });
+
 // Completing is irreversible in bulk, so the confirm spells out what's about
 // to change — and calls out any still-negative product that never got counted,
 // since that negative would otherwise stay on the books after this closes.
