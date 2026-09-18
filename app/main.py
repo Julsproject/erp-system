@@ -10,9 +10,9 @@ from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import (
-    accounting, activity, audit, backup, banking, credits, customers, dashboard, deliveries, display,
-    encoders, expenses, models, notifications, pdc, pos, products, purchases, quotations, reports, sales,
-    shelves, shifts, stock_count, suppliers, users,
+    accounting, activity, audit, backup, banking, cheque_books, credits, customers, dashboard, deliveries,
+    display, encoders, expenses, models, notifications, payments, pdc, pos, products, purchases, quotations,
+    reports, sales, shelves, shifts, stock_count, suppliers, users,
 )
 from . import settings as settings_module   # app/settings.py — the Settings UI router
 from . import settings_store
@@ -88,6 +88,8 @@ app.include_router(credits.router)
 app.include_router(suppliers.router)
 app.include_router(purchases.router)
 app.include_router(pdc.router)
+app.include_router(payments.router)
+app.include_router(cheque_books.router)
 app.include_router(expenses.router)
 app.include_router(deliveries.router)
 app.include_router(reports.router)

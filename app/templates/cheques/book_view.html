@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ fmt(book, book.start_no) }}–{{ fmt(book, book.end_no) }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{{ fmt(book, book.start_no) }} – {{ fmt(book, book.end_no) }}</h1>
+    <p class="muted">
+      {{ book.bank_account.name if book.bank_account else 'Unknown account' }}
+      {% if book.notes %} · {{ book.notes }}{% endif %}
+      {% if not book.is_active %} · <strong>closed</strong>{% endif %}
+    </p>
+  </div>
+  <a class="btn-secondary" href="/cheques/books">← All Booklets</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ stats.used }} / {{ stats.total }}</span><span>Used</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ stats.left }}</span><span>Left on the pad</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ fmt(book, stats.next) if stats.next else '—' }}</span><span>Next Number</span></div>
+  <div class="mini-stat {{ 'owed' if stats.gap_count }}"><span class="mini-num">{{ stats.gap_count }}</span><span>Unaccounted</span></div>
+</div>
+
+{% if stats.gap_count %}
+<div class="alert" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">
+  <strong>Missing:</strong>
+  {% for n in stats.gaps %}{{ fmt(book, n) }}{{ ', ' if not loop.last }}{% endfor %}.
+  Each was skipped over by a later cheque. Record the payment it was used for, or void it below
+  if the leaf was spoiled.
+</div>
+{% endif %}
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Cheque #</th><th>Date</th><th>Paid To</th><th class="num">Amount</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr {% if r.state == 'gap' %}style="background:#fef2f2;"{% elif r.state == 'unused' %}style="opacity:.5;"{% endif %}>
+        <td class="strong">{{ r.no }}</td>
+        {% if r.pdc %}
+        <td>{{ r.pdc.cheque_date.strftime('%b %d, %Y') if r.pdc.cheque_date else '—' }}</td>
+        <td>{{ r.pdc.supplier.name if r.pdc.supplier else '—' }}</td>
+        <td class="num">{{ r.pdc.amount|peso }}</td>
+        <td>
+          {% if r.pdc.status == 'voided' %}
+          <span class="txn" style="background:#f1f5f9;color:#475569;">{{ labels.get(r.pdc.status) }}</span>
+          {% elif r.pdc.status == 'cleared' %}
+          <span class="txn" style="background:#dcfce7;color:#15803d;">{{ labels.get(r.pdc.status) }}</span>
+          {% elif r.pdc.status == 'bounced' %}
+          <span class="txn" style="background:#fee2e2;color:#b91c1c;">{{ labels.get(r.pdc.status) }}</span>
+          {% else %}
+          <span class="txn" style="background:#e0f2fe;color:#0369a1;">{{ labels.get(r.pdc.status, r.pdc.status) }}</span>
+          {% endif %}
+        </td>
+        <td class="row-actions"><a class="btn-link" href="/pdc/{{ r.pdc.id }}">View →</a></td>
+        {% elif r.state == 'gap' %}
+        <td colspan="4"><strong style="color:#b91c1c;">⚠ Unaccounted for</strong>
+          <span class="muted">— a later cheque was already issued, so this leaf is gone.</span></td>
+        <td></td>
+        {% else %}
+        <td colspan="4" class="muted">Not used yet</td>
+        <td></td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h2 class="page-title" style="font-size:1.05rem;margin-top:24px;">Void a spoiled cheque</h2>
+<form class="card form" method="post" action="/cheques/books/{{ book.id }}/void">
+  <label>Cheque number
+    <input name="seq" inputmode="numeric" placeholder="digits only, e.g. {{ stats.next or book.start_no }}" required>
+    <small class="muted">Records it at zero so the number stops showing as missing.</small>
+  </label>
+  <label>Reason
+    <input name="notes" placeholder="e.g. misprinted, torn">
+  </label>
+  <div class="form-actions full">
+    <button class="btn" type="submit">Void Number</button>
+  </div>
+</form>
+
+<form method="post" action="/cheques/books/{{ book.id }}/toggle" style="margin-top:14px;">
+  <button class="btn-secondary" type="submit">
+    {{ 'Reopen this booklet' if not book.is_active else 'Close this booklet' }}
+  </button>
+  <span class="muted">A closed booklet stops being offered on the payment screen.</span>
+</form>
+{% endblock %}

@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Cheques to Clear · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Cheques to Clear</h1>
+    <p class="muted">Cheques whose date has arrived. Tick the ones the bank actually honoured.</p>
+  </div>
+  <a class="btn-secondary" href="/pdc">← All Cheques</a>
+</div>
+
+{% if cleared %}
+<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;">
+  {{ cleared }} cheque{{ 's' if cleared != 1 }} cleared.
+</div>
+{% endif %}
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ rows|length }}</span><span>Waiting</span></div>
+  <div class="mini-stat owed"><span class="mini-num">{{ issued_total|peso }}</span><span>Issued (we pay)</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ received_total|peso }}</span><span>Received (we collect)</span></div>
+</div>
+
+<div class="tabs" style="margin-bottom:18px;">
+  <a class="tab {{ 'active' if not direction }}" href="/pdc/due">All</a>
+  <a class="tab {{ 'active' if direction == 'issued' }}" href="/pdc/due?direction=issued">Issued <span class="muted">(to suppliers)</span></a>
+  <a class="tab {{ 'active' if direction == 'received' }}" href="/pdc/due?direction=received">Received <span class="muted">(from customers)</span></a>
+</div>
+
+{% if rows %}
+<form method="post" action="/pdc/due/clear" id="clearForm" onsubmit="return confirmClear();">
+  <div class="card form" style="margin-bottom:14px;">
+    <label>Cleared on
+      <input type="date" name="clear_date" value="{{ today_iso }}" required>
+      <small class="muted">
+        The day the bank actually honoured them. Cheques that cleared on different
+        days should be done as separate batches.
+      </small>
+    </label>
+    <div class="form-actions">
+      <button type="button" class="btn-link" onclick="setAll(true)">Select all</button> ·
+      <button type="button" class="btn-link" onclick="setAll(false)">None</button>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="grid">
+      <thead>
+        <tr>
+          <th style="width:36px;"></th><th>Cheque #</th><th>Cheque Date</th>
+          <th>Direction</th><th>Party</th><th>Covers</th><th class="num">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td><input type="checkbox" name="pdc_id" value="{{ r.id }}" class="pick"
+                     data-amount="{{ r.amount or 0 }}" onchange="recalc()" checked></td>
+          <td class="strong"><a class="btn-link" href="/pdc/{{ r.id }}">{{ r.cheque_no or '—' }}</a></td>
+          <td>
+            {{ r.cheque_date.strftime('%b %d, %Y') }}
+            {% set overdue = (today - r.cheque_date).days %}
+            {% if overdue > 0 %}
+            <span class="warn-tag" title="Date passed {{ overdue }} day(s) ago">⚠ {{ overdue }}d</span>
+            {% else %}
+            <span class="txn" style="background:#fef3c7;color:#b45309;">due today</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if r.direction == 'issued' %}
+            <span class="txn" style="background:#e0f2fe;color:#0369a1;">Issued</span>
+            {% else %}
+            <span class="txn" style="background:#dcfce7;color:#15803d;">Received</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if r.direction == 'issued' %}{{ r.supplier.name if r.supplier else '—' }}
+            {% else %}{{ r.customer.name if r.customer else '—' }}{% endif %}
+          </td>
+          <td class="muted">
+            {% set n = r.applications|length %}
+            {% if n %}{{ n }} invoice{{ 's' if n != 1 }}{% else %}—{% endif %}
+          </td>
+          <td class="num strong">{{ r.amount|peso }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="6" class="strong" style="text-align:right;">Selected</td>
+          <td class="num strong" id="selTotal">₱0.00</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <div class="form-actions" style="margin-top:14px;">
+    <button class="btn" type="submit">Clear Selected</button>
+  </div>
+  <p class="muted" style="margin-top:8px;">
+    Clearing settles the invoices behind each cheque and, for issued cheques drawn on a
+    tracked account, takes the money out of that bank balance. There's no un-clear — only
+    tick cheques you've confirmed went through.
+  </p>
+</form>
+
+<script>
+  function setAll(on) {
+    document.querySelectorAll('.pick').forEach(cb => { cb.checked = on; });
+    recalc();
+  }
+  function selected() {
+    return Array.from(document.querySelectorAll('.pick')).filter(cb => cb.checked);
+  }
+  function recalc() {
+    const total = selected().reduce((sum, cb) => sum + (parseFloat(cb.dataset.amount) || 0), 0);
+    document.getElementById('selTotal').textContent =
+      '₱' + total.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function confirmClear() {
+    const picks = selected();
+    if (!picks.length) { alert('Tick at least one cheque.'); return false; }
+    const total = picks.reduce((sum, cb) => sum + (parseFloat(cb.dataset.amount) || 0), 0);
+    return confirm('Clear ' + picks.length + ' cheque(s) worth ₱' +
+      total.toLocaleString('en-PH', { minimumFractionDigits: 2 }) +
+      '?\n\nThis settles their invoices and moves the bank balance. It cannot be undone.');
+  }
+  recalc();
+</script>
+{% else %}
+<div class="table-wrap">
+  <table class="grid"><tbody>
+    <tr><td class="empty">No cheque has come due yet.</td></tr>
+  </tbody></table>
+</div>
+{% endif %}
+{% endblock %}

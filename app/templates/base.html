@@ -59,7 +59,7 @@
     {% set is_admin = (user.role or '')|lower == 'admin' %}
     {% set is_staff = (user.role or '')|lower in ('admin', 'manager') %}
     {% set is_floor_staff = (user.role or '')|lower in ('admin', 'manager', 'cashier') %}
-    {% set finance_active = path.startswith('/pdc') or path.startswith('/expenses') or path.startswith('/banking') or path.startswith('/reports') %}
+    {% set finance_active = path.startswith('/pdc') or path.startswith('/payments') or path.startswith('/cheques') or path.startswith('/expenses') or path.startswith('/banking') or path.startswith('/reports') %}
     {# Settings is its own nav-item, not an Admin submenu row — it must not
        auto-open (or highlight as active) the Admin dropdown when visited. #}
     {% set admin_active = path.startswith('/backup') or path.startswith('/users') or path.startswith('/audit') %}
@@ -263,10 +263,12 @@
           <svg class="nav-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 6l6 6-6 6"/></svg>
         </summary>
         <div class="nav-subitems">
+          <a class="nav-item nav-sub {{ 'active' if path.startswith('/payments') }}" href="/payments"><span>Supplier Payments</span></a>
           <a class="nav-item nav-sub {{ 'active' if path.startswith('/pdc') }}" href="/pdc">
             <span>Cheques</span>
             {% if pdc_due %}<span class="nav-badge" title="{{ pdc_due }} cheque(s) due or overdue">{{ pdc_due }}</span>{% endif %}
           </a>
+          <a class="nav-item nav-sub {{ 'active' if path.startswith('/cheques') }}" href="/cheques/books"><span>Cheque Books</span></a>
           <a class="nav-item nav-sub {{ 'active' if path.startswith('/expenses') }}" href="/expenses"><span>Expenses</span></a>
           <a class="nav-item nav-sub {{ 'active' if path.startswith('/banking') }}" href="/banking"><span>Cash &amp; Banking</span></a>
           {# "Reports", not "Accounting" — an admin sees both this and the

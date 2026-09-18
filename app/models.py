@@ -613,6 +613,10 @@ class ReceivableSettlement(Base):
     # accidental payment be undone by reversing this specific entry instead of
     # an ambiguous source_type/source_id lookup (a sale can have >1 settlement).
     journal_entry_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=True)
+    # Which cheque's clearing created this, when one did. Without it, undoing
+    # a cleared cheque would have to guess its settlements from cheque_no,
+    # which isn't unique across banks. Null for ordinary cash collections.
+    pdc_id = Column(Integer, ForeignKey("post_dated_cheques.id"), nullable=True)
     # Set only when method is "credit_note" — the return/exchange sale whose
     # value was applied here instead of paid in cash, so a customer's
     # statement can point at exactly which transaction did it.
@@ -622,6 +626,38 @@ class ReceivableSettlement(Base):
 
     sale = relationship("Sale", back_populates="settlements", foreign_keys=[sale_id])
     source_sale = relationship("Sale", foreign_keys=[source_sale_id])
+
+
+class ChequeBook(Base):
+    """A physical cheque booklet drawn on one of our bank accounts, so the
+    numbers we issue can be monitored as a *series* rather than as free text.
+
+    The booklet is the range (start_no..end_no); every cheque issued against
+    it carries a cheque_seq inside that range. That's what makes the two
+    controls possible: a number can't be used twice on the same account, and
+    any number in the range with no cheque behind it shows up as a gap —
+    "unaccounted for" — instead of silently never existing. A spoiled cheque
+    is recorded as a status="voided" PostDatedCheque with amount 0, so the
+    number is accounted for rather than reading as a gap.
+    """
+    __tablename__ = "cheque_books"
+
+    id = Column(Integer, primary_key=True)
+    bank_account_id = Column(Integer, ForeignKey("bank_accounts.id"), nullable=False)
+    # Printed before the number on the cheque face, if any (e.g. "A" in
+    # A0012345). Kept separate from the number so the range stays arithmetic.
+    prefix = Column(String(20))
+    start_no = Column(Integer, nullable=False)
+    end_no = Column(Integer, nullable=False)
+    # How many digits the number is printed with, so 45 redisplays as 0000045
+    # exactly like the cheque face. Derived from start_no's own width at
+    # creation; stored because it can't be recovered from an int.
+    digits = Column(Integer, nullable=False, server_default="1")
+    is_active = Column(Boolean, nullable=False, server_default="true")
+    notes = Column(String(255))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    bank_account = relationship("BankAccount")
 
 
 class PostDatedCheque(Base):
@@ -636,16 +672,41 @@ class PostDatedCheque(Base):
       bounced  -> received: nothing to reverse, since it was never applied;
                   issued: the purchase stays unpaid.
       cancelled -> the cheque was returned/replaced before ever being deposited.
+      voided   -> a spoiled cheque: torn, misprinted, never handed over. It
+                  pays nothing (amount 0, no applications) and exists purely
+                  so its NUMBER is accounted for in the series register
+                  instead of reading as a gap. See ChequeBook.
     """
     __tablename__ = "post_dated_cheques"
 
     id = Column(Integer, primary_key=True)
     direction = Column(String(10), nullable=False)              # received | issued
-    status = Column(String(12), nullable=False, server_default="pending")  # pending | deposited | cleared | bounced | cancelled
+    status = Column(String(12), nullable=False, server_default="pending")  # pending | deposited | cleared | bounced | cancelled | voided
 
     bank = Column(String(60))
     cheque_no = Column(String(40))
     cheque_date = Column(Date, nullable=False)
+
+    # Which of OUR accounts an issued cheque is drawn on, and which booklet
+    # the number came from. `bank` above stays as the free-text bank name a
+    # *received* cheque is drawn on (the customer's bank — not an account we
+    # hold, so it can't be a FK). cheque_seq is the numeric part of cheque_no
+    # kept as an int, which is what the series register orders and gap-checks
+    # on; it can't be parsed back out of the string reliably once a prefix is
+    # involved. All nullable — cheques predating the series register, and
+    # received cheques, simply have none.
+    bank_account_id = Column(Integer, ForeignKey("bank_accounts.id"), nullable=True)
+    cheque_book_id = Column(Integer, ForeignKey("cheque_books.id"), nullable=True)
+    cheque_seq = Column(Integer, nullable=True)
+
+    # The bank withdrawal this cheque caused when it cleared, so the account
+    # balance drops on the day the money actually left. Written only for
+    # issued cheques drawn on a tracked account, and only at clearing time —
+    # never at issue, when nothing has left the bank yet. Deliberately NOT
+    # GL-posted (no contra_account_id): post_purchase_settlement already
+    # books the double entry for the same payment, and posting both would
+    # double-count it. See pdc.clear_pdc.
+    bank_txn_id = Column(Integer, ForeignKey("bank_transactions.id"), nullable=True)
     deposit_date = Column(Date, nullable=True)  # set when marked "deposited" — when it was handed to the bank
     amount = Column(Numeric(12, 2), nullable=False, server_default="0")
     notes = Column(String(255))
@@ -665,10 +726,16 @@ class PostDatedCheque(Base):
 
     sale = relationship("Sale")
     customer = relationship("Customer")
-    settlement = relationship("ReceivableSettlement")
+    # foreign_keys is required now that ReceivableSettlement carries a pdc_id
+    # back to this table: without it there are two FK paths between the two
+    # tables (this column, and that one) and the join is ambiguous.
+    settlement = relationship("ReceivableSettlement", foreign_keys=[settlement_id])
     purchase = relationship("Purchase")
     supplier = relationship("Supplier")
     creator = relationship("User")
+    bank_account = relationship("BankAccount")
+    cheque_book = relationship("ChequeBook")
+    bank_txn = relationship("BankTransaction")
     applications = relationship("PdcApplication", back_populates="pdc", cascade="all, delete-orphan")
 
 
@@ -795,6 +862,14 @@ class PurchaseSettlement(Base):
     bank = Column(String(60))          # for cheque
     cheque_no = Column(String(40))     # for cheque
     cheque_date = Column(String(20))   # for cheque (kept as text, same as ReceivableSettlement)
+    # The exact journal entry this settlement posted — same reason as
+    # ReceivableSettlement.journal_entry_id: a purchase can have several
+    # settlements, so source_type/source_id alone can't tell them apart when
+    # one of them has to be reversed.
+    journal_entry_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=True)
+    # Which cheque's clearing created this, when one did — what un-clearing
+    # uses to find exactly what it must undo.
+    pdc_id = Column(Integer, ForeignKey("post_dated_cheques.id"), nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

@@ -16,6 +16,8 @@ backups/
 # (see RESTORE.md) — machine-specific, and a dump is real business data
 # that has no business being pushed to a git remote.
 *.sql
+*.dump
+db_backups/
 error.txt
 errors.txt
 restore_errors.txt

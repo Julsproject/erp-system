@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Cheque Books · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Cheque Books</h1>
+    <p class="muted">Every cheque number you've issued, by booklet — and every one that's missing.</p>
+  </div>
+  <a class="btn-secondary" href="/payments">← Supplier Payments</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+{% if total_gaps %}
+<div class="alert" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">
+  <strong>{{ total_gaps }} cheque number{{ 's' if total_gaps != 1 }} unaccounted for.</strong>
+  A number was skipped over — the cheque was either never recorded, or spoiled and never voided.
+  Open the booklet to see which.
+</div>
+{% endif %}
+
+<div class="table-wrap" style="margin-bottom:20px;">
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Drawn On</th><th>Range</th><th class="num">Used</th><th class="num">Left</th>
+        <th>Next Number</th><th class="num">Gaps</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr {{ 'style=opacity:.55' if not r.book.is_active }}>
+        <td class="strong">
+          {{ r.book.bank_account.name if r.book.bank_account else '—' }}
+          {% if not r.book.is_active %}<span class="txn" style="background:#f1f5f9;color:#475569;">closed</span>{% endif %}
+        </td>
+        <td>{{ fmt(r.book, r.book.start_no) }} – {{ fmt(r.book, r.book.end_no) }}</td>
+        <td class="num">{{ r.stats.used }} / {{ r.stats.total }}</td>
+        <td class="num">{{ r.stats.left }}</td>
+        <td class="strong">
+          {% if r.stats.next %}{{ fmt(r.book, r.stats.next) }}{% else %}<span class="muted">used up</span>{% endif %}
+        </td>
+        <td class="num">
+          {% if r.stats.gap_count %}
+          <span class="warn-tag" title="Numbers skipped over">⚠ {{ r.stats.gap_count }}</span>
+          {% else %}—{% endif %}
+        </td>
+        <td class="row-actions"><a class="btn-link" href="/cheques/books/{{ r.book.id }}">Open →</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No booklet registered yet — add one below.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h2 class="page-title" style="font-size:1.05rem;">Register a booklet</h2>
+<form class="card form" method="post" action="/cheques/books">
+  <label>Drawn on
+    <select name="bank_account_id" required>
+      <option value="">— choose account —</option>
+      {% for a in accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Prefix
+    <input name="prefix" placeholder="Optional, e.g. A">
+    <small class="muted">Letters printed before the number, if any.</small>
+  </label>
+  <label>First number
+    <input name="start_no" inputmode="numeric" placeholder="e.g. 0012301" required>
+    <small class="muted">Type it exactly as printed — the leading zeros are kept.</small>
+  </label>
+  <label>Last number
+    <input name="end_no" inputmode="numeric" placeholder="e.g. 0012350" required>
+  </label>
+  <label class="full">Notes
+    <input name="notes" placeholder="Optional">
+  </label>
+  <div class="form-actions full"><button class="btn" type="submit">Add Booklet</button></div>
+</form>
+{% endblock %}

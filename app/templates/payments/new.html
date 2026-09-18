@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block title %}Pay {{ supplier.name }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Pay {{ supplier.name }}</h1>
+    <p class="muted">Tick the invoices this payment covers. One cheque can cover as many as you like.</p>
+  </div>
+  <a class="btn-secondary" href="/payments">← Back to Payments</a>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<form class="card form" method="post" action="/payments/new" id="payForm">
+  <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
+
+  <label>Payment method
+    <select name="method" id="methodSel">
+      {% for value, label in methods %}
+      <option value="{{ value }}" {{ 'selected' if value == 'cheque' }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  {# --- cheque fields ---------------------------------------------------- #}
+  <label class="chq-field">Drawn on
+    <select name="bank_account_id" id="acctSel">
+      <option value="">— choose account —</option>
+      {% for a in accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label class="chq-field">Cheque booklet
+    <select name="cheque_book_id" id="bookSel">
+      <option value="">— none registered —</option>
+    </select>
+  </label>
+  <label class="chq-field">Cheque #
+    <input name="cheque_no" id="chequeNo" placeholder="e.g. 0012345" autocomplete="off">
+    <small class="muted" id="chequeHint"></small>
+  </label>
+  <label class="chq-field">Cheque date
+    <input type="date" name="cheque_date" id="chequeDate" value="{{ today }}">
+  </label>
+
+  {# --- non-cheque fields ------------------------------------------------- #}
+  <label class="cash-field">Date paid
+    <input type="date" name="payment_date" value="{{ today }}">
+    <small class="muted">The day the money actually left — not the day you're encoding it.</small>
+  </label>
+
+  <label class="full">Notes
+    <input name="notes" placeholder="Optional">
+  </label>
+
+  <div class="full">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+      <strong>Invoices outstanding</strong>
+      <span>
+        <button type="button" class="btn-link" onclick="setAll(true)">Select all</button> ·
+        <button type="button" class="btn-link" onclick="setAll(false)">None</button>
+      </span>
+    </div>
+    <div class="table-wrap">
+      <table class="grid" id="applyTable">
+        <thead>
+          <tr>
+            <th style="width:36px;"></th><th>Ref</th><th>Supplier Invoice / DR</th>
+            <th>Due</th><th class="num">Outstanding</th><th style="width:150px;">Pay this time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p, outstanding in owed %}
+          <tr>
+            <td><input type="checkbox" class="apply-check" onchange="toggleRow(this)" checked></td>
+            <td class="strong">{{ p.ref_no }}</td>
+            <td>{{ p.invoice_no or '—' }}{% if p.delivery_date %} <span class="muted">· {{ p.delivery_date }}</span>{% endif %}</td>
+            <td>{{ p.due_date.strftime('%b %d, %Y') if p.due_date else '—' }}</td>
+            <td class="num">{{ outstanding|peso }}</td>
+            <td>
+              <input type="hidden" name="apply_id" value="{{ p.id }}" class="apply-id">
+              <input type="number" name="apply_amount" step="0.01" min="0" max="{{ outstanding }}"
+                     value="{{ outstanding }}" class="apply-amount" oninput="recalc()">
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="empty">Nothing outstanding for this supplier.</td></tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="5" class="strong" style="text-align:right;">Payment total</td>
+            <td class="num strong" id="totalCell">₱0.00</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+    <p class="muted" id="chequeNote" style="margin-top:8px;">
+      A cheque doesn't settle anything yet — it goes into the cheque register and the
+      invoices are paid off when you mark it cleared.
+    </p>
+  </div>
+
+  <div class="form-actions full">
+    <button class="btn" type="submit" {{ 'disabled' if not owed }}>Record Payment</button>
+    <a class="btn-secondary" href="/payments">Cancel</a>
+  </div>
+</form>
+
+<script>
+  const ACCOUNTS = {{ accounts|tojson }};
+
+  function toggleRow(cb) {
+    const row = cb.closest('tr');
+    row.querySelector('.apply-id').disabled = !cb.checked;
+    row.querySelector('.apply-amount').disabled = !cb.checked;
+    recalc();
+  }
+  function setAll(on) {
+    document.querySelectorAll('.apply-check').forEach(cb => { cb.checked = on; toggleRow(cb); });
+  }
+  function recalc() {
+    let total = 0;
+    document.querySelectorAll('.apply-amount').forEach(inp => {
+      if (!inp.disabled) total += parseFloat(inp.value) || 0;
+    });
+    document.getElementById('totalCell').textContent =
+      '₱' + total.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  // Cheque vs. everything else: a cheque needs a number and a cheque date and
+  // settles later; the rest need the date the money actually moved.
+  function syncMethod() {
+    const isCheque = document.getElementById('methodSel').value === 'cheque';
+    document.querySelectorAll('.chq-field').forEach(el => el.style.display = isCheque ? '' : 'none');
+    document.querySelectorAll('.cash-field').forEach(el => el.style.display = isCheque ? 'none' : '');
+    document.getElementById('chequeNote').style.display = isCheque ? '' : 'none';
+    document.getElementById('chequeDate').required = isCheque;
+  }
+
+  // Booklets belong to an account, so the booklet list follows the account
+  // and the number follows the booklet.
+  function syncBooks() {
+    const acctId = document.getElementById('acctSel').value;
+    const bookSel = document.getElementById('bookSel');
+    const acct = ACCOUNTS.find(a => String(a.id) === String(acctId));
+    bookSel.innerHTML = '';
+    if (!acct || !acct.books.length) {
+      bookSel.innerHTML = '<option value="">— no booklet registered —</option>';
+      syncNumber();
+      return;
+    }
+    acct.books.forEach(b => {
+      const opt = document.createElement('option');
+      opt.value = b.id;
+      opt.textContent = b.label + (b.exhausted ? ' (used up)' : ' · next ' + b.next_no);
+      opt.disabled = b.exhausted;
+      bookSel.appendChild(opt);
+    });
+    const firstOpen = acct.books.find(b => !b.exhausted);
+    if (firstOpen) bookSel.value = firstOpen.id;
+    syncNumber();
+  }
+  function syncNumber() {
+    const acct = ACCOUNTS.find(a => String(a.id) === String(document.getElementById('acctSel').value));
+    const bookId = document.getElementById('bookSel').value;
+    const book = acct && acct.books.find(b => String(b.id) === String(bookId));
+    const box = document.getElementById('chequeNo');
+    const hint = document.getElementById('chequeHint');
+    if (book && !book.exhausted) {
+      box.value = book.next_no;
+      hint.textContent = 'Next unused number in ' + book.label + '. Change it if you skipped ahead.';
+    } else {
+      box.value = '';
+      hint.textContent = acct ? 'No open booklet — the number is recorded as typed.' : '';
+    }
+  }
+
+  document.getElementById('methodSel').addEventListener('change', syncMethod);
+  document.getElementById('acctSel').addEventListener('change', syncBooks);
+  document.getElementById('bookSel').addEventListener('change', syncNumber);
+  syncMethod();
+  syncBooks();
+  recalc();
+</script>
+{% endblock %}

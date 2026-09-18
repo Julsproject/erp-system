@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Supplier Payments · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Supplier Payments</h1>
+    <p class="muted">Who we still owe. Pick a supplier to pay several of its invoices with one cheque.</p>
+  </div>
+  <a class="btn-secondary" href="/cheques/books">Cheque Books →</a>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ rows|length }}</span><span>Suppliers Owed</span></div>
+  <div class="mini-stat owed"><span class="mini-num">{{ total_owed|peso }}</span><span>Total Payable</span></div>
+</div>
+
+<form class="card form" method="get" action="/payments" style="margin-bottom:14px;">
+  <label class="full">Find supplier
+    <input type="search" name="q" id="qSearch" value="{{ q }}" placeholder="Type a name…">
+  </label>
+  <div class="form-actions full"><button class="btn" type="submit">Search</button>
+    {% if q %}<a class="btn-secondary" href="/payments">Clear</a>{% endif %}
+  </div>
+</form>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Supplier</th><th class="num">Invoices</th><th>Earliest Due</th>
+        <th class="num">Outstanding</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="strong">{{ r.supplier.name }}</td>
+        <td class="num">{{ r.invoices }}</td>
+        <td>
+          {% if r.earliest_due %}
+            {{ r.earliest_due.strftime('%b %d, %Y') }}
+            {% if r.earliest_due < today %}<span class="warn-tag" title="Past due">⚠ overdue</span>{% endif %}
+          {% else %}—{% endif %}
+        </td>
+        <td class="num strong">{{ r.owed|peso }}</td>
+        <td class="row-actions">
+          <a class="btn-link" href="/payments/new?supplier_id={{ r.supplier.id }}">Pay →</a>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="empty">Nothing outstanding{{ ' matching that name' if q else '' }}.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+  // See products/list.html: autofocus on a pre-filled box can leave the
+  // mobile caret at position 0 instead of the end.
+  (function () {
+    var box = document.getElementById('qSearch');
+    if (box && box.value) { box.focus(); var end = box.value.length; box.setSelectionRange(end, end); }
+  })();
+</script>
+{% endblock %}

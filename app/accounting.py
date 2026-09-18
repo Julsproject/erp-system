@@ -492,6 +492,20 @@ def post_purchase_settlement(db: Session, purchase: models.Purchase, *, amount: 
     )
 
 
+def reverse_purchase_settlement(db: Session, settlement: models.PurchaseSettlement, *, reason: str = None, entered_by_id: int = None):
+    """Undoes one payment to a supplier — the AP mirror of
+    reverse_receivable_settlement. Reverses the specific entry this
+    settlement posted (via journal_entry_id, since a purchase can have
+    several settlements and source_type/source_id can't tell them apart).
+    No-op for older rows that predate the link and never recorded one."""
+    if not settlement.journal_entry_id:
+        return None
+    entry = db.get(models.JournalEntry, settlement.journal_entry_id)
+    if not entry or entry.status != "posted":
+        return None
+    return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id)
+
+
 def reverse_purchase_posting(db: Session, purchase: models.Purchase, *, reason: str, entered_by_id: int = None, same_date: bool = False):
     """Called from purchases.py's cancel_purchase, and from its
     payment-method/VAT correction flows. Reverses only the original

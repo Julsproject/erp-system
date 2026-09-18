@@ -6,7 +6,12 @@
     <h1 class="page-title">Post-Dated Cheques</h1>
     <p class="muted">Cheques received from customers and issued to suppliers, held until they clear.</p>
   </div>
-  <a class="btn" href="/pdc/new">+ New Cheque</a>
+  <div style="display:flex;gap:8px;align-items:center;">
+    {% if due_now %}
+    <a class="btn-secondary" href="/pdc/due">Clear Due ({{ due_now }})</a>
+    {% endif %}
+    <a class="btn" href="/pdc/new">+ New Cheque</a>
+  </div>
 </div>
 
 {% if deleted %}
@@ -18,16 +23,25 @@
   <div class="mini-stat owed"><span class="mini-num">{{ pending_total|peso }}</span><span>Total Pending Value</span></div>
 </div>
 
+<form class="toolbar" method="get" action="/pdc">
+  <input class="search" type="search" name="q" value="{{ q }}"
+         placeholder="Search cheque #, bank, or payee…">
+  {% if direction %}<input type="hidden" name="direction" value="{{ direction }}">{% endif %}
+  {% if status_filter %}<input type="hidden" name="status_filter" value="{{ status_filter }}">{% endif %}
+  <button class="btn-secondary" type="submit">Search</button>
+  {% if q %}<a class="btn-link" href="/pdc{{ '?direction=' ~ direction if direction }}">Clear</a>{% endif %}
+</form>
+
 <div class="tabs">
-  <a class="tab {{ 'active' if not direction }}" href="/pdc?status_filter={{ status_filter }}">All</a>
-  <a class="tab {{ 'active' if direction == 'received' }}" href="/pdc?direction=received&status_filter={{ status_filter }}">Received <span class="muted">(from customers)</span></a>
-  <a class="tab {{ 'active' if direction == 'issued' }}" href="/pdc?direction=issued&status_filter={{ status_filter }}">Issued <span class="muted">(to suppliers)</span></a>
+  <a class="tab {{ 'active' if not direction }}" href="/pdc?status_filter={{ status_filter }}&q={{ q|urlencode }}">All</a>
+  <a class="tab {{ 'active' if direction == 'received' }}" href="/pdc?direction=received&status_filter={{ status_filter }}&q={{ q|urlencode }}">Received <span class="muted">(from customers)</span></a>
+  <a class="tab {{ 'active' if direction == 'issued' }}" href="/pdc?direction=issued&status_filter={{ status_filter }}&q={{ q|urlencode }}">Issued <span class="muted">(to suppliers)</span></a>
 </div>
 
 <div class="tabs" style="margin-bottom:18px;">
-  <a class="tab {{ 'active' if not status_filter }}" href="/pdc?direction={{ direction }}">All <span class="muted">({{ counts.values()|sum }})</span></a>
+  <a class="tab {{ 'active' if not status_filter }}" href="/pdc?direction={{ direction }}&q={{ q|urlencode }}">All <span class="muted">({{ counts.values()|sum }})</span></a>
   {% for s, label in labels.items() %}
-  <a class="tab {{ 'active' if status_filter == s }}" href="/pdc?direction={{ direction }}&status_filter={{ s }}">{{ label }} <span class="muted">({{ counts.get(s, 0) }})</span></a>
+  <a class="tab {{ 'active' if status_filter == s }}" href="/pdc?direction={{ direction }}&status_filter={{ s }}&q={{ q|urlencode }}">{{ label }} <span class="muted">({{ counts.get(s, 0) }})</span></a>
   {% endfor %}
 </div>
 
@@ -94,9 +108,9 @@
 
 {% if pages > 1 %}
 <div class="pager">
-  {% if page > 1 %}<a class="btn-secondary" href="/pdc?page={{ page - 1 }}{{ '&direction=' ~ direction if direction }}{{ '&status_filter=' ~ status_filter if status_filter }}">← Prev</a>{% endif %}
+  {% if page > 1 %}<a class="btn-secondary" href="/pdc?page={{ page - 1 }}{{ '&direction=' ~ direction if direction }}{{ '&status_filter=' ~ status_filter if status_filter }}{{ '&q=' ~ q|urlencode if q }}">← Prev</a>{% endif %}
   <span class="muted">Page {{ page }} of {{ pages }}</span>
-  {% if page < pages %}<a class="btn-secondary" href="/pdc?page={{ page + 1 }}{{ '&direction=' ~ direction if direction }}{{ '&status_filter=' ~ status_filter if status_filter }}">Next →</a>{% endif %}
+  {% if page < pages %}<a class="btn-secondary" href="/pdc?page={{ page + 1 }}{{ '&direction=' ~ direction if direction }}{{ '&status_filter=' ~ status_filter if status_filter }}{{ '&q=' ~ q|urlencode if q }}">Next →</a>{% endif %}
 </div>
 {% endif %}
 {% endblock %}
