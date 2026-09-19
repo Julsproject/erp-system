@@ -108,7 +108,8 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
       <tr>
         <td style="white-space:nowrap;">{{ m.created_at.strftime('%b %d, %Y') if m.created_at else '—' }}
           <span class="muted" style="font-size:12px;">{{ m.created_at.strftime('%I:%M %p') if m.created_at else '' }}</span></td>
-        <td><span class="mv-reason mv-{{ 'in' if r.value_in is not none else 'out' }}">{{ r.label }}</span></td>
+        <td><span class="mv-reason mv-{{ 'in' if r.value_in is not none else 'out' }}">{{ r.label }}</span>
+          {% if m.note %}<div class="mv-note">{{ m.note }}</div>{% endif %}</td>
         <td class="muted">
           {% if r.ref_link %}<a class="btn-link" href="{{ r.ref_link }}">{{ m.ref }}</a>{% else %}{{ m.ref or '—' }}{% endif %}
         </td>
@@ -140,7 +141,8 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
       <tr>
         <td style="white-space:nowrap;">{{ m.created_at.strftime('%b %d, %Y') if m.created_at else '—' }}
           <span class="muted" style="font-size:12px;">{{ m.created_at.strftime('%I:%M %p') if m.created_at else '' }}</span></td>
-        <td><span class="mv-reason mv-{{ 'in' if r.in_qty is not none else 'out' }}">{{ r.label }}</span></td>
+        <td><span class="mv-reason mv-{{ 'in' if r.in_qty is not none else 'out' }}">{{ r.label }}</span>
+          {% if m.note %}<div class="mv-note">{{ m.note }}</div>{% endif %}</td>
         <td class="muted">
           {% if r.ref_link %}<a class="btn-link" href="{{ r.ref_link }}">{{ m.ref }}</a>{% else %}{{ m.ref or '—' }}{% endif %}
         </td>
