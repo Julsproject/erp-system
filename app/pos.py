@@ -2108,8 +2108,36 @@ def edit_sale_invoice(
         return _back("used")
 
     old_invoice_no = sale.invoice_no
+    old_ref = _display_invoice(sale)
+    old_d = stock_dates.local_date(sale.created_at) if sale.created_at else None
     sale.invoice_no = new_invoice_no
     sale.receipt_type = new_receipt_type
+    new_ref = _display_invoice(sale)
+
+    # Its stock movements carry the booklet-prefixed invoice # as their Stock
+    # Card reference, baked in at posting time (see _display_invoice) —
+    # without this, correcting the number here would leave every movement
+    # this sale made pointing at paperwork that no longer exists. Same net
+    # edit_sale_date casts: this sale's own products, plus the repack rows an
+    # auto-opened pack wrote against its sealed source.
+    if new_ref != old_ref:
+        pids = {l.product_id for l in sale.lines if l.product_id}
+        moves = (
+            db.query(models.StockMovement)
+            .filter(models.StockMovement.ref == old_ref,
+                    or_(models.StockMovement.product_id.in_(pids),
+                        models.StockMovement.reason.in_(["repack-in", "repack-out"])))
+            .all()
+        )
+        display = func.concat(func.coalesce(models.Sale.receipt_type, ""), models.Sale.invoice_no)
+        if db.query(models.Sale.id).filter(display == old_ref, models.Sale.id != sale.id).first():
+            # another sale shares the old invoice # — only take the ones on this sale's date
+            moves = [m for m in moves if stock_dates.local_date(m.created_at) == old_d]
+        for m in moves:
+            m.ref = new_ref
+    else:
+        moves = []
+
     # Every journal entry already posted for this sale (its own "Sale
     # {invoice}" entry, and any payment settlements on top of it) baked the
     # old invoice # into its description/reference_no at posting time —
@@ -2137,6 +2165,8 @@ def edit_sale_invoice(
         changes["invoice_no"] = [old_invoice_no, new_invoice_no]
     if new_receipt_type != old_receipt_type:
         changes["receipt_type"] = [old_receipt_type, new_receipt_type]
+    if moves:
+        changes["stock_movements_retagged"] = len(moves)
     old_display = f"{old_receipt_type or ''}{old_invoice_no}"
     new_display = f"{new_receipt_type or ''}{new_invoice_no}"
     audit.record(
