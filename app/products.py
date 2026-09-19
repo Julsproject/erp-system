@@ -2211,7 +2211,7 @@ def _box_breakdown(base_amount: Decimal, factor: Decimal, unit_name: str, base_u
 
 @router.get("/products/{product_id:int}/stock-card", response_class=HTMLResponse)
 def stock_card(
-    product_id: int, request: Request, back: str = "", unit: int = 0,
+    product_id: int, request: Request, back: str = "", unit: int = 0, base: int = 0,
     date_from: str = "", date_to: str = "", view: str = "qty",
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
@@ -2240,6 +2240,16 @@ def stock_card(
 
     view_mode = "value" if view == "value" else "qty"
 
+    # A product tracked in a small unit but bought and sold in a big one
+    # (cement: counted in Kg, moved by the bag) reads as nonsense in base —
+    # "-29,793 Kg" is a number nobody on the floor thinks in. So when no lens
+    # is asked for, open in the largest unit on its ladder: the pack the shop
+    # actually counts. `base=1` is how the base pill asks for base explicitly,
+    # since "no unit given" no longer means base.
+    if not unit and not base and product.units:
+        default_unit = max(product.units, key=lambda u: Decimal(str(u.factor_to_base or 0)))
+        if Decimal(str(default_unit.factor_to_base or 0)) > 1:
+            unit = default_unit.id
     view_unit = next((u for u in product.units if u.id == unit), None) if unit else None
     view_factor = Decimal(str(view_unit.factor_to_base)) if view_unit and view_unit.factor_to_base else Decimal("1")
     view_unit_name = view_unit.name if view_unit else (product.unit_type.name if product.unit_type else "base unit")
@@ -2261,6 +2271,8 @@ def stock_card(
     self_qs = []
     if unit:
         self_qs.append(f"unit={unit}")
+    elif base:
+        self_qs.append("base=1")
     if view_mode == "value":
         self_qs.append("view=value")
     if range_from:

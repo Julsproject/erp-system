@@ -34,7 +34,7 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
 {% if product.units and view_mode != 'value' %}
 <div class="pill-filter-bar" style="margin-bottom:14px;">
   <span class="muted" style="font-size:12.5px;align-self:center;">View in:</span>
-  <a class="cat-pill {{ 'active' if not view_unit_id }}" href="/products/{{ product.id }}/stock-card?back={{ back|urlencode }}{{ qs_tail }}">
+  <a class="cat-pill {{ 'active' if not view_unit_id }}" href="/products/{{ product.id }}/stock-card?base=1&back={{ back|urlencode }}{{ qs_tail }}">
     {{ product.unit_type.name if product.unit_type else 'base unit' }} (base)
   </a>
   {% for u in product.units %}
