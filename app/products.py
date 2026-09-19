@@ -314,6 +314,25 @@ SORTABLE_COLUMNS = {
 }
 
 
+def _no_cost_filter():
+    """Stock on the shelf that has no cost against it.
+
+    Cost drives two things that then quietly go wrong together: a product
+    with no cost contributes nothing to inventory value, so it is invisible
+    on the valuation however much of it is sitting there, and its COGS is
+    qty * factor * 0, so every sale of it reports as pure profit. The
+    existing "selling below cost" alert can't surface these — it requires
+    cost_price > 0 to have something to compare against — so without this
+    they are the one problem the Inventory page cannot show you.
+
+    Restricted to products actually holding stock: a dormant item with no
+    cost is worth fixing before it is next bought, not tonight."""
+    return (
+        models.Product.cost_price <= 0,
+        (models.Product.beginning_stock + models.Product.stock_qty) != 0,
+    )
+
+
 def _find_conversion_issue_ids(db: Session) -> set:
     """Product ids whose unit-breakdown display (Sealed packs / Open
     container — see Product.unit_breakdown) shows a negative quantity on
@@ -428,6 +447,8 @@ def list_products(
         query = query.filter(models.Product.id.in_(conversion_ids or {-1}))
     elif flag == "adjustments":
         query = query.filter(models.Product.id.in_(adjustment_ids or {-1}))
+    elif flag == "nocost":
+        query = query.filter(*_no_cost_filter())
 
     total = query.count()
     pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
@@ -488,6 +509,8 @@ def list_products(
         base_for_counts = base_for_counts.filter(models.Product.id.in_(conversion_ids or {-1}))
     elif flag == "adjustments":
         base_for_counts = base_for_counts.filter(models.Product.id.in_(adjustment_ids or {-1}))
+    elif flag == "nocost":
+        base_for_counts = base_for_counts.filter(*_no_cost_filter())
     cat_counts = dict(
         base_for_counts.filter(models.Product.category_id.isnot(None))
         .with_entities(models.Product.category_id, func.count(models.Product.id))
@@ -584,6 +607,11 @@ def list_products(
             "void_count": len(void_ids),
             "conversion_count": len(conversion_ids),
             "adjustment_count": len(adjustment_ids),
+            "nocost_count": (
+                db.query(func.count(models.Product.id))
+                .filter(models.Product.is_active.is_(True), *_no_cost_filter())
+                .scalar() if is_staff(user) else 0
+            ),
             "last_rollover_period": settings_store.get_setting(db, MONTH_END_SETTING_KEY, ""),
         },
     )
@@ -596,11 +624,19 @@ def export_products_excel(
     category_id: int = 0,
     subcategory_id: int = 0,
     shelf_id: int = 0,
+    flag: str = "",
+    sort: str = "",
+    sort_dir: str = "asc",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
     """Excel export of Inventory — respects whatever filter/search/category
-    pill is active on screen, same as the list page itself."""
+    pill is active on screen, same as the list page itself.
+
+    `flag` and `sort` are carried too, so a tab that narrows the list down to
+    something worth working through (the no-cost items, say, biggest quantity
+    first) exports exactly what is on screen rather than the whole catalogue
+    in default order."""
     if not user:
         return RedirectResponse("/login", status_code=302)
 
@@ -620,9 +656,27 @@ def export_products_excel(
         query = query.filter(models.Product.shelf_id.is_(None))
     elif shelf_id:
         query = query.filter(models.Product.shelf_id == shelf_id)
-    products = query.order_by(models.Product.name).all()
 
     is_admin_user = is_staff(user)
+    # Same tab filters the list page applies — the two expensive ones are
+    # recomputed here rather than passed in, so a stale link can never export
+    # a set that no longer matches what the tab would show.
+    if is_admin_user and flag:
+        if flag == "void":
+            query = query.filter(models.Product.id.in_(set(find_all_double_deduction_candidates(db)) or {-1}))
+        elif flag == "conversion":
+            query = query.filter(models.Product.id.in_(_find_conversion_issue_ids(db) or {-1}))
+        elif flag == "adjustments":
+            query = query.filter(models.Product.id.in_(_find_recent_manual_adjustment_ids(db) or {-1}))
+        elif flag == "nocost":
+            query = query.filter(*_no_cost_filter())
+
+    sort_col = SORTABLE_COLUMNS.get(sort)
+    if sort_col is not None:
+        order = (sort_col.desc() if sort_dir == "desc" else sort_col.asc(), models.Product.name)
+    else:
+        order = (models.Product.name,)
+    products = query.order_by(*order).all()
     headers = ["Product Name", "Barcode", "Category", "Sub Category", "Unit Type", "Shelf", "Cost of Sales"]
     if is_admin_user:
         headers.append("Selling Price")

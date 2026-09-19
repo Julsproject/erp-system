@@ -33,7 +33,7 @@
       <button type="submit" class="btn-secondary">Price List</button>
     </form>
     {% if is_admin_user %}
-    <a class="btn-secondary" href="/products/export.xlsx?q={{ q }}&category_id={{ category_id }}&subcategory_id={{ subcategory_id }}&shelf_id={{ shelf_id }}&alert={{ 1 if alert else 0 }}">⬇ Export Excel</a>
+    <a class="btn-secondary" href="/products/export.xlsx?q={{ q }}&category_id={{ category_id }}&subcategory_id={{ subcategory_id }}&shelf_id={{ shelf_id }}&alert={{ 1 if alert else 0 }}&flag={{ flag }}&sort={{ sort }}&sort_dir={{ sort_dir }}">⬇ Export Excel</a>
     <button type="button" class="btn-secondary" onclick="openMerge()">⇄ Merge Duplicates</button>
     <a class="btn-secondary" href="/products/duplicates">🔍 Find Duplicates</a>
     <a class="btn-secondary" href="/products/archived">🗄 Archived</a>
@@ -92,6 +92,12 @@
   {% endif %}
   {% if conversion_count %}
   <a class="tab {{ 'active' if flag == 'conversion' }}" href="/products?flag=conversion">Conversion Issues <span class="warn-tag">{{ conversion_count }}</span></a>
+  {% endif %}
+  {% if nocost_count %}
+  {# Biggest quantity first: cost these and most of the missing valuation
+     comes back for a fraction of the typing. #}
+  <a class="tab {{ 'active' if flag == 'nocost' }}"
+     href="/products?flag=nocost&sort=total_qty&sort_dir=desc">No Cost <span class="warn-tag">{{ nocost_count }}</span></a>
   {% endif %}
   {% if adjustment_count %}
   <a class="tab {{ 'active' if flag == 'adjustments' }}" href="/products?flag=adjustments">Manual Adjustments <span class="warn-tag">{{ adjustment_count }}</span></a>
