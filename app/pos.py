@@ -88,6 +88,35 @@ def _money(value) -> Decimal:
     return _dec(value).quantize(CENTS, rounding=ROUND_HALF_UP)
 
 
+def _resolve_unit_factor(product, unit_name, claimed) -> Decimal:
+    """The conversion factor for `unit_name`, taken from the product's own
+    units ladder rather than from whatever the browser sent.
+
+    A line carries the unit as two independent fields — the name the cashier
+    picked and the factor to multiply by — and only the name is ever shown
+    back to anyone. When they disagree the damage is silent and doubled:
+    stock deducts qty * factor and COGS is qty * factor * unit_cost, so a
+    "bag" line that arrives with factor 1 takes 1 Kg off the shelf and costs
+    it as 1 Kg, while every screen still says bag. That has happened here
+    both ways round — 100 bags deducted as 100 Kg, and 8 Kg costed as 8 bags.
+
+    The name is the reliable half: it is what was chosen, what prints, and
+    what the ladder is keyed by. So the factor is derived from it here and
+    the client's number is only a fallback for a name that matches nothing
+    (a legacy "Unit", or a product with no ladder at all), never an override.
+    """
+    name = (unit_name or "").strip().lower()
+    if name:
+        for u in product.units:
+            factor = Decimal(str(u.factor_to_base or 0))
+            if factor > 0 and (u.name or "").strip().lower() == name:
+                return factor
+        base = product.unit_type.name if product.unit_type else ""
+        if (base or "").strip().lower() == name:
+            return Decimal("1")
+    return claimed
+
+
 def _display_invoice(sale: models.Sale) -> str:
     """Receipt-type-prefixed invoice # (e.g. "DRB51380", not "51380") — same
     format shown on the printed receipt, used as the Stock Card's reference
@@ -718,7 +747,7 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
             continue
         qty = _dec(ln.get("qty"))
         unit_price = _dec(ln.get("unit_price"))
-        factor = _dec(ln.get("factor"), "1")
+        factor = _resolve_unit_factor(product, ln.get("unit_name"), _dec(ln.get("factor"), "1"))
         discount = _dec(ln.get("discount"))
         is_vat = vat_applied  # VAT is a whole-transaction toggle
 
@@ -1377,6 +1406,7 @@ def pos_refund(data: dict, db: Session = Depends(get_db), user=Depends(get_curre
             vat_base += value
         product = db.get(models.Product, int(it["product_id"]), with_for_update=True) if it.get("product_id") else None
         if product:
+            factor = _resolve_unit_factor(product, it.get("unit_name"), factor)
             _add_stock(product, qty * factor)
             refund_unit_cost = Decimal(str(product.cost_price or 0))
             db.add(models.StockMovement(
@@ -1500,6 +1530,7 @@ def pos_exchange(data: dict, db: Session = Depends(get_db), user=Depends(get_cur
         returned_total += value
         product = db.get(models.Product, int(it["product_id"]), with_for_update=True) if it.get("product_id") else None
         if product:
+            factor = _resolve_unit_factor(product, it.get("unit_name"), factor)
             _add_stock(product, qty * factor)
             ex_return_cost = Decimal(str(product.cost_price or 0))
             db.add(models.StockMovement(
@@ -1526,6 +1557,7 @@ def pos_exchange(data: dict, db: Session = Depends(get_db), user=Depends(get_cur
         new_total += lt
         product = db.get(models.Product, int(ln["product_id"]), with_for_update=True) if ln.get("product_id") else None
         if product:
+            factor = _resolve_unit_factor(product, ln.get("unit_name"), factor)
             base_qty = qty * factor
             _replenish_from_source(db, product, base_qty, ref=None, note="Auto-opened for loose exchange item")
             _deduct_stock(product, base_qty)  # oversell allowed — see _finalize_sale
@@ -2640,7 +2672,7 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
             continue
         qty = _dec(ln.get("qty"))
         unit_price = _dec(ln.get("unit_price"))
-        factor = _dec(ln.get("factor"), "1")
+        factor = _resolve_unit_factor(product, ln.get("unit_name"), _dec(ln.get("factor"), "1"))
         discount = _dec(ln.get("discount"))
 
         line_total = qty * unit_price - discount
