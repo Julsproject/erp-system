@@ -179,33 +179,33 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
     <small class="hint">Warn on the dashboard when Total Qty drops to this level. Leave blank for no alert.</small>
   </label>
 
-  {% if product %}
   <div class="full">
     <label>Replenish from (sealed source) <span class="muted">— optional</span>
       <input type="text" id="replenishSearch" placeholder="Search a product to auto-open a pack from…" autocomplete="off"
-             value="{{ product.replenish_from.name if product.replenish_from else '' }}">
-      <input type="hidden" name="replenish_from_id" id="replenishFromId" value="{{ product.replenish_from_id or '' }}">
+             value="{{ product.replenish_from.name if product and product.replenish_from else '' }}">
+      <input type="hidden" name="replenish_from_id" id="replenishFromId" value="{{ (product.replenish_from_id or '') if product else '' }}">
     </label>
     <div id="replenishResults" class="pos-results" style="display:none;position:relative;max-height:220px;overflow:auto;z-index:5;"></div>
-    {% if product.replenish_from_id %}
-    <button type="button" class="btn-link" onclick="clearReplenishLink()" style="margin-top:4px;">✕ Unlink</button>
-    {% endif %}
+    <button type="button" class="btn-link" id="replenishUnlink" onclick="clearReplenishLink()"
+            style="margin-top:4px;{{ '' if product and product.replenish_from_id else 'display:none;' }}">✕ Unlink</button>
     <small class="hint">When this product's own stock can't cover a sale, the system automatically opens a whole pack (its largest unit, e.g. Bag) from the linked product and adds it here.</small>
-    <label style="margin-top:10px;display:block;">1 {{ product.replenish_from.unit_type.name if product.replenish_from and product.replenish_from.unit_type else 'sealed unit' }} opens into
+    <label style="margin-top:10px;display:block;">1 <span id="replenishSourceUnit">{{ product.replenish_from.unit_type.name if product and product.replenish_from and product.replenish_from.unit_type else 'sealed unit' }}</span> opens into
       <input name="replenish_factor" type="number" step="any" min="0" inputmode="decimal" placeholder="e.g. 20"
              style="max-width:110px;display:inline-block;"
-             value="{{ product.replenish_factor|qty_input if product.replenish_factor else '' }}">
-      {{ product.unit_type.name if product.unit_type else 'units' }}
+             value="{{ product.replenish_factor|qty_input if product and product.replenish_factor else '' }}">
+      <span class="base-word">{{ product.unit_type.name if product and product.unit_type else 'base unit' }}</span>
     </label>
     <small class="hint">Only needed when the sealed product is counted in a different unit than this one — e.g. sealed by the bag, sold here by the Kg: "1 bag opens into 20 Kg".</small>
   </div>
 
-  {% if not product.replenish_from_id %}
+  {# The counterpart button POSTs to /products/<id>/create-open-counterpart, so it
+     needs a saved product — on the Add form there's no id yet. The picker above
+     works either way: _save_from_form reads replenish_from_id on create too. #}
+  {% if product and not product.replenish_from_id %}
   <div class="full">
     <button type="button" class="btn-secondary" onclick="createOpenCounterpart()">+ Create Open/Retail counterpart</button>
     <small class="hint" style="display:block;margin-top:4px;">Spins up a new, separate product (e.g. "{{ product.name }} (Open/Retail)") for loose/retail sales, already linked to auto-open a pack from this one whenever it runs low.</small>
   </div>
-  {% endif %}
   {% endif %}
 
   <div class="full ladder">
@@ -435,6 +435,7 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
   if (replenishSearchEl) {
     replenishSearchEl.addEventListener('input', () => {
       document.getElementById('replenishFromId').value = '';
+      setReplenishSource(null);
       clearTimeout(replenishTimer);
       replenishTimer = setTimeout(runReplenishSearch, 180);
     });
@@ -459,6 +460,7 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
       el.onclick = () => {
         document.getElementById('replenishFromId').value = p.id;
         replenishSearchEl.value = p.name;
+        setReplenishSource(p.base_unit);
         box.style.display = 'none';
       };
       el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span></div>' +
@@ -470,6 +472,18 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
   function clearReplenishLink() {
     document.getElementById('replenishFromId').value = '';
     replenishSearchEl.value = '';
+    setReplenishSource(null);
+  }
+
+  // Keeps the "1 <sealed unit> opens into N <base unit>" sentence honest while
+  // the source is being picked — on the Add form there's no saved link to
+  // render it from. Passing null means "nothing linked right now".
+  function setReplenishSource(sourceUnit) {
+    document.getElementById('replenishSourceUnit').textContent = (sourceUnit || '').trim() || 'sealed unit';
+    // Base the button on the actual link, not on the unit name — a source
+    // product with a blank unit is still a source.
+    document.getElementById('replenishUnlink').style.display =
+      document.getElementById('replenishFromId').value ? '' : 'none';
   }
   async function createOpenCounterpart() {
     const suggested = {{ (product.name ~ ' (Open/Retail)')|tojson if product else '""' }};
