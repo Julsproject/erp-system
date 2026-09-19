@@ -194,6 +194,16 @@ def _apply_stock_count_correction(product: models.Product, variance: Decimal):
             product.stock_qty = (product.stock_qty or Decimal("0")) + remainder
 
 
+# Stamped on the zero-qty StockMovement a backdated sale writes when a
+# completed Stock Count already covers its date (see _finalize_sale). It is
+# the only durable record that the line was booked stock-neutral *on purpose*
+# — _find_backdated_stock_conflicts can't be re-run after the fact to work it
+# out again (see its docstring) — so edit_sale_items reads it back to know
+# that there is nothing to reverse. Kept as one constant so the write and the
+# read can never drift apart.
+COUNT_SUPPRESSED_NOTE = "No stock effect — already reflected in a stock count covering this sale's date."
+
+
 def _find_backdated_stock_conflicts(db: Session, backdated, product_ids: list):
     """For a backdated transaction, which of these products were already
     physically counted in a Stock Count whose count_date (the date the
@@ -728,7 +738,7 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
             db.add(models.StockMovement(
                 product_id=product.id, qty_base=Decimal("0"), reason="sale",
                 unit_cost=sale_unit_cost, value=Decimal("0"), ref=_display_invoice(sale),
-                note="No stock effect — already reflected in a stock count covering this sale's date.",
+                note=COUNT_SUPPRESSED_NOTE,
                 created_at=movement_stamp,
             ))
         else:
@@ -2567,21 +2577,58 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
     old_total = sale.total
     old_line_count = len(sale.lines)
 
-    # Reverse every existing line's stock effect first — same mechanics as
-    # Void — but keep the original StockMovement rows as history; only add
-    # compensating entries, don't delete them.
-    for line in sale.lines:
-        if not line.product_id:
-            continue
-        product = db.get(models.Product, line.product_id, with_for_update=True)
+    ref = _display_invoice(sale)
+
+    # What this sale has actually done to stock so far, per product — the
+    # same "net it off the movements" reading edit_sale_date uses. It is not
+    # always the line quantities: a line booked while a completed Stock Count
+    # already covered this sale's date is deliberately stock-neutral
+    # (COUNT_SUPPRESSED_NOTE), and reversing its nominal qty below would hand
+    # back stock that never left the shelf.
+    sale_moves = (
+        db.query(models.StockMovement)
+        .filter(models.StockMovement.ref == ref,
+                models.StockMovement.reason.in_(["sale", "sale-edit-reverse", "correction"]))
+        .all()
+    )
+    display = func.concat(func.coalesce(models.Sale.receipt_type, ""), models.Sale.invoice_no)
+    if sale_moves and db.query(models.Sale.id).filter(display == ref, models.Sale.id != sale.id).first():
+        # another sale shares this invoice # — only take the ones on this
+        # sale's date, same guard as edit_sale_date/edit_sale_invoice
+        sale_d = stock_dates.local_date(sale.created_at) if sale.created_at else None
+        sale_moves = [m for m in sale_moves if stock_dates.local_date(m.created_at) == sale_d]
+    effect_qty, effect_value = {}, {}
+    for m in sale_moves:
+        effect_qty[m.product_id] = effect_qty.get(m.product_id, Decimal("0")) + Decimal(str(m.qty_base or 0))
+        effect_value[m.product_id] = effect_value.get(m.product_id, Decimal("0")) + (
+            Decimal(str(m.value)) if m.value is not None else Decimal("0"))
+    # Products the count suppression applies to. Read from the note rather
+    # than from a zero net effect: on a sale already edited under the old
+    # behaviour the two come apart, and the suppression is still what should
+    # govern the corrected line below.
+    suppressed_ids = {m.product_id for m in sale_moves if m.note == COUNT_SUPPRESSED_NOTE}
+
+    # Reverse this sale's stock effect first — same mechanics as Void — but
+    # keep the original StockMovement rows as history; only add compensating
+    # entries, don't delete them. One entry per product, undoing the net
+    # measured above rather than re-deriving it from the line quantities, so
+    # a sale that was already corrected once (or was never deducted at all)
+    # lands back on exactly zero instead of drifting further each time.
+    for pid in dict.fromkeys(l.product_id for l in sale.lines if l.product_id):
+        qty_back = -effect_qty.get(pid, Decimal("0"))
+        value_back = -effect_value.get(pid, Decimal("0"))
+        if not qty_back and not value_back:
+            continue  # nothing was ever deducted for it — nothing to hand back
+        product = db.get(models.Product, pid, with_for_update=True)
         if not product:
             continue
-        base_qty = Decimal(str(line.qty or 0)) * Decimal(str(line.unit_factor or 1))
-        _add_stock(product, base_qty)
-        unit_cost = Decimal(str(line.unit_cost or 0))
+        _add_stock(product, qty_back)
+        # Label the row with the cost the reversal actually works out to,
+        # so the Stock Card's cost column can't disagree with its own value.
+        unit_cost = (value_back / qty_back).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if qty_back else None
         db.add(models.StockMovement(
-            product_id=product.id, qty_base=base_qty, reason="sale-edit-reverse",
-            ref=_display_invoice(sale), unit_cost=unit_cost, value=base_qty * unit_cost,
+            product_id=product.id, qty_base=qty_back, reason="sale-edit-reverse",
+            ref=ref, unit_cost=unit_cost, value=value_back,
             note="Reversed for item correction", created_at=sale.created_at,
         ))
     sale.lines = []  # cascade="all, delete-orphan" removes the old rows
@@ -2602,14 +2649,31 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
         subtotal += line_total
 
         base_qty = qty * factor
-        _replenish_from_source(db, product, base_qty, ref=_display_invoice(sale), note="Auto-opened for a corrected item", created_at=sale.created_at)
-        _deduct_stock(product, base_qty)
-        unit_cost = Decimal(str(product.cost_price or 0))
-        db.add(models.StockMovement(
-            product_id=product.id, qty_base=-base_qty, reason="sale", ref=_display_invoice(sale),
-            unit_cost=unit_cost, value=-base_qty * unit_cost, note="Corrected item",
-            created_at=sale.created_at,
-        ))
+        if product.id in suppressed_ids:
+            # Stayed stock-neutral at checkout and stays stock-neutral now:
+            # the Stock Count that covered this sale's date still covers it,
+            # so its shelf number already reflects whatever really went out.
+            # Deducting the corrected qty here would double it — exactly the
+            # double-count the original suppression existed to prevent. The
+            # line itself is still recorded (and re-priced) normally.
+            unit_cost = Decimal(str(product.cost_price or 0))
+            db.add(models.StockMovement(
+                product_id=product.id, qty_base=Decimal("0"), reason="sale", ref=ref,
+                unit_cost=unit_cost, value=Decimal("0"), note=COUNT_SUPPRESSED_NOTE,
+                created_at=sale.created_at,
+            ))
+        else:
+            # Cost is read after the replenish on purpose — an auto-opened
+            # pack can restate cost_price, and this row (plus the SaleLine
+            # below) must carry the post-replenish figure, same as checkout.
+            _replenish_from_source(db, product, base_qty, ref=ref, note="Auto-opened for a corrected item", created_at=sale.created_at)
+            _deduct_stock(product, base_qty)
+            unit_cost = Decimal(str(product.cost_price or 0))
+            db.add(models.StockMovement(
+                product_id=product.id, qty_base=-base_qty, reason="sale", ref=ref,
+                unit_cost=unit_cost, value=-base_qty * unit_cost, note="Corrected item",
+                created_at=sale.created_at,
+            ))
         sale.lines.append(models.SaleLine(
             product_id=product.id, product_name=product.name, unit_name=ln.get("unit_name"),
             unit_factor=factor, qty=qty, unit_price=unit_price, discount=discount,
