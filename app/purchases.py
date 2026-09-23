@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import accounting, audit, models, pricing, settings_store, stock_dates
+from . import accounting, audit, models, pricing, settings_store, stock_books, stock_dates
 from .database import get_db
 from .deps import get_current_user, is_floor_staff, is_staff
 from .pos import MANILA, _find_backdated_stock_conflicts, _resolve_txn_datetime, _vat_of
@@ -806,6 +806,7 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
             db.add(movement)
             new_movements.append(movement)
         else:
+            value_before = Decimal(str(product.total_qty or 0)) * old_cost
             if unit_cost > 0:
                 new_cost = _weighted_avg_cost(product, base_qty, unit_cost / factor)
                 product.cost_price = new_cost
@@ -816,6 +817,15 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
             )
             db.add(movement)
             new_movements.append(movement)
+            # Re-averaging onto negative (or count-covered) stock re-values
+            # goods already there or already sold — see stock_books.
+            variance_mv = stock_books.book_cost_variance(
+                db, product, value_before=value_before,
+                value_added=stock_qty * (unit_cost / factor if unit_cost > 0 else old_cost),
+                ref=None, note="Cost re-averaged on this delivery", stamp=stamp, entered_by_id=user.id,
+            )
+            if variance_mv is not None:
+                new_movements.append(variance_mv)
 
         purchase.lines.append(models.PurchaseLine(
             product_id=product.id,
@@ -850,6 +860,8 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
     purchase.ref_no = ref_no or f"{prefix}-{purchase.id:06d}"
     for movement in new_movements:
         movement.ref = purchase.ref_no
+        if movement.journal_entry_id:
+            db.get(models.JournalEntry, movement.journal_entry_id).reference_no = purchase.ref_no
 
     # Real-clock trail, same shape as _finalize_sale's, so /reports/
     # backdated-conflicts can list purchases next to sales.
@@ -1457,6 +1469,7 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
         base_qty = qty * factor
         old_cost = Decimal(str(product.cost_price or 0))
         new_cost = old_cost
+        value_before = Decimal(str(product.total_qty or 0)) * old_cost
         if unit_cost > 0:
             new_cost = _weighted_avg_cost(product, base_qty, unit_cost / factor)
             product.cost_price = new_cost
@@ -1466,6 +1479,12 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
             unit_cost=new_cost, value=base_qty * new_cost, ref=purchase.ref_no,
             created_at=purchase.created_at,
         ))
+        stock_books.book_cost_variance(
+            db, product, value_before=value_before,
+            value_added=base_qty * (unit_cost / factor if unit_cost > 0 else old_cost),
+            ref=purchase.ref_no, note="Cost re-averaged on this delivery (items corrected)",
+            stamp=purchase.created_at, entered_by_id=user.id,
+        )
 
         purchase.lines.append(models.PurchaseLine(
             product_id=product.id,

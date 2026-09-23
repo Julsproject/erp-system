@@ -305,6 +305,53 @@ def _cogs_lines(amount: Decimal) -> list:
     ]
 
 
+def _signed_line(target: dict, amount: Decimal, side: str, memo: str = None) -> dict:
+    """A journal line on `side` for a positive amount, the other side for a negative one."""
+    other = "credit" if side == "debit" else "debit"
+    return {**target, "amount": abs(amount), "side": side if amount > 0 else other, "memo": memo}
+
+
+def _sale_cost_lines(db: Session, sale: models.Sale) -> list:
+    """Dr Cost of Sales for the goods' full cost. Cr Inventory for the part
+    that actually left the shelf; the part a Stock Count had already taken
+    out (a sale dated on/before the count) is credited to the account that
+    count booked its difference to — otherwise Inventory drops twice. See
+    stock_books.sale_count_covered."""
+    from .stock_books import sale_count_covered
+    cogs = sale_cogs(sale)
+    if not cogs:
+        return []
+    covered = sale_count_covered(db, sale)
+    memo = "cost of goods sold"
+    lines = [_signed_line({"function_key": "SALE_COGS"}, cogs, "debit", memo)]
+    inv = cogs - sum(covered.values(), ZERO)
+    if inv:
+        lines.append(_signed_line({"function_key": "SALE_INVENTORY"}, inv, "credit", memo))
+    for account_id, amount in covered.items():
+        lines.append(_signed_line({"_account_id": account_id}, amount, "credit", "already taken out by a stock count"))
+    return lines
+
+
+def _purchase_goods_lines(db: Session, purchase: models.Purchase, goods_side: str) -> list:
+    """The goods side of a delivery (goods_side="debit") or return ("credit"):
+    Inventory at net cost, Input VAT — except the part a Stock Count already
+    accounted for (dated on/before it, so no stock moved), which goes to the
+    account that count booked to. See stock_books.purchase_count_covered."""
+    from .stock_books import purchase_count_covered
+    total = Decimal(str(purchase.total or 0))
+    vat = Decimal(str(purchase.vat_amount or 0))
+    covered = purchase_count_covered(db, purchase)
+    lines = []
+    inv = total - vat - sum(covered.values(), ZERO)
+    if inv:
+        lines.append(_signed_line({"function_key": "INVENTORY_MERCHANDISE"}, inv, goods_side))
+    for account_id, amount in covered.items():
+        lines.append(_signed_line({"_account_id": account_id}, amount, goods_side, "already in a stock count"))
+    if vat > 0:
+        lines.append({"function_key": "INPUT_VAT", "amount": vat, "side": goods_side})
+    return lines
+
+
 def _sale_txn_date(sale: models.Sale) -> date:
     return sale.created_at.astimezone(MANILA).date() if sale.created_at else _today()
 
@@ -333,7 +380,7 @@ def post_sale(db: Session, sale: models.Sale, *, method_rows: list, receivable_a
         lines.append({"function_key": "SALES_REVENUE", "amount": net, "side": "credit"})
     if vat > 0:
         lines.append({"function_key": "OUTPUT_VAT", "amount": vat, "side": "credit"})
-    lines.extend(_cogs_lines(sale_cogs(sale)))
+    lines.extend(_sale_cost_lines(db, sale))
 
     if not lines:
         return None
@@ -630,14 +677,8 @@ def post_purchase_receive(db: Session, purchase: models.Purchase, *, is_payable:
     total = Decimal(str(purchase.total or 0))
     if total <= 0:
         return None
-    vat = Decimal(str(purchase.vat_amount or 0))
-    net = total - vat
     credit_key = "AP" if is_payable else PURCHASE_PAY_FUNCTION_KEYS.get(payment_method, "PURCHASE_PAY_OTHER")
-    lines = [
-        {"function_key": "INVENTORY_MERCHANDISE", "amount": net, "side": "debit"},
-    ]
-    if vat > 0:
-        lines.append({"function_key": "INPUT_VAT", "amount": vat, "side": "debit"})
+    lines = _purchase_goods_lines(db, purchase, "debit")
     lines.append({"function_key": credit_key, "amount": total, "side": "credit", "memo": payment_method or "payable"})
     txn_date = purchase.created_at.date() if purchase.created_at else _today()
     return post_journal(
@@ -656,15 +697,9 @@ def post_purchase_return(db: Session, purchase: models.Purchase, *, entered_by_i
     total = Decimal(str(purchase.total or 0))
     if total <= 0:
         return None
-    vat = Decimal(str(purchase.vat_amount or 0))
     # The mirror of a receive: the goods leave Inventory at their net cost
     # and the VAT claimed on them comes back out of Input VAT.
-    lines = [
-        {"function_key": "AP", "amount": total, "side": "debit"},
-        {"function_key": "INVENTORY_MERCHANDISE", "amount": total - vat, "side": "credit"},
-    ]
-    if vat > 0:
-        lines.append({"function_key": "INPUT_VAT", "amount": vat, "side": "credit"})
+    lines = [{"function_key": "AP", "amount": total, "side": "debit"}] + _purchase_goods_lines(db, purchase, "credit")
     txn_date = purchase.created_at.date() if purchase.created_at else _today()
     return post_journal(
         db, txn_date=txn_date, source_type="purchase", source_id=purchase.id,
@@ -764,11 +799,7 @@ def repost_purchase_receive(db: Session, purchase: models.Purchase, *, reason: s
     total = Decimal(str(purchase.total or 0))
     if total <= 0:
         return None
-    vat = Decimal(str(purchase.vat_amount or 0))
-    goods_side = "credit" if is_return else "debit"
-    lines = [{"function_key": "INVENTORY_MERCHANDISE", "amount": total - vat, "side": goods_side}]
-    if vat > 0:
-        lines.append({"function_key": "INPUT_VAT", "amount": vat, "side": goods_side})
+    lines = _purchase_goods_lines(db, purchase, "credit" if is_return else "debit")
     lines.append({"_account_id": party_account_id, "amount": total, "side": side, "memo": memo})
     return post_journal(
         db, txn_date=txn_date, source_type="purchase", source_id=purchase.id,
@@ -2320,12 +2351,13 @@ def reconcile_sales(
     unbooked_total = sum((Decimal(str(m.value)) for m in unbooked), ZERO)
 
     # Inventory on the ledger vs on the shelf (stock x current cost), today.
-    inv_account = db.query(models.Account).filter(models.Account.system_key == "INVENTORY_MERCHANDISE").first()
-    ledger_inventory = _account_balance_before(db, inv_account, _today() + timedelta(days=1)) if inv_account else ZERO
-    stock_value = db.query(func.coalesce(func.sum(
-        (models.Product.beginning_stock + models.Product.stock_qty) * models.Product.cost_price), 0)
-    ).filter(models.Product.is_active.is_(True)).scalar()
-    stock_value = _money(stock_value or 0)
+    # Every item, archived ones included — the ledger holds their value too.
+    from . import stock_books
+    try:
+        ledger_inventory = stock_books.ledger_inventory(db)
+    except PostingError:
+        ledger_inventory = ZERO
+    stock_value = stock_books.shelf_value(db)
 
     return templates.TemplateResponse(
         "accounting/reconcile_sales.html",
@@ -2339,6 +2371,29 @@ def reconcile_sales(
          "days": days, "date_from": date_from, "date_to": date_to,
          "period_start": period_start, "period_end": period_end, "custom": custom},
     )
+
+
+@router.post("/accounting/reconcile-sales/true-up")
+def reconcile_true_up(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Book whatever is left between the ledger's Inventory and stock on
+    hand x cost to INV_TRUE_UP (Inventory Corrections by default)."""
+    from . import stock_books
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+    try:
+        entry, diff = stock_books.post_true_up(db, entered_by_id=user.id)
+    except PostingError as e:
+        db.rollback()
+        return RedirectResponse(f"/accounting/reconcile-sales?cogs_msg={quote('Could not post: ' + str(e))}", status_code=302)
+    if entry:
+        audit.record(db, user=user, request=request, action="create", entity_type="journal_entry",
+                     entity_id=entry.id, entity_label=entry.journal_no,
+                     summary=f"Inventory true-up {entry.journal_no}: ₱{diff:,.2f}")
+    db.commit()
+    msg = f"Posted {entry.journal_no}: inventory trued up by ₱{diff:,.2f}." if entry else "Already in step — nothing to post."
+    return RedirectResponse(f"/accounting/reconcile-sales?cogs_msg={quote(msg)}", status_code=302)
 
 
 @router.post("/accounting/reconcile-sales/post-stock")

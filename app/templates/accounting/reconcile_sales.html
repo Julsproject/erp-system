@@ -94,6 +94,18 @@
   <div class="mini-stat"><span class="mini-num">{{ stock_value|peso }}</span><span>Stock on hand × cost (today)</span></div>
   <div class="mini-stat"><span class="mini-num">{{ (ledger_inventory - stock_value)|peso }}</span><span>Difference</span></div>
 </div>
-<p class="hint">Purchases, sales (with their cost), inventory adjustments, stock counts, bulk imports and the opening inventory all post.
-  Exchanges, refunds, and sale re-dates that cross a stock count still don't, so a small difference here is expected.</p>
+{% set inv_gap = stock_value - ledger_inventory %}
+{% if inv_gap|abs >= 0.01 %}
+<div class="alert" style="background:#fffbeb;border-color:#fde68a;color:#92400e;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+  <span>The shelf is worth <strong>{{ inv_gap|peso }}</strong> {{ 'more' if inv_gap > 0 else 'less' }} than the ledger holds.
+    A true-up books the difference to Inventory Corrections (remappable as “INV_TRUE_UP” in Accounting Setup).</span>
+  <form method="post" action="/accounting/reconcile-sales/true-up"
+        onsubmit="return confirm('Post an inventory true-up of {{ inv_gap|peso }}, dated today?');">
+    <button class="btn" type="submit">True up now</button>
+  </form>
+</div>
+{% endif %}
+<p class="hint">Everything that moves stock now posts to the books with it, including sales and deliveries dated inside a stock count,
+  re-dates across a count, and cost re-averaging on negative stock. The difference should stay near ₱0. If it drifts, a true-up
+  brings it back.</p>
 {% endblock %}

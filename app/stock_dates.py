@@ -55,13 +55,16 @@ def settle_redate(db: Session, product: models.Product, *, old_date: date, new_d
     target = natural_effect if new_date > count_date else Decimal("0")
     diff = target - current_effect
     if diff:
+        from .stock_books import book_correction
         cost = Decimal(str(product.cost_price or 0))
         _apply_stock_count_correction(product, diff)
-        db.add(models.StockMovement(
+        movement = models.StockMovement(
             product_id=product.id, qty_base=diff, reason="correction", ref=ref,
             unit_cost=cost, value=(diff * cost).quantize(Decimal("0.01")), created_at=created_at,
             note=(f"Date moved to {new_date:%b %d, %Y} — "
                   + ("now after" if new_date > count_date else "now on/before")
                   + f" the {count_date:%b %d} stock count")[:255],
-        ))
+        )
+        db.add(movement)
+        book_correction(db, movement, count_date=count_date)
     return diff

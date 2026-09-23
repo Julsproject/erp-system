@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import accounting, audit, models, settings_store, stock_dates
+from . import accounting, audit, models, settings_store, stock_books, stock_dates
 from .customers import get_or_create_customer
 from .database import get_db
 from .deps import get_current_user, is_staff, safe_back_url
@@ -117,6 +117,35 @@ def _resolve_unit_factor(product, unit_name, claimed) -> Decimal:
     return claimed
 
 
+def _stock_taken_by_sale(db: Session, sale: models.Sale) -> dict:
+    """{product_id: base qty this sale actually took off the shelf} — its
+    own sale / item-correction / re-date movements, not what the lines say.
+    A line dated inside a Stock Count took nothing (the count already had
+    it gone), so undoing the sale must not hand that stock back. A product
+    whose movements predate invoice refs falls back to the lines' qty."""
+    ref = _display_invoice(sale)
+    taken, by_lines = {}, {}
+    for ln in sale.lines:
+        if ln.product_id:
+            by_lines[ln.product_id] = by_lines.get(ln.product_id, Decimal("0")) + (
+                Decimal(str(ln.qty or 0)) * Decimal(str(ln.unit_factor or 1)))
+    db.flush()
+    for m in (db.query(models.StockMovement)
+              .filter(models.StockMovement.ref == ref, models.StockMovement.product_id.in_(by_lines or {0}),
+                      models.StockMovement.reason.in_(("sale", "sale-edit-reverse", "correction"))).all()):
+        taken[m.product_id] = taken.get(m.product_id, Decimal("0")) - Decimal(str(m.qty_base or 0))
+    return {pid: taken.get(pid, qty) for pid, qty in by_lines.items()}
+
+
+def _sale_correction_entries(db: Session, sale: models.Sale):
+    """Journal entries booked for this sale's re-date corrections (see
+    stock_books.book_correction) — they go with the sale on a void."""
+    ids = [m.journal_entry_id for m in db.query(models.StockMovement)
+           .filter(models.StockMovement.ref == _display_invoice(sale), models.StockMovement.reason == "correction",
+                   models.StockMovement.journal_entry_id.isnot(None)).all()]
+    return db.query(models.JournalEntry).filter(models.JournalEntry.id.in_(ids or [0])).all()
+
+
 def _display_invoice(sale: models.Sale) -> str:
     """Receipt-type-prefixed invoice # (e.g. "DRB51380", not "51380") — same
     format shown on the printed receipt, used as the Stock Card's reference
@@ -180,6 +209,7 @@ def _replenish_from_source(db: Session, product: models.Product, needed_base_qty
     pack_cost = take * Decimal(str(source.cost_price or 0))
     per_unit_cost = (pack_cost / give).quantize(Decimal("0.01"))
     extra = {"created_at": created_at} if created_at is not None else {}
+    value_before = available * Decimal(str(product.cost_price or 0))
     guard = 0
     while available < needed_base_qty and guard < 10000:
         _deduct_stock(source, take)
@@ -197,6 +227,13 @@ def _replenish_from_source(db: Session, product: models.Product, needed_base_qty
         product.cost_price = per_unit_cost  # keep the open item's cost in step with its source
         available += give
         guard += 1
+    if guard:
+        # Taking on the pack's cost re-values whatever loose stock (or
+        # oversold negative stock) was already there — see stock_books.
+        stock_books.book_cost_variance(
+            db, product, value_before=value_before, value_added=pack_cost * guard,
+            ref=ref, note="Cost reset by opening a pack", stamp=created_at,
+        )
 
 
 def _apply_stock_count_correction(product: models.Product, variance: Decimal):
@@ -2006,20 +2043,28 @@ def void_sale(
     if pdc_exists:
         return _back("pdc")
 
+    # Hand back only what the sale actually took — a line dated inside a
+    # Stock Count took nothing, so voiding it must not add stock either.
+    unit_cost_by_pid = {}
     for line in sale.lines:
-        if not line.product_id:
+        if line.product_id:
+            unit_cost_by_pid.setdefault(line.product_id, Decimal(str(line.unit_cost or 0)))
+    for pid, base_qty in _stock_taken_by_sale(db, sale).items():
+        product = db.get(models.Product, pid, with_for_update=True)
+        if not product or not base_qty:
             continue
-        product = db.get(models.Product, line.product_id, with_for_update=True)
-        if not product:
-            continue
-        base_qty = Decimal(str(line.qty or 0)) * Decimal(str(line.unit_factor or 1))
         _add_stock(product, base_qty)
-        unit_cost = Decimal(str(line.unit_cost or 0))
+        unit_cost = unit_cost_by_pid.get(pid, Decimal("0"))
         db.add(models.StockMovement(
             product_id=product.id, qty_base=base_qty, reason="void",
             ref=_display_invoice(sale), unit_cost=unit_cost, value=base_qty * unit_cost,
             note=f"Void: {reason}",
         ))
+    # Re-date corrections moved stock with their own journal entries; the
+    # void hands that stock back too, so their entries are reversed with it.
+    for entry in _sale_correction_entries(db, sale):
+        if entry.status == "posted":
+            accounting.reverse_journal(db, entry, reason=f"Voided: {reason}", entered_by_id=user.id)
 
     # No settlements/PDC exist at this point (checked above), so any Payment
     # rows here were plain cash/gcash/card/etc. for this sale alone — remove
@@ -2090,21 +2135,37 @@ def unvoid_sale(
     if linked_exists:
         return _back("linked")
 
+    # Take back out exactly what the void handed back (see void_sale).
+    handed_back = {}
+    for m in (db.query(models.StockMovement)
+              .filter(models.StockMovement.ref == _display_invoice(sale), models.StockMovement.reason.in_(("void", "unvoid")))
+              .all()):
+        handed_back[m.product_id] = handed_back.get(m.product_id, Decimal("0")) + Decimal(str(m.qty_base or 0))
+    unit_cost_by_pid = {}
     for line in sale.lines:
-        if not line.product_id:
+        if line.product_id:
+            unit_cost_by_pid.setdefault(line.product_id, Decimal(str(line.unit_cost or 0)))
+    for pid in unit_cost_by_pid:
+        base_qty = handed_back.get(pid, Decimal("0"))
+        product = db.get(models.Product, pid, with_for_update=True)
+        if not product or base_qty <= 0:
             continue
-        product = db.get(models.Product, line.product_id, with_for_update=True)
-        if not product:
-            continue
-        base_qty = Decimal(str(line.qty or 0)) * Decimal(str(line.unit_factor or 1))
         _replenish_from_source(db, product, base_qty, ref=_display_invoice(sale), note="Auto-opened restoring an un-voided sale")
         _deduct_stock(product, base_qty)
-        unit_cost = Decimal(str(line.unit_cost or 0))
+        unit_cost = unit_cost_by_pid[pid]
         db.add(models.StockMovement(
             product_id=product.id, qty_base=-base_qty, reason="unvoid",
             ref=_display_invoice(sale), unit_cost=unit_cost, value=-base_qty * unit_cost,
             note="Restored (un-voided)",
         ))
+    # Bring back the re-date corrections' entries the void reversed.
+    for entry in _sale_correction_entries(db, sale):
+        if entry.status == "reversed":
+            reversal = (db.query(models.JournalEntry)
+                        .filter(models.JournalEntry.is_reversal_of_id == entry.id, models.JournalEntry.status == "posted")
+                        .order_by(models.JournalEntry.id.desc()).first())
+            if reversal:
+                accounting.reverse_journal(db, reversal, reason="Restored (un-voided)", entered_by_id=user.id)
 
     method_code = next((code for code, label in METHOD_LABELS.items() if label == sale.payment_method), None)
     if method_code:

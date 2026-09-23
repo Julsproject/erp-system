@@ -2664,6 +2664,7 @@ def move_to_open_container(
     if remainder <= 0:
         return RedirectResponse(redirect_to, status_code=status.HTTP_302_FOUND)
 
+    counterpart_value_before = Decimal(str(counterpart.total_qty or 0)) * Decimal(str(counterpart.cost_price or 0))
     _deduct_stock(product, remainder)
     _add_stock(counterpart, remainder)
     cost = Decimal(str(product.cost_price or 0))
@@ -2678,6 +2679,11 @@ def move_to_open_container(
         note=f"Received loose stock from {product.name}",
     ))
     counterpart.cost_price = product.cost_price  # keep the open item's cost in step with its source
+    from . import stock_books
+    stock_books.book_cost_variance(
+        db, counterpart, value_before=counterpart_value_before, value_added=remainder * cost,
+        ref=None, note=f"Cost reset by loose stock from {product.name}"[:255], entered_by_id=user.id,
+    )
     audit.record(
         db, user=user, request=request, action="adjust_stock", entity_type="product", entity_id=product.id,
         entity_label=product.name,
