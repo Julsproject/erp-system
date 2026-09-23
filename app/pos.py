@@ -2064,7 +2064,7 @@ def void_sale(
     # void hands that stock back too, so their entries are reversed with it.
     for entry in _sale_correction_entries(db, sale):
         if entry.status == "posted":
-            accounting.reverse_journal(db, entry, reason=f"Voided: {reason}", entered_by_id=user.id)
+            accounting.reverse_journal(db, entry, reason=f"{accounting.VOID_REASON_PREFIX}{reason}", entered_by_id=user.id)
 
     # No settlements/PDC exist at this point (checked above), so any Payment
     # rows here were plain cash/gcash/card/etc. for this sale alone — remove
@@ -2079,7 +2079,7 @@ def void_sale(
 
     # Reverse whatever was posted to the ledger for this sale. A no-op if
     # this sale predates the accounting module (never had a journal entry).
-    accounting.reverse_sale_posting(db, sale, reason=f"Voided: {reason}", entered_by_id=user.id)
+    accounting.reverse_sale_posting(db, sale, reason=f"{accounting.VOID_REASON_PREFIX}{reason}", entered_by_id=user.id)
 
     audit.record(
         db, user=user, request=request, action="void", entity_type="sale",

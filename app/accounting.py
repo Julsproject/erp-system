@@ -478,27 +478,50 @@ def reverse_sale_posting(db: Session, sale: models.Sale, *, reason: str, entered
     fix always net to zero within the sale's own original period. Leave it
     False for an actual void, which has no replacement and should hit the
     books on the day it was voided."""
-    entry = (
-        db.query(models.JournalEntry)
-        .filter(models.JournalEntry.source_type == "sale", models.JournalEntry.source_id == sale.id,
-                models.JournalEntry.status == "posted")
-        .first()
-    )
-    # A sale posted before COGS went inline got its cost as separate
-    # "sale_cogs" entries (see sync_sale_cogs) — they go with it, or a
-    # re-post (which now carries COGS inline) would book the cost twice.
-    for cogs_entry in (
-        db.query(models.JournalEntry)
-        .filter(models.JournalEntry.source_type == "sale_cogs", models.JournalEntry.source_id == sale.id,
-                models.JournalEntry.status == "posted")
-        .all()
-    ):
-        reverse_journal(db, cogs_entry, reason=reason, entered_by_id=entered_by_id,
-                        txn_date=cogs_entry.txn_date if same_date else None)
-    if not entry:
-        return None
-    return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id,
-                            txn_date=entry.txn_date if same_date else None)
+    # Everything currently in effect for the sale: its live "sale" entry,
+    # any separate "sale_cogs" entries older sales got their cost through
+    # (a re-post now carries COGS inline, so they must go too), and — after
+    # an un-void — the restoring entries. A restore never flips the original
+    # back to "posted" (it reverses the reversal instead), so looking only
+    # for a posted "sale" entry would find nothing on a second void and
+    # leave the sale's revenue in the books.
+    first = None
+    for entry in _sale_effective_entries(db, sale):
+        reversal = reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id,
+                                   txn_date=entry.txn_date if same_date else None)
+        first = first or reversal
+    return first
+
+
+# pos.void_sale reverses with reason f"{VOID_REASON_PREFIX}{why}" — how
+# restore_sale_posting tells a void's reversals from a correction's.
+VOID_REASON_PREFIX = "Voided: "
+
+
+def _sale_entry_chain(db: Session, sale: models.Sale):
+    """[(entry, depth)] for every posted/reversed entry tied to this sale:
+    its "sale"/"sale_cogs" entries (depth 0), their reversals (1), the
+    reversals of those — an un-void's restore — (2), and so on."""
+    level = (db.query(models.JournalEntry)
+             .filter(models.JournalEntry.source_type.in_(("sale", "sale_cogs")),
+                     models.JournalEntry.source_id == sale.id, models.JournalEntry.status != "draft")
+             .all())
+    chain, depth = [], 0
+    while level:
+        chain.extend((e, depth) for e in level)
+        depth += 1
+        level = (db.query(models.JournalEntry)
+                 .filter(models.JournalEntry.is_reversal_of_id.in_([e.id for e in level]),
+                         models.JournalEntry.status != "draft")
+                 .all())
+    return chain
+
+
+def _sale_effective_entries(db: Session, sale: models.Sale):
+    """Entries whose effect is live right now: posted and at an even depth
+    (an original, or a restore of one — an odd depth undoes something)."""
+    db.flush()
+    return [e for e, d in _sale_entry_chain(db, sale) if e.status == "posted" and d % 2 == 0]
 
 
 def restore_sale_posting(db: Session, sale: models.Sale, *, reason: str, entered_by_id: int = None):
@@ -509,21 +532,21 @@ def restore_sale_posting(db: Session, sale: models.Sale, *, reason: str, entered
     nothing here is ever mutated or deleted, same as every other journal
     entry (see reverse_journal). No-op if the sale never had a journal
     entry, or was never actually reversed."""
-    original = (
-        db.query(models.JournalEntry)
-        .filter(models.JournalEntry.source_type == "sale", models.JournalEntry.source_id == sale.id)
-        .first()
-    )
-    if not original or original.status != "reversed":
+    # Undo exactly what the void undid: the live reversals in the sale's
+    # chain written by a void (pos.void_sale passes a "Voided: ..." reason).
+    # Other live reversals belong to a payment/item correction that replaced
+    # its entry with a new one — restoring those would bring back the
+    # superseded, pre-correction entry. An earlier void that was already
+    # restored has its reversals marked reversed, so only this void's count.
+    db.flush()
+    undone = [e for e, d in _sale_entry_chain(db, sale)
+              if e.status == "posted" and d % 2 == 1 and f": {VOID_REASON_PREFIX}" in (e.description or "")]
+    if not undone:
         return None
-    reversal = (
-        db.query(models.JournalEntry)
-        .filter(models.JournalEntry.source_type == "reversal", models.JournalEntry.is_reversal_of_id == original.id)
-        .first()
-    )
-    if not reversal:
-        return None
-    restored = reverse_journal(db, reversal, reason=reason, entered_by_id=entered_by_id)
+    restored = None
+    for reversal in sorted(undone, key=lambda e: e.id):
+        entry = reverse_journal(db, reversal, reason=reason, entered_by_id=entered_by_id)
+        restored = restored or entry
     # The restored entry brings back exactly what was reversed — for a sale
     # posted before COGS went inline that's revenue only, so top up the
     # cost, on the day it was restored (same as the restore itself).
