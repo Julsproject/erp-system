@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Change Base Unit · {{ product.name }} · {{ app_name }}{% endblock %}
+{% block content %}
+{% set old_unit = product.unit_type.name if product.unit_type else 'unit' %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Change base unit</h1>
+    <p class="muted">{{ product.name }} · currently counted in <strong>{{ old_unit }}</strong></p>
+  </div>
+  <div class="head-actions">
+    <a class="btn-link" href="/products/{{ product.id }}/edit">← Back to product</a>
+  </div>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+<section class="card" style="max-width:720px;">
+  <form method="post" action="/products/{{ product.id }}/change-unit" id="cuForm">
+    <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+      <label style="margin:0;">New base unit
+        <input name="new_unit" id="cuUnit" list="cu-units" required placeholder="e.g. Box, Roll, Bag" autocomplete="off">
+        <datalist id="cu-units">{% for u in unit_types %}<option value="{{ u.name }}">{% endfor %}</datalist>
+      </label>
+      <label style="margin:0;">1 new unit = how many {{ old_unit }}?
+        <input name="factor" id="cuFactor" type="number" step="any" min="0" required placeholder="e.g. 25" style="max-width:140px;">
+      </label>
+    </div>
+
+    <div id="cuPreview" class="hint" style="margin-top:14px;display:none;"></div>
+
+    <p class="hint" style="margin-top:14px;">
+      Converts the quantity on hand, the cost, the selling prices, the units ladder and every past movement together,
+      so each row keeps its peso value. The books don't change and no journal entry is posted.
+      {% if counterpart %}<br>“{{ counterpart.name }}” opens from this item. It will open 1 new unit into the right number of its own units.{% endif %}
+    </p>
+    <button class="btn" type="submit" onclick="return confirm('Convert ' + {{ product.name|tojson }} + ' to the new unit? This rewrites its history in the new unit.');">Convert</button>
+  </form>
+</section>
+
+<script>
+(function () {
+  const onHand = {{ (product.total_qty or 0)|float }}, cost = {{ (product.cost_price or 0)|float }}, price = {{ (product.selling_price or 0)|float }};
+  const oldUnit = {{ old_unit|tojson }};
+  const u = document.getElementById('cuUnit'), f = document.getElementById('cuFactor'), out = document.getElementById('cuPreview');
+  const fmt = n => (Math.round(n * 1e6) / 1e6).toLocaleString();
+  const peso = n => '₱' + n.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  function render() {
+    const k = parseFloat(f.value), unit = u.value.trim() || 'new unit';
+    if (!(k > 0)) { out.style.display = 'none'; return; }
+    out.style.display = 'block';
+    out.innerHTML = 'On hand: <strong>' + fmt(onHand) + ' ' + oldUnit + '</strong> → <strong>' + fmt(onHand / k) + ' ' + unit + '</strong><br>' +
+      'Cost: ' + peso(cost) + ' / ' + oldUnit + ' → <strong>' + peso(cost * k) + ' / ' + unit + '</strong> · ' +
+      'Selling price: ' + peso(price) + ' → <strong>' + peso(price * k) + '</strong><br>' +
+      'Value on hand stays ' + peso(onHand * cost) + '.';
+  }
+  u.addEventListener('input', render); f.addEventListener('input', render);
+})();
+</script>
+{% endblock %}

@@ -1433,6 +1433,19 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
         barcode = (form.get("barcode") or "").strip()
         if barcode and db.query(models.Product).filter(models.Product.barcode == barcode, models.Product.id != product.id).first():
             return _render_form(request, db, user, product=product, error=f"Barcode “{barcode}” is already assigned to another product.", back=back)
+        # Relabelling the unit of an item that already has stock or history
+        # leaves every quantity in the old unit (63.5 kg becomes "63.5 Box").
+        # That goes through Change base unit, which converts them together.
+        old_unit = (product.unit_type.name if product.unit_type else "").strip()
+        new_unit = (form.get("unit_type") or "").strip()
+        if old_unit and new_unit.lower() != old_unit.lower() and (
+            (product.total_qty or 0) != 0
+            or db.query(models.StockMovement.id).filter(models.StockMovement.product_id == product.id).first()
+        ):
+            return _render_form(request, db, user, product=product, back=back, error=(
+                f"“{product.name}” already has stock or history counted in {old_unit}. Changing the unit here "
+                f"would leave those quantities in {old_unit}. Use “Change base unit” (link under Unit Type) instead, "
+                f"which converts them too."))
         old_total = Decimal(str(product.total_qty or 0))
         old_cost = Decimal(str(product.cost_price or 0))
         new_total_preview = _to_decimal(form.get("beginning_stock")) + _to_decimal(form.get("stock_qty"))

@@ -183,11 +183,11 @@ class Product(Base):
     selling_price = Column(Numeric(12, 2), nullable=False, server_default="0")
 
     # Beginning inventory encoding.
-    beginning_stock = Column(Numeric(14, 3), nullable=False, server_default="0")
-    stock_qty = Column(Numeric(14, 3), nullable=False, server_default="0")
+    beginning_stock = Column(Numeric(18, 6), nullable=False, server_default="0")
+    stock_qty = Column(Numeric(18, 6), nullable=False, server_default="0")
 
     # Low-stock alert threshold in base units. 0 = no alert for this product.
-    reorder_level = Column(Numeric(14, 3), nullable=False, server_default="0")
+    reorder_level = Column(Numeric(18, 6), nullable=False, server_default="0")
 
     # Every product carries THREE selling prices at once, so the shop can quote
     # a different one per customer type without re-pricing the item:
@@ -221,7 +221,7 @@ class Product(Base):
     # units one of the source's base units opens into — "1 bag = 20 Kg".
     # Same-unit links keep taking the pack size from the source's own units
     # ladder instead (see pos._replenish_from_source).
-    replenish_factor = Column(Numeric(14, 4), nullable=True)
+    replenish_factor = Column(Numeric(18, 8), nullable=True)
 
     category = relationship("Category")
     subcategory = relationship("SubCategory")
@@ -324,7 +324,7 @@ class ProductUnit(Base):
     id = Column(Integer, primary_key=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
     name = Column(String(40), nullable=False)
-    factor_to_base = Column(Numeric(14, 4), nullable=False, server_default="1")
+    factor_to_base = Column(Numeric(18, 8), nullable=False, server_default="1")
     price = Column(Numeric(12, 2), nullable=False, server_default="0")  # the "Fixed" price
     sort_order = Column(Integer, nullable=False, server_default="0")
 
@@ -344,7 +344,7 @@ class ProductUnit(Base):
     # a chain exists. relative_to_unit_id/relative_factor exist purely so the
     # product form can redisplay what the user actually typed on next edit.
     relative_to_unit_id = Column(Integer, ForeignKey("product_units.id"), nullable=True)
-    relative_factor = Column(Numeric(14, 4), nullable=True)
+    relative_factor = Column(Numeric(18, 8), nullable=True)
 
     product = relationship("Product", back_populates="units")
     relative_to_unit = relationship("ProductUnit", remote_side=[id], foreign_keys=[relative_to_unit_id])
@@ -476,7 +476,7 @@ class SaleLine(Base):
     product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
     product_name = Column(String(150), nullable=False)
     unit_name = Column(String(40))
-    unit_factor = Column(Numeric(14, 4), nullable=False, server_default="1")
+    unit_factor = Column(Numeric(18, 8), nullable=False, server_default="1")
     qty = Column(Numeric(14, 3), nullable=False, server_default="0")
     unit_price = Column(Numeric(12, 2), nullable=False, server_default="0")
     discount = Column(Numeric(12, 2), nullable=False, server_default="0")
@@ -562,7 +562,7 @@ class QuotationLine(Base):
     product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
     product_name = Column(String(150), nullable=False)
     unit_name = Column(String(40))
-    unit_factor = Column(Numeric(14, 4), nullable=False, server_default="1")
+    unit_factor = Column(Numeric(18, 8), nullable=False, server_default="1")
     qty = Column(Numeric(14, 3), nullable=False, server_default="0")
     unit_price = Column(Numeric(12, 2), nullable=False, server_default="0")
     discount = Column(Numeric(12, 2), nullable=False, server_default="0")
@@ -884,7 +884,7 @@ class PurchaseLine(Base):
     product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
     product_name = Column(String(150), nullable=False)
     unit_name = Column(String(40))
-    unit_factor = Column(Numeric(14, 4), nullable=False, server_default="1")
+    unit_factor = Column(Numeric(18, 8), nullable=False, server_default="1")
     qty = Column(Numeric(14, 3), nullable=False, server_default="0")
     unit_cost = Column(Numeric(12, 2), nullable=False, server_default="0")   # cost per purchase unit
     line_total = Column(Numeric(12, 2), nullable=False, server_default="0")
@@ -902,7 +902,7 @@ class StockMovement(Base):
 
     id = Column(Integer, primary_key=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
-    qty_base = Column(Numeric(14, 3), nullable=False)  # signed: negative = out
+    qty_base = Column(Numeric(18, 6), nullable=False)  # signed: negative = out
     reason = Column(String(30), nullable=False)         # sale | adjustment | ...
     ref = Column(String(30))
     # Peso valuation — only populated for "adjustment"/"stock_count" movements
@@ -971,14 +971,14 @@ class InventoryAdjustmentLine(Base):
     # (unit_factor base units each). mode "delta" = change on-hand by it,
     # "set" = on-hand as of adj_date should be it. new_cost is per BASE unit.
     unit_name = Column(String(40))
-    unit_factor = Column(Numeric(14, 4), nullable=False, server_default="1")
+    unit_factor = Column(Numeric(18, 8), nullable=False, server_default="1")
     mode = Column(String(8), nullable=False, server_default="delta")
     qty_input = Column(Numeric(14, 3))
     new_cost = Column(Numeric(12, 2))
     note = Column(String(255))
     # Filled in when posted — what it actually did.
-    qty_base = Column(Numeric(14, 3))
-    on_hand_before = Column(Numeric(14, 3))
+    qty_base = Column(Numeric(18, 6))
+    on_hand_before = Column(Numeric(18, 6))
     old_cost = Column(Numeric(12, 2))
     value_qty = Column(Numeric(14, 2))
     value_reval = Column(Numeric(14, 2))
@@ -999,9 +999,9 @@ class MonthEndRolloverLine(Base):
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
     product_name = Column(String(150), nullable=False)
     period = Column(String(7), nullable=False)  # "2026-09"
-    qty_moved = Column(Numeric(14, 3), nullable=False)
-    old_beginning = Column(Numeric(14, 3), nullable=False)
-    new_beginning = Column(Numeric(14, 3), nullable=False)
+    qty_moved = Column(Numeric(18, 6), nullable=False)
+    old_beginning = Column(Numeric(18, 6), nullable=False)
+    new_beginning = Column(Numeric(18, 6), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     product = relationship("Product")
@@ -1057,8 +1057,8 @@ class StockCountLine(Base):
     # what the system said was on hand at that instant. The eventual
     # adjustment is (counted - system_qty), applied as a delta, not as an
     # overwrite of whatever stock_qty happens to be at Complete time.
-    system_qty = Column(Numeric(14, 3), nullable=False)
-    counted_qty = Column(Numeric(14, 3), nullable=False, server_default="0")
+    system_qty = Column(Numeric(18, 6), nullable=False)
+    counted_qty = Column(Numeric(18, 6), nullable=False, server_default="0")
     # Optional per-unit breakdown of how counted_qty was arrived at — e.g.
     # {"FORWARD": "2", "Elf": "3", "Elf 1/2": "1"} for a product with a units
     # ladder, so staff can count physical containers instead of doing the

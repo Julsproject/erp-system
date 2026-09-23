@@ -55,7 +55,9 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
     <datalist id="unit-list">
       {% for u in unit_types %}<option value="{{ u.name }}">{% endfor %}
     </datalist>
-    <small class="hint">This is the base unit for the ladder below.</small>
+    <small class="hint">This is the base unit for the ladder below.
+      {% if product %}To switch an item that already has stock or history (e.g. Kg → Box), use
+      <a href="/products/{{ product.id }}/change-unit">Change base unit</a> so its quantities convert too.{% endif %}</small>
   </label>
 
   <label>Shelf
