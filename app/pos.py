@@ -1393,6 +1393,7 @@ def pos_refund(data: dict, db: Session = Depends(get_db), user=Depends(get_curre
 
     total = Decimal("0")       # net (VAT-exclusive) value of the refunded items
     vat_base = Decimal("0")    # the part of that which was sold with VAT on top
+    return_movements = []      # get the refund's invoice # as ref once it has one
     for it in items:
         qty = _dec(it.get("qty"))
         if qty <= 0:
@@ -1405,14 +1406,17 @@ def pos_refund(data: dict, db: Session = Depends(get_db), user=Depends(get_curre
         if is_vat:
             vat_base += value
         product = db.get(models.Product, int(it["product_id"]), with_for_update=True) if it.get("product_id") else None
+        refund_unit_cost = Decimal("0")
         if product:
             factor = _resolve_unit_factor(product, it.get("unit_name"), factor)
             _add_stock(product, qty * factor)
             refund_unit_cost = Decimal(str(product.cost_price or 0))
-            db.add(models.StockMovement(
+            mv = models.StockMovement(
                 product_id=product.id, qty_base=qty * factor, reason="refund",
                 unit_cost=refund_unit_cost, value=qty * factor * refund_unit_cost,
-            ))
+            )
+            db.add(mv)
+            return_movements.append(mv)
         refund.lines.append(models.SaleLine(
             product_id=product.id if product else None,
             product_name=it.get("name") or "Item",
@@ -1423,6 +1427,7 @@ def pos_refund(data: dict, db: Session = Depends(get_db), user=Depends(get_curre
             discount=Decimal("0"),
             line_total=_money(-value),
             is_vat=is_vat,
+            unit_cost=_money(refund_unit_cost),  # the cost the goods come back in at — see accounting.sale_cogs
         ))
 
     if total <= 0:
@@ -1473,6 +1478,12 @@ def pos_refund(data: dict, db: Session = Depends(get_db), user=Depends(get_curre
     # Point the refund at the invoice it came from (REF-45); fall back to a
     # sequential number for refunds with no original invoice.
     refund.invoice_no = typed_invoice or _linked_ref(db, "REF", orig) or f"REF-{refund.id:06d}"
+    for mv in return_movements:
+        mv.ref = _display_invoice(refund)
+    try:
+        accounting.post_return(db, refund, method=method, credit_applied=applied_to_credit, entered_by_id=user.id)
+    except accounting.PostingError:
+        pass  # never blocks the refund — same rule as sales
     db.commit()
     return {"ok": True, "sale_id": refund.id, "invoice_no": refund.invoice_no}
 
@@ -1517,6 +1528,7 @@ def pos_exchange(data: dict, db: Session = Depends(get_db), user=Depends(get_cur
     db.add(ex)
 
     vat_applied = bool(data.get("vat_applied"))   # VAT on the amount actually due, see below
+    exchange_movements = []   # get the exchange's invoice # as ref once it has one
     returned_total = Decimal("0")
     new_total = Decimal("0")
 
@@ -1529,18 +1541,22 @@ def pos_exchange(data: dict, db: Session = Depends(get_db), user=Depends(get_cur
         value = qty * unit_price
         returned_total += value
         product = db.get(models.Product, int(it["product_id"]), with_for_update=True) if it.get("product_id") else None
+        ex_return_cost = Decimal("0")
         if product:
             factor = _resolve_unit_factor(product, it.get("unit_name"), factor)
             _add_stock(product, qty * factor)
             ex_return_cost = Decimal(str(product.cost_price or 0))
-            db.add(models.StockMovement(
+            mv = models.StockMovement(
                 product_id=product.id, qty_base=qty * factor, reason="exchange-return",
                 unit_cost=ex_return_cost, value=qty * factor * ex_return_cost,
-            ))
+            )
+            db.add(mv)
+            exchange_movements.append(mv)
         ex.lines.append(models.SaleLine(
             product_id=product.id if product else None, product_name=it.get("name") or "Item",
             unit_name=it.get("unit_name"), unit_factor=factor, qty=-qty, unit_price=unit_price,
             discount=Decimal("0"), line_total=_money(-value), is_vat=bool(it.get("is_vat")),
+            unit_cost=_money(ex_return_cost),
         ))
 
     for ln in new_lines:
@@ -1556,21 +1572,24 @@ def pos_exchange(data: dict, db: Session = Depends(get_db), user=Depends(get_cur
             lt = Decimal("0")
         new_total += lt
         product = db.get(models.Product, int(ln["product_id"]), with_for_update=True) if ln.get("product_id") else None
+        ex_sale_cost = Decimal("0")
         if product:
             factor = _resolve_unit_factor(product, ln.get("unit_name"), factor)
             base_qty = qty * factor
             _replenish_from_source(db, product, base_qty, ref=None, note="Auto-opened for loose exchange item")
             _deduct_stock(product, base_qty)  # oversell allowed — see _finalize_sale
             ex_sale_cost = Decimal(str(product.cost_price or 0))
-            db.add(models.StockMovement(
+            mv = models.StockMovement(
                 product_id=product.id, qty_base=-base_qty, reason="exchange-sale",
                 unit_cost=ex_sale_cost, value=-base_qty * ex_sale_cost,
-            ))
+            )
+            db.add(mv)
+            exchange_movements.append(mv)
         ex.lines.append(models.SaleLine(
             product_id=product.id if product else None, product_name=ln.get("name") or "Item",
             unit_name=ln.get("unit_name"), unit_factor=factor, qty=qty, unit_price=unit_price,
             discount=discount, line_total=_money(lt), is_vat=is_vat,
-            price_tier=(ln.get("tier") or "fixed"),
+            price_tier=(ln.get("tier") or "fixed"), unit_cost=_money(ex_sale_cost),
         ))
 
     # Both sides are already VAT-inclusive. VAT is extracted from the amount
@@ -1672,6 +1691,8 @@ def pos_exchange(data: dict, db: Session = Depends(get_db), user=Depends(get_cur
     db.flush()
     # Same idea as refunds: point the exchange at the invoice it came from.
     ex.invoice_no = typed_invoice or _linked_ref(db, "EXC", orig) or f"EXC-{ex.id:06d}"
+    for mv in exchange_movements:
+        mv.ref = _display_invoice(ex)
     if pending_cheque:
         cheque_pdc = models.PostDatedCheque(
             direction="received", amount=_money(pending_cheque["amount"]),
@@ -1687,6 +1708,11 @@ def pos_exchange(data: dict, db: Session = Depends(get_db), user=Depends(get_cur
             sale_id=orig.id, method="credit_note", amount=pending_credit_note,
             source_sale_id=ex.id, cashier_id=user.id,
         ))
+    try:
+        accounting.post_return(db, ex, method=(data.get("payment_method") or "cash").strip().lower(),
+                               credit_applied=pending_credit_note or Decimal("0"), entered_by_id=user.id)
+    except accounting.PostingError:
+        pass  # never blocks the exchange — same rule as sales
     db.commit()
     return {"ok": True, "sale_id": ex.id, "invoice_no": ex.invoice_no}
 
@@ -2361,13 +2387,14 @@ def edit_sale_date(
     # correcting a backlog sale's date moves it in Sales History/Reports but
     # leaves its VAT sitting in whatever period it was originally entered
     # in, silently splitting one transaction across two VAT periods.
-    entry = (
+    # Includes the separate "sale_cogs" entries older sales got their cost
+    # through (see accounting.sync_sale_cogs) — they belong to the sale's date too.
+    for entry in (
         db.query(models.JournalEntry)
-        .filter(models.JournalEntry.source_type == "sale", models.JournalEntry.source_id == sale.id,
+        .filter(models.JournalEntry.source_type.in_(("sale", "sale_cogs")), models.JournalEntry.source_id == sale.id,
                 models.JournalEntry.status == "posted")
-        .first()
-    )
-    if entry:
+        .all()
+    ):
         entry.txn_date = new_d
     audit.record(
         db, user=user, request=request, action="update", entity_type="sale",

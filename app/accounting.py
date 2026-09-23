@@ -278,18 +278,20 @@ SALE_FUNCTION_KEYS = {
 
 
 def sale_cogs(sale: models.Sale) -> Decimal:
-    """Cost of what this sale took off the shelf: qty x factor x the cost
-    frozen on each line at the moment of sale — the same formula the
-    operational P&L's gross profit uses, so the two agree. Only a plain
-    "sale" carries COGS: an SI just re-documents DRs that already did."""
-    if sale.txn_type != "sale":
+    """Net cost of what this transaction took off the shelf: qty x factor x
+    the cost frozen on each line — the same formula the operational P&L's
+    gross profit uses, so the two agree. An exchange's returned lines carry
+    a negative qty, so they net against what went out; a refund's lines are
+    all goods coming back (positive qty), so its cost is negative. An SI
+    just re-documents DRs that already carried theirs."""
+    if sale.txn_type not in ("sale", "exchange", "refund"):
         return ZERO
     total = sum(
         (Decimal(str(ln.qty or 0)) * Decimal(str(ln.unit_factor or 1)) * Decimal(str(ln.unit_cost or 0))
          for ln in sale.lines),
         ZERO,
     )
-    return _money(total)
+    return _money(-total if sale.txn_type == "refund" else total)
 
 
 def _cogs_lines(amount: Decimal) -> list:
@@ -339,6 +341,56 @@ def post_sale(db: Session, sale: models.Sale, *, method_rows: list, receivable_a
     return post_journal(
         db, txn_date=txn_date, source_type="sale", source_id=sale.id,
         description=f"Sale {sale.invoice_no}", reference_no=sale.invoice_no,
+        lines=lines, entered_by_id=entered_by_id,
+    )
+
+
+def post_return(db: Session, sale: models.Sale, *, method: str = None, credit_applied: Decimal = ZERO,
+                entered_by_id: int = None):
+    """A refund or exchange (pos_refund / pos_exchange). Posted under
+    source_type "sale" like any sale, so a date correction moves it too.
+
+    Customer pays the difference (exchange for more): Dr cash/AR, Cr Sales
+    Revenue + Output VAT — same as a sale. Customer gets money back (refund,
+    or exchange for less): Dr Sales Returns & Allowances + Output VAT back,
+    Cr AR for whatever went against the original sale's unpaid balance
+    (credit_applied) and Cr the refund channel for the rest. Either way the
+    goods' cost moves too: returned stock back into Inventory, anything new
+    taken out (see sale_cogs)."""
+    total = Decimal(str(sale.total or 0))
+    net = Decimal(str(sale.net_amount or 0))
+    vat = Decimal(str(sale.vat_amount or 0))
+    lines = []
+    if total > 0:
+        receivable = Decimal(str(sale.receivable_amount or 0))
+        if receivable > 0:
+            lines.append({"function_key": "AR", "amount": receivable, "side": "debit", "memo": "credit/cheque"})
+        if total - receivable > 0:
+            lines.append({"function_key": SALE_FUNCTION_KEYS.get(method, "SALE_CASH"), "amount": total - receivable,
+                          "side": "debit", "memo": method})
+        if net > 0:
+            lines.append({"function_key": "SALES_REVENUE", "amount": net, "side": "credit"})
+        if vat > 0:
+            lines.append({"function_key": "OUTPUT_VAT", "amount": vat, "side": "credit"})
+    elif total < 0:
+        gross = -total
+        credit_applied = min(Decimal(str(credit_applied or 0)), gross)
+        if -net > 0:
+            lines.append({"function_key": "SALE_RETURNS", "amount": -net, "side": "debit"})
+        if -vat > 0:
+            lines.append({"function_key": "OUTPUT_VAT", "amount": -vat, "side": "debit"})
+        if credit_applied > 0:
+            lines.append({"function_key": "AR", "amount": credit_applied, "side": "credit", "memo": "applied to credit"})
+        if gross - credit_applied > 0:
+            lines.append({"function_key": SALE_FUNCTION_KEYS.get(method, "SALE_CASH"), "amount": gross - credit_applied,
+                          "side": "credit", "memo": f"{method or 'cash'} refund"})
+    lines.extend(_cogs_lines(sale_cogs(sale)))
+    if not lines:
+        return None
+    label = "Refund" if sale.txn_type == "refund" else "Exchange"
+    return post_journal(
+        db, txn_date=_sale_txn_date(sale), source_type="sale", source_id=sale.id,
+        description=f"{label} {sale.invoice_no}", reference_no=sale.invoice_no,
         lines=lines, entered_by_id=entered_by_id,
     )
 
@@ -512,7 +564,7 @@ def sales_missing_cogs(db: Session, period_start: date = None, period_end: date 
     q = (
         db.query(models.Sale)
         .options(selectinload(models.Sale.lines))
-        .filter(models.Sale.id.in_(with_revenue or {0}), models.Sale.txn_type == "sale")
+        .filter(models.Sale.id.in_(with_revenue or {0}), models.Sale.txn_type.in_(("sale", "exchange", "refund")))
     )
     if period_start and period_end:
         q = q.filter(_local_date(models.Sale.created_at).between(period_start, period_end))
@@ -604,10 +656,15 @@ def post_purchase_return(db: Session, purchase: models.Purchase, *, entered_by_i
     total = Decimal(str(purchase.total or 0))
     if total <= 0:
         return None
+    vat = Decimal(str(purchase.vat_amount or 0))
+    # The mirror of a receive: the goods leave Inventory at their net cost
+    # and the VAT claimed on them comes back out of Input VAT.
     lines = [
         {"function_key": "AP", "amount": total, "side": "debit"},
-        {"function_key": "INVENTORY_MERCHANDISE", "amount": total, "side": "credit"},
+        {"function_key": "INVENTORY_MERCHANDISE", "amount": total - vat, "side": "credit"},
     ]
+    if vat > 0:
+        lines.append({"function_key": "INPUT_VAT", "amount": vat, "side": "credit"})
     txn_date = purchase.created_at.date() if purchase.created_at else _today()
     return post_journal(
         db, txn_date=txn_date, source_type="purchase", source_id=purchase.id,
@@ -687,15 +744,20 @@ def repost_purchase_receive(db: Session, purchase: models.Purchase, *, reason: s
                 models.JournalEntry.status == "posted")
         .first()
     )
+    is_return = purchase.txn_type == "return"
     if not entry:
+        if is_return:
+            return post_purchase_return(db, purchase, entered_by_id=entered_by_id)
         return post_purchase_receive(db, purchase, is_payable=(purchase.status == "confirmed"),
                                      payment_method=purchase.payment_method, entered_by_id=entered_by_id)
-    credit_lines = [ln for ln in entry.lines if (ln.credit or 0) > 0]
-    credit_account_ids = {ln.account_id for ln in credit_lines}
-    if len(credit_account_ids) != 1:
+    # The supplier-side line: the one credit on a receive, the one debit on a return.
+    side = "debit" if is_return else "credit"
+    party_lines = [ln for ln in entry.lines if (getattr(ln, side) or 0) > 0]
+    party_account_ids = {ln.account_id for ln in party_lines}
+    if len(party_account_ids) != 1:
         raise PostingError(f"{entry.journal_no} doesn't have a single payment/AP line to carry over — correct it by hand.")
-    credit_account_id = credit_account_ids.pop()
-    memo = credit_lines[0].memo
+    party_account_id = party_account_ids.pop()
+    memo = party_lines[0].memo
     txn_date = entry.txn_date
     reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id, txn_date=txn_date)
 
@@ -703,13 +765,14 @@ def repost_purchase_receive(db: Session, purchase: models.Purchase, *, reason: s
     if total <= 0:
         return None
     vat = Decimal(str(purchase.vat_amount or 0))
-    lines = [{"function_key": "INVENTORY_MERCHANDISE", "amount": total - vat, "side": "debit"}]
+    goods_side = "credit" if is_return else "debit"
+    lines = [{"function_key": "INVENTORY_MERCHANDISE", "amount": total - vat, "side": goods_side}]
     if vat > 0:
-        lines.append({"function_key": "INPUT_VAT", "amount": vat, "side": "debit"})
-    lines.append({"_account_id": credit_account_id, "amount": total, "side": "credit", "memo": memo})
+        lines.append({"function_key": "INPUT_VAT", "amount": vat, "side": goods_side})
+    lines.append({"_account_id": party_account_id, "amount": total, "side": side, "memo": memo})
     return post_journal(
         db, txn_date=txn_date, source_type="purchase", source_id=purchase.id,
-        description=f"Receive {purchase.ref_no} (corrected)", reference_no=purchase.ref_no,
+        description=f"{'Return' if is_return else 'Receive'} {purchase.ref_no} (corrected)", reference_no=purchase.ref_no,
         lines=lines, entered_by_id=entered_by_id,
     )
 
@@ -2204,6 +2267,8 @@ def reconcile_sales(
             models.Account.system_key.in_(("SALES_REVENUE", "OUTPUT_VAT")),
             models.JournalEntry.txn_date.between(period_start, period_end),
             models.JournalEntry.status == "posted",
+            ~((models.JournalEntry.source_type == "sale") & models.JournalEntry.source_id.in_(
+                db.query(models.Sale.id).filter(models.Sale.txn_type.in_(("refund", "exchange"))))),
         )
         .scalar()
     )
