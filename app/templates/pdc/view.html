@@ -50,7 +50,7 @@
 </div>
 {% elif pdc.status == 'bounced' %}
 <div class="quo-status-banner cancelled" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">
-  <strong>Bounced.</strong> {{ 'The credit remains outstanding.' if pdc.direction == 'received' else 'The purchase remains unpaid.' }}
+  <strong>Bounced</strong>{% if pdc.resolved_at %} on {{ pdc.resolved_at.strftime('%b %d, %Y') }}{% endif %}. {{ 'The customer still owes this amount.' if pdc.direction == 'received' else 'The delivery is still owed to the supplier.' }}
   {% if pdc.notes %}<br>Note: {{ pdc.notes }}{% endif %}
 </div>
 {% else %}
@@ -119,8 +119,10 @@
     <input type="date" name="clear_date" value="" max="{{ today.isoformat() }}" title="When it actually cleared — optional, defaults to now" style="padding:8px;border:1px solid var(--line-2);border-radius:8px;">
     <button class="btn" type="submit">✓ Mark Cleared</button>
   </form>
-  <form method="post" action="/pdc/{{ pdc.id }}/bounce" onsubmit="return confirm('Mark this cheque as bounced?');">
-    <input type="hidden" name="notes" value="">
+  <form method="post" action="/pdc/{{ pdc.id }}/bounce" style="display:flex;gap:8px;align-items:center;"
+        onsubmit="return confirm('Mark this cheque as bounced?{% if pdc.direction == 'issued' %}\n\nA delivery that was booked as paid when received becomes owed again.{% endif %}');">
+    <input type="date" name="bounce_date" value="" max="{{ today.isoformat() }}" title="When it bounced — optional, defaults to today" style="padding:8px;border:1px solid var(--line-2);border-radius:8px;">
+    <input type="text" name="notes" value="" placeholder="Reason (optional)" style="padding:8px;border:1px solid var(--line-2);border-radius:8px;width:160px;">
     <button class="btn-secondary" type="submit" style="color:#b91c1c;">✕ Mark Bounced</button>
   </form>
   {% if pdc.status == 'pending' %}
@@ -135,11 +137,15 @@
 {% endif %}
 
 {% if pdc.status == 'cleared' %}
-<div class="pos-actions" style="justify-content:flex-start;margin-top:16px;">
+<div class="pos-actions" style="justify-content:flex-start;margin-top:16px;flex-wrap:wrap;gap:10px;">
+  <form method="post" action="/pdc/{{ pdc.id }}/bounce" style="display:flex;gap:8px;align-items:center;"
+        onsubmit="return confirm('This cheque bounced?\n\nIts clearing is undone first: {{ 'the payment on the invoice is reversed, so the customer owes it again' if pdc.direction == 'received' else 'the delivery it paid is owed to the supplier again' }}. Then it is marked Bounced.');">
+    <input type="date" name="bounce_date" value="" max="{{ today.isoformat() }}" title="When it bounced — optional, defaults to today" style="padding:8px;border:1px solid var(--line-2);border-radius:8px;">
+    <input type="text" name="notes" value="" placeholder="Reason (optional)" style="padding:8px;border:1px solid var(--line-2);border-radius:8px;width:160px;">
+    <button class="btn-secondary" type="submit" style="color:#b91c1c;">✕ Bounced</button>
+  </form>
   <form method="post" action="/pdc/{{ pdc.id }}/unclear"
-        onsubmit="return confirm('Un-clear this cheque?
-
-Its payments will be reversed, any invoice it closed reopens, and the bank withdrawal is voided. The cheque goes back to pending.');">
+        onsubmit="return confirm('Un-clear this cheque?\n\nIts payments will be reversed, any invoice it closed reopens, and the bank withdrawal is voided. The cheque goes back to pending.');">
     <button class="btn-secondary" type="submit" style="color:#b45309;">↩ Un-clear</button>
     <span class="muted" style="margin-left:8px;">Cleared by mistake? This puts everything back.</span>
   </form>

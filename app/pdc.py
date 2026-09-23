@@ -386,25 +386,47 @@ def clear_pdc(pdc_id: int, request: Request, clear_date: str = Form(""), db: Ses
 
 
 @router.post("/pdc/{pdc_id:int}/bounce")
-def bounce_pdc(pdc_id: int, request: Request, notes: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
-    """The bank rejected it. Received: nothing to undo. Issued: stays unpaid."""
+def bounce_pdc(pdc_id: int, request: Request, notes: str = Form(""), bounce_date: str = Form(""),
+               db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """The bank rejected it — also after it was marked cleared (cheques now
+    clear themselves on their date). A cleared one has its clearing undone
+    first, so the invoice is owed again. An issued cheque for a delivery
+    that was booked as paid when received reopens that delivery as owed."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     pdc = db.get(models.PostDatedCheque, pdc_id)
-    if not pdc or pdc.status not in ("pending", "deposited"):
+    if not pdc or pdc.status not in ("pending", "deposited", "cleared"):
         return RedirectResponse(f"/pdc/{pdc_id}", status_code=302)
+
+    label = pdc.cheque_no or f"PDC-{pdc.id}"
+    bounce_dt, _ = _resolve_settlement_datetime(bounce_date)
+    on_date = bounce_dt.date() if bounce_dt else _today()
+    reason = f"Bounced cheque {label}"
+    was_cleared = pdc.status == "cleared"
+    reversed_n = 0
+    if was_cleared:
+        reversed_n = _undo_clearing(db, pdc, user, reason=reason, on_date=on_date)
+        if reversed_n is None:
+            return RedirectResponse(f"/pdc/{pdc_id}?unclear_error=1", status_code=status.HTTP_302_FOUND)
+    try:
+        reopened = _reopen_paid_on_receipt(db, pdc, user, on_date=on_date, reason=reason)
+    except accounting.PostingError:
+        reopened = []
 
     note = (notes or "").strip()
     if note:
         pdc.notes = note
     pdc.status = "bounced"
-    pdc.resolved_at = func.now()
+    pdc.resolved_at = bounce_dt or func.now()
     audit.record(
         db, user=user, request=request, action="bounce", entity_type="post_dated_cheque",
-        entity_id=pdc.id, entity_label=pdc.cheque_no or f"PDC-{pdc.id}",
-        summary=f"Bounced cheque {pdc.cheque_no or pdc.id} — {pdc.amount}" + (f" ({note})" if note else ""),
+        entity_id=pdc.id, entity_label=label,
+        summary=(f"Bounced cheque {label} — {pdc.amount}"
+                 + (f" (was cleared; reversed {reversed_n} payment(s))" if was_cleared else "")
+                 + (f"; owed again: {', '.join(reopened)}" if reopened else "")
+                 + (f" ({note})" if note else "")),
     )
     db.commit()
     return RedirectResponse(f"/pdc/{pdc_id}", status_code=status.HTTP_302_FOUND)
@@ -663,33 +685,14 @@ def bulk_clear(
     return RedirectResponse(f"/pdc/due?cleared={done}", status_code=status.HTTP_302_FOUND)
 
 
-@router.post("/pdc/{pdc_id:int}/unclear")
-def unclear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    """Undo a clearing that shouldn't have happened — the cheque goes back to
-    pending and everything the clearing did is reversed.
-
-    Clearing is the one irreversible thing the cheque register used to do, so
-    a mis-tick on the bulk worklist had to be unpicked by hand. This puts it
-    back: the settlements it created are reversed in the ledger and removed,
-    any invoice it flipped to "paid" reopens, and the bank withdrawal is
-    voided so the balance comes back.
-
-    A cheque cleared BEFORE the pdc_id trail existed (migration 0070) can't
-    be undone here — there's no reliable way to tell which settlements were
-    its, and guessing from cheque_no would risk reversing someone else's
-    payment. Those are refused rather than half-undone.
-    """
-    if not user:
-        return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
-        return RedirectResponse("/pos", status_code=302)
-    pdc = db.get(models.PostDatedCheque, pdc_id)
-    if not pdc or pdc.status != "cleared":
-        return RedirectResponse(f"/pdc/{pdc_id}", status_code=302)
-
-    label = pdc.cheque_no or f"PDC-{pdc.id}"
-    reason = f"Un-cleared cheque {label}"
-
+def _undo_clearing(db: Session, pdc: models.PostDatedCheque, user, *, reason: str, on_date=None):
+    """Reverse everything a clearing did — shared by Un-clear and by
+    bouncing a cleared cheque. Reverses and removes the settlements it
+    created, reopens any invoice it closed and voids the bank withdrawal.
+    Returns how many settlements were reversed, or None for a legacy
+    clearing with no pdc_id trail (refused rather than half-undone). Leaves
+    the cheque's status to the caller. `on_date` dates the reversals (a
+    bounce's own date); None means today."""
     if pdc.direction == "received":
         rows = db.query(models.ReceivableSettlement).filter(
             models.ReceivableSettlement.pdc_id == pdc.id).all()
@@ -698,13 +701,12 @@ def unclear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), us
             models.PurchaseSettlement.pdc_id == pdc.id).all()
 
     if not rows and not _cleared_without_settlements(db, pdc):
-        # Legacy clearing with no trail — see the docstring.
-        return RedirectResponse(f"/pdc/{pdc_id}?unclear_error=1", status_code=status.HTTP_302_FOUND)
+        return None
 
     if pdc.direction == "received":
         for settlement in rows:
             accounting.reverse_receivable_settlement(
-                db, settlement, reason=reason, entered_by_id=user.id)
+                db, settlement, reason=reason, entered_by_id=user.id, txn_date=on_date)
             db.delete(settlement)
         pdc.settlement_id = None
     else:
@@ -712,7 +714,7 @@ def unclear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), us
         for settlement in rows:
             purchase = db.get(models.Purchase, settlement.purchase_id)
             accounting.reverse_purchase_settlement(
-                db, settlement, reason=reason, entered_by_id=user.id)
+                db, settlement, reason=reason, entered_by_id=user.id, txn_date=on_date)
             db.delete(settlement)
             if purchase is not None:
                 touched.append(purchase)
@@ -742,13 +744,82 @@ def unclear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), us
                     db, txn, reason=reason, entered_by_id=user.id)
             pdc.bank_txn_id = None
 
+    return len(rows)
+
+
+def _reopen_paid_on_receipt(db: Session, pdc: models.PostDatedCheque, user, *, on_date, reason: str) -> list:
+    """An issued cheque for a delivery saved as "paid by cheque" bounced:
+    that delivery was booked as paid from the bank when it was received, so
+    it's owed again — Dr the account it was paid from, Cr Accounts Payable,
+    and the delivery goes back to unpaid. Only for deliveries with no
+    payments of their own; ones paid through settlements are handled by
+    _undo_clearing. Returns the ref #s reopened."""
+    if pdc.direction != "issued":
+        return []
+    ap = accounting._resolve_mapping(db, "AP")
+    reopened = []
+    for app in pdc.applications:
+        purchase = db.get(models.Purchase, app.purchase_id) if app.purchase_id else None
+        if purchase is None or purchase.status != "paid" or purchase.settlements:
+            continue
+        entry = (db.query(models.JournalEntry)
+                 .filter(models.JournalEntry.source_type == "purchase", models.JournalEntry.source_id == purchase.id,
+                         models.JournalEntry.status == "posted").first())
+        paid_from = next((l.account_id for l in entry.lines if l.credit > 0 and l.account_id != ap.id), None) if entry else None
+        if paid_from is None:
+            continue
+        accounting.post_journal(
+            db, txn_date=on_date, source_type="pdc_bounce", source_id=pdc.id,
+            description=f"Bounced cheque {pdc.cheque_no or pdc.id} — {purchase.ref_no} is owed again",
+            reference_no=purchase.ref_no, entered_by_id=user.id,
+            lines=[{"_account_id": paid_from, "amount": app.amount, "side": "debit", "memo": reason},
+                   {"_account_id": ap.id, "amount": app.amount, "side": "credit", "memo": reason}],
+        )
+        purchase.status = "confirmed"
+        purchase.paid_at = None
+        if not purchase.due_date:
+            purchase.due_date = on_date
+        reopened.append(purchase.ref_no)
+    return reopened
+
+
+@router.post("/pdc/{pdc_id:int}/unclear")
+def unclear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Undo a clearing that shouldn't have happened — the cheque goes back to
+    pending and everything the clearing did is reversed.
+
+    Clearing is the one irreversible thing the cheque register used to do, so
+    a mis-tick on the bulk worklist had to be unpicked by hand. This puts it
+    back: the settlements it created are reversed in the ledger and removed,
+    any invoice it flipped to "paid" reopens, and the bank withdrawal is
+    voided so the balance comes back.
+
+    A cheque cleared BEFORE the pdc_id trail existed (migration 0070) can't
+    be undone here — there's no reliable way to tell which settlements were
+    its, and guessing from cheque_no would risk reversing someone else's
+    payment. Those are refused rather than half-undone.
+    """
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    pdc = db.get(models.PostDatedCheque, pdc_id)
+    if not pdc or pdc.status != "cleared":
+        return RedirectResponse(f"/pdc/{pdc_id}", status_code=302)
+
+    label = pdc.cheque_no or f"PDC-{pdc.id}"
+    n = _undo_clearing(db, pdc, user, reason=f"Un-cleared cheque {label}")
+    if n is None:
+        # Legacy clearing with no trail — see the docstring.
+        return RedirectResponse(f"/pdc/{pdc_id}?unclear_error=1", status_code=status.HTTP_302_FOUND)
+
     # Back to limbo, exactly where it was before someone said it cleared.
     pdc.status = "pending"
     pdc.resolved_at = None
     audit.record(
         db, user=user, request=request, action="unclear", entity_type="post_dated_cheque",
         entity_id=pdc.id, entity_label=label,
-        summary=f"Un-cleared cheque {label} — reversed {len(rows)} settlement(s), {pdc.amount}",
+        summary=f"Un-cleared cheque {label} — reversed {n} settlement(s), {pdc.amount}",
     )
     db.commit()
     return RedirectResponse(f"/pdc/{pdc_id}", status_code=status.HTTP_302_FOUND)

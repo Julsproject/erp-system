@@ -669,7 +669,7 @@ def post_receivable_settlement(db: Session, sale: models.Sale, *, amount: Decima
     )
 
 
-def reverse_receivable_settlement(db: Session, settlement: models.ReceivableSettlement, *, reason: str = None, entered_by_id: int = None):
+def reverse_receivable_settlement(db: Session, settlement: models.ReceivableSettlement, *, reason: str = None, entered_by_id: int = None, txn_date=None):
     """Undoes one accidental payment — reverses the specific journal entry
     this settlement posted (via journal_entry_id, not source_type/source_id,
     since a sale can have several settlements and that pair alone can't tell
@@ -680,7 +680,7 @@ def reverse_receivable_settlement(db: Session, settlement: models.ReceivableSett
     entry = db.get(models.JournalEntry, settlement.journal_entry_id)
     if not entry or entry.status != "posted":
         return None
-    return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id)
+    return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id, txn_date=txn_date)
 
 
 PURCHASE_PAY_FUNCTION_KEYS = {
@@ -750,7 +750,7 @@ def post_purchase_settlement(db: Session, purchase: models.Purchase, *, amount: 
     )
 
 
-def reverse_purchase_settlement(db: Session, settlement: models.PurchaseSettlement, *, reason: str = None, entered_by_id: int = None):
+def reverse_purchase_settlement(db: Session, settlement: models.PurchaseSettlement, *, reason: str = None, entered_by_id: int = None, txn_date=None):
     """Undoes one payment to a supplier — the AP mirror of
     reverse_receivable_settlement. Reverses the specific entry this
     settlement posted (via journal_entry_id, since a purchase can have
@@ -761,7 +761,7 @@ def reverse_purchase_settlement(db: Session, settlement: models.PurchaseSettleme
     entry = db.get(models.JournalEntry, settlement.journal_entry_id)
     if not entry or entry.status != "posted":
         return None
-    return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id)
+    return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id, txn_date=txn_date)
 
 
 def reverse_purchase_posting(db: Session, purchase: models.Purchase, *, reason: str, entered_by_id: int = None, same_date: bool = False):
