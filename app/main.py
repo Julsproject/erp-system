@@ -85,19 +85,19 @@ def load_business_name() -> None:
 def _run_cheque_auto_clear() -> None:
     db = SessionLocal()
     try:
-        n = pdc.auto_clear_issued_cheques(db)
+        n = pdc.auto_clear_due_cheques(db)
         if n:
-            logging.getLogger(__name__).info("Auto-cleared %d issued cheque(s) on their cheque date", n)
+            logging.getLogger(__name__).info("Auto-cleared %d cheque(s) on their cheque date", n)
     except Exception:
         db.rollback()
-        logging.getLogger(__name__).exception("Issued-cheque auto-clear failed")
+        logging.getLogger(__name__).exception("Cheque auto-clear failed")
     finally:
         db.close()
 
 
 @app.on_event("startup")
 def start_cheque_auto_clear() -> None:
-    """Issued cheques clear themselves once their date comes: once at
+    """Cheques clear themselves once their date comes: once at
     startup, then hourly, so one dated today clears soon after midnight."""
     stop = threading.Event()
 

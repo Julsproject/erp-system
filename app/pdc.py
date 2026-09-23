@@ -192,8 +192,16 @@ def _apply_clearing(db: Session, pdc: models.PostDatedCheque, clear_dt, user) ->
             sale = db.get(models.Sale, app.sale_id)
             if not sale:
                 continue
+            # Never settle more than the invoice still owes — e.g. its payment
+            # method was changed away from cheque after the cheque was logged.
+            already = (db.query(func.coalesce(func.sum(models.ReceivableSettlement.amount), 0))
+                       .filter(models.ReceivableSettlement.sale_id == sale.id).scalar())
+            amount = min(app.amount or Decimal("0"),
+                         (sale.receivable_amount or Decimal("0")) - Decimal(str(already or 0)))
+            if amount <= 0:
+                continue
             settlement = models.ReceivableSettlement(
-                sale_id=app.sale_id, method="cheque", amount=app.amount,
+                sale_id=app.sale_id, method="cheque", amount=amount,
                 bank=pdc.bank, cheque_no=pdc.cheque_no, cheque_date=pdc.cheque_date.isoformat(),
                 cashier_id=user.id, pdc_id=pdc.id,
             )
@@ -204,7 +212,7 @@ def _apply_clearing(db: Session, pdc: models.PostDatedCheque, clear_dt, user) ->
             last_settlement_id = settlement.id
             try:
                 entry = accounting.post_receivable_settlement(
-                    db, sale, amount=app.amount, method="cheque", entered_by_id=user.id,
+                    db, sale, amount=amount, method="cheque", entered_by_id=user.id,
                     txn_date=clear_dt.date() if clear_dt else None,
                 )
                 # Remember the exact entry, so un-clearing reverses THIS
@@ -291,32 +299,34 @@ def _apply_clearing(db: Session, pdc: models.PostDatedCheque, clear_dt, user) ->
 
 
 def _cleared_without_settlements(db: Session, pdc: models.PostDatedCheque) -> bool:
-    """An issued cheque for deliveries that were already paid when received
-    clears without posting anything (see _apply_clearing), so un-clearing it
-    has nothing to reverse. Told apart from a legacy trail-less clearing by
-    its deliveries having no payment rows at all."""
-    if pdc.direction != "issued":
-        return False
-    ids = [a.purchase_id for a in pdc.applications if a.purchase_id] or ([pdc.purchase_id] if pdc.purchase_id else [])
+    """A cheque whose invoices were already paid clears without posting
+    anything (see _apply_clearing), so un-clearing it has nothing to reverse.
+    Told apart from a legacy clearing from before the pdc_id trail by its
+    invoices having no untraced cheque payments."""
+    if pdc.direction == "issued":
+        ids = [a.purchase_id for a in pdc.applications if a.purchase_id] or ([pdc.purchase_id] if pdc.purchase_id else [])
+        S, key = models.PurchaseSettlement, models.PurchaseSettlement.purchase_id
+    else:
+        ids = [a.sale_id for a in pdc.applications if a.sale_id] or ([pdc.sale_id] if pdc.sale_id else [])
+        S, key = models.ReceivableSettlement, models.ReceivableSettlement.sale_id
     if not ids:
         return False
-    return not db.query(models.PurchaseSettlement).filter(models.PurchaseSettlement.purchase_id.in_(ids)).first()         and all((db.get(models.Purchase, i) is not None and db.get(models.Purchase, i).status == "paid") for i in ids)
+    return not db.query(S).filter(key.in_(ids), S.method == "cheque", S.pdc_id.is_(None)).first()
 
 
 AUTO_CLEAR_LOCK = 725_001   # pg advisory lock id: one auto-clear run at a time
 
 
-def auto_clear_issued_cheques(db: Session) -> int:
-    """Clear every issued cheque whose date has come, dated on the cheque
-    date itself — our own cheques are taken as honored on their date. Run at
-    startup and hourly (see main.py). Received cheques stay manual: a
-    customer's cheque can still bounce. A cheque someone un-cleared by hand
-    is never re-cleared automatically."""
+def auto_clear_due_cheques(db: Session) -> int:
+    """Clear every cheque — issued and received — whose date has come, dated
+    on the cheque date itself: cheques are taken as honored on their date.
+    Run at startup and hourly (see main.py). One that bounces is un-cleared
+    by hand, and a cheque someone un-cleared is never re-cleared
+    automatically."""
     if not db.execute(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": AUTO_CLEAR_LOCK}).scalar():
         return 0
     due = (db.query(models.PostDatedCheque)
-           .filter(models.PostDatedCheque.direction == "issued",
-                   models.PostDatedCheque.status.in_(("pending", "deposited")),
+           .filter(models.PostDatedCheque.status.in_(("pending", "deposited")),
                    models.PostDatedCheque.cheque_date <= _today(),
                    # Un-cleared by hand (e.g. to mark it bounced): leave it to them.
                    ~models.PostDatedCheque.id.in_(
@@ -571,14 +581,11 @@ def create_pdc(
 # --------------------------------------------------------------------------- #
 # "Cheques that came due" worklist — clear a whole batch in one go.
 # --------------------------------------------------------------------------- #
-# Deliberately NOT an automatic sweep. Clearing means the bank actually
-# honored the cheque: it posts settlements, marks invoices paid and (for an
-# issued cheque drawn on a tracked account) takes the money out of the bank
-# balance. A cheque reaching its date proves none of that — suppliers sit on
-# post-dated cheques for weeks, and cheques bounce. Firing this off a
-# calendar would quietly corrupt both the payables and the bank balance with
-# nobody looking, and there's no un-clear to undo it with. So the date only
-# decides what gets LISTED here; a person still says go.
+# Cheques now clear themselves on their cheque date (auto_clear_due_cheques,
+# run hourly from main.py), so this list mostly holds cheques someone
+# un-cleared by hand and ones dated today that the next hourly run hasn't
+# reached yet. Clearing from here still works, e.g. to use a different
+# clearing date. A bounced cheque is un-cleared first, then marked bounced.
 @router.get("/pdc/due", response_class=HTMLResponse)
 def due_worklist(
     request: Request, direction: str = "", cleared: int = 0,
