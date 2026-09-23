@@ -361,6 +361,82 @@ def cancel_adjustment(db: Session, adj: models.InventoryAdjustment, *, user, rea
     )
 
 
+class _ValueRow:
+    """A stand-in movement for _journal_lines: just a reason and a value."""
+    def __init__(self, reason, value):
+        self.reason, self.value = reason, value
+
+
+def book_stock_movements(db: Session, movements: list, *, reason: str, txn_date: date, source_type: str,
+                         source_id, reference_no: str, description: str, entered_by_id: int = None):
+    """Post the peso value of stock movements that were written without a
+    journal entry (a completed Stock Count, a bulk import) — the same
+    accounts an Inventory Adjustment with this `reason` would use — and mark
+    each one booked (journal_entry_id) so nothing posts it twice. Returns the
+    entry, or None when there's no peso effect. Raises accounting.PostingError."""
+    todo = [m for m in movements if m.journal_entry_id is None and m.value is not None and Decimal(str(m.value)) != 0]
+    kind = MV_CORRECTION if books_for(reason) == "equity" else MV_PNL
+    lines = _journal_lines(None, [_ValueRow(kind, m.value) for m in todo])
+    if not lines:
+        return None
+    entry = accounting.post_journal(
+        db, txn_date=txn_date, source_type=source_type, source_id=source_id, reference_no=reference_no,
+        description=description, lines=lines, entered_by_id=entered_by_id,
+    )
+    for m in todo:
+        m.journal_entry_id = entry.id
+    return entry
+
+
+REASON_KEY_BY_LABEL = {label: key for key, label, _ in REASONS}
+
+
+def unbooked_stock_movements(db: Session) -> list:
+    """Count / bulk-import movements with a peso value that never reached the
+    books — normally none; a posting that failed (e.g. an unmapped account)
+    leaves them here for Reconcile Sales' catch-up."""
+    return (
+        db.query(models.StockMovement)
+        .filter(models.StockMovement.reason.in_(("stock_count", MV_PNL, MV_CORRECTION)),
+                models.StockMovement.inventory_adjustment_id.is_(None),
+                models.StockMovement.journal_entry_id.is_(None),
+                models.StockMovement.value.isnot(None), models.StockMovement.value != 0)
+        .order_by(models.StockMovement.created_at)
+        .all()
+    )
+
+
+def book_unbooked_stock_movements(db: Session, *, entered_by_id: int = None):
+    """Catch-up for unbooked_stock_movements: one entry per stock count (or
+    per day of other edits), dated the movements' own date. A count's reason
+    is read back from the note its movements carry; anything else is a data
+    load (bulk import) and goes to Inventory Corrections."""
+    groups = {}
+    for m in unbooked_stock_movements(db):
+        d = m.created_at.astimezone(MANILA).date()
+        key = (d, m.ref if m.reason == "stock_count" and m.ref else "")
+        groups.setdefault(key, []).append(m)
+    posted = []
+    for (d, ref), items in sorted(groups.items()):
+        if ref:
+            count = db.query(models.StockCount).filter(models.StockCount.ref_no == ref).first()
+            reason = REASON_KEY_BY_LABEL.get((items[0].note or "").strip(), "count_correction")
+            entry = book_stock_movements(
+                db, items, reason=reason, txn_date=d, source_type="stock_count",
+                source_id=count.id if count else None, reference_no=ref,
+                description=f"Stock count {ref} — {REASON_LABELS.get(reason, reason)}", entered_by_id=entered_by_id,
+            )
+        else:
+            entry = book_stock_movements(
+                db, items, reason="encoding_correction", txn_date=d, source_type="inventory_history",
+                source_id=None, reference_no=None, description=f"Stock edits {d:%b %d, %Y} (bulk import)",
+                entered_by_id=entered_by_id,
+            )
+        if entry:
+            posted.append(entry)
+    return posted
+
+
 def _new_adjustment(db: Session, *, adj_date: date, reason: str, notes: str = None,
                     source: str = "manual", user=None) -> models.InventoryAdjustment:
     adj = models.InventoryAdjustment(

@@ -2961,9 +2961,11 @@ def _apply_import_row(db: Session, file_label: str, record: dict, existing):
         delta = Decimal(str(product.total_qty or 0)) - old_total
         if delta != 0:
             unit_cost = Decimal(str(product.cost_price or 0))
+            # A data load, not a shrinkage/gain: kept off the P&L and booked
+            # to Inventory Corrections by Reconcile Sales' catch-up.
             db.add(models.StockMovement(
-                product_id=product.id, qty_base=delta, reason="adjustment",
-                ref="bulk import", unit_cost=unit_cost, value=delta * unit_cost,
+                product_id=product.id, qty_base=delta, reason="adjustment-correction",
+                ref="bulk import", unit_cost=unit_cost, value=(delta * unit_cost).quantize(Decimal("0.01")),
                 note=f"Bulk import: {file_label}",
             ))
         return "updated", None
@@ -3010,6 +3012,16 @@ def _run_import(db: Session, user, request, filename: str, classified, skip_line
             entity_label=filename,
             summary=f"Bulk import from “{filename}”: {created} created, {updated} updated, {skipped} skipped",
         )
+        # Book the import's stock changes (Inventory Corrections). Never
+        # blocks the import — Reconcile Sales offers a catch-up if it fails.
+        from . import accounting
+        from .inventory_adjustments import book_unbooked_stock_movements
+        db.flush()
+        try:
+            with db.begin_nested():
+                book_unbooked_stock_movements(db, entered_by_id=user.id if user else None)
+        except accounting.PostingError:
+            pass
     db.commit()
     return {
         "created": created, "updated": updated, "skipped": skipped,

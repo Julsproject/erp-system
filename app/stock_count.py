@@ -1047,6 +1047,7 @@ def stock_count_complete(count_id: int, request: Request, reason: str = Form("co
         return RedirectResponse("/stock-count", status_code=302)
 
     reason_label = ADJUSTMENT_REASON_LABELS.get(reason, reason)
+    count_movements = []
     for line in count.lines:
         product = db.get(models.Product, line.product_id, with_for_update=True)
         if not product:
@@ -1068,10 +1069,12 @@ def stock_count_complete(count_id: int, request: Request, reason: str = Form("co
         before_stock = Decimal(str(product.stock_qty or 0))
         _apply_stock_count_correction(product, variance)
         unit_cost = Decimal(str(product.cost_price or 0))
-        db.add(models.StockMovement(
+        movement = models.StockMovement(
             product_id=product.id, qty_base=variance, reason="stock_count", ref=count.ref_no,
-            unit_cost=unit_cost, value=variance * unit_cost, note=reason_label, **stamp,
-        ))
+            unit_cost=unit_cost, value=(variance * unit_cost).quantize(Decimal("0.01")), note=reason_label, **stamp,
+        )
+        db.add(movement)
+        count_movements.append(movement)
         changes = {}
         if product.beginning_stock != before_beginning:
             changes["beginning_stock"] = [str(before_beginning), str(product.beginning_stock)]
@@ -1088,6 +1091,25 @@ def stock_count_complete(count_id: int, request: Request, reason: str = Form("co
     count.completed_by = user.id
     count.completed_at = func.now()
     count.effective_date = _default_effective_date(count.count_date or date.today())
+
+    # The variances' peso value goes to the books on the count date, to the
+    # accounts the chosen reason maps to (see inventory_adjustments.REASONS:
+    # shortage -> Shrinkage & Losses, surplus -> Inventory Gain; a correction
+    # reason -> Inventory Corrections). Never blocks the count — if posting
+    # fails, the movements stay unbooked and Reconcile Sales offers a catch-up.
+    from . import accounting
+    from .inventory_adjustments import REASON_LABELS as ADJ_REASON_LABELS, book_stock_movements
+    db.flush()
+    try:
+        with db.begin_nested():
+            book_stock_movements(
+                db, count_movements, reason=reason, txn_date=count.count_date or date.today(),
+                source_type="stock_count", source_id=count.id, reference_no=count.ref_no,
+                description=f"Stock count {count.ref_no} — {ADJ_REASON_LABELS.get(reason, reason_label)}",
+                entered_by_id=user.id,
+            )
+    except accounting.PostingError:
+        pass
     db.commit()
     return RedirectResponse(f"/stock-count/{count.id}", status_code=302)
 

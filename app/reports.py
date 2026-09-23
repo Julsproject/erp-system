@@ -14,7 +14,7 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import func
+from sqlalchemy import and_, func, not_
 from sqlalchemy.orm import Session
 
 from . import models, pricing, settings_store
@@ -119,7 +119,7 @@ def _pl_data(db: Session, period_start: date, period_end: date):
 
     inventory_adjustment_total = (
         db.query(func.coalesce(func.sum(models.StockMovement.value), 0))
-        .filter(models.StockMovement.reason.in_(PNL_ADJUSTMENT_REASONS),
+        .filter(_pnl_adjustment_filter(),
                 _local_date(models.StockMovement.created_at).between(period_start, period_end))
         .scalar()
     )
@@ -1093,6 +1093,17 @@ def export_inventory_pricing(
 # Inventory Adjustments report separately — see app/inventory_adjustments.py.
 PNL_ADJUSTMENT_REASONS = ("adjustment", "stock_count")
 CORRECTION_REASONS = ("adjustment-correction", "revaluation")
+# A Stock Count completed with one of these reasons books to Inventory
+# Corrections (equity) — its movements carry the reason's label as their note.
+EQUITY_COUNT_NOTES = ("Encoding / opening-balance correction", "Initial balance correction")
+
+
+def _pnl_adjustment_filter():
+    return and_(
+        models.StockMovement.reason.in_(PNL_ADJUSTMENT_REASONS),
+        not_(and_(models.StockMovement.reason == "stock_count",
+                  models.StockMovement.note.in_(EQUITY_COUNT_NOTES))),
+    )
 
 
 def _inventory_adjustment_rows(db: Session, period_start: date, period_end: date):
@@ -1118,7 +1129,8 @@ def _inventory_adjustment_rows(db: Session, period_start: date, period_end: date
             "reason": {"stock_count": "Stock count", "revaluation": "Cost correction",
                        "adjustment-correction": "Correction"}.get(
                 mv.reason, "Adjustment" if mv.inventory_adjustment_id else "Manual edit"),
-            "books": "equity" if mv.reason in CORRECTION_REASONS else "pnl",
+            "books": "equity" if (mv.reason in CORRECTION_REASONS
+                                  or (mv.reason == "stock_count" and mv.note in EQUITY_COUNT_NOTES)) else "pnl",
             "adjustment_id": mv.inventory_adjustment_id,
             "note": mv.note or "—",
             "ref": mv.ref or "—",

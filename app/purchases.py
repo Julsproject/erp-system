@@ -1322,11 +1322,7 @@ def edit_purchase_details(
         purchase.vat_amount = _vat_of(purchase.total) if new_vat_applied else Decimal("0")
         purchase.net_amount = purchase.total - purchase.vat_amount
         try:
-            accounting.reverse_purchase_posting(db, purchase, reason="VAT correction", entered_by_id=user.id, same_date=True)
-            accounting.post_purchase_receive(
-                db, purchase, is_payable=(purchase.status == "confirmed"),
-                payment_method=purchase.payment_method, entered_by_id=user.id,
-            )
+            accounting.repost_purchase_receive(db, purchase, reason="VAT correction", entered_by_id=user.id)
         except accounting.PostingError:
             db.rollback()
             return _back("No+account+is+mapped+for+Input+VAT+in+Accounting+Setup+%E2%80%94+nothing+was+changed.")
@@ -1381,12 +1377,6 @@ def edit_purchase_items_form(purchase_id: int, request: Request, db: Session = D
 
 
 @router.post("/purchases/{purchase_id:int}/edit-items")
-# TODO(accounting): this recomputes purchase.total after the original
-# purchase already posted a journal entry (see accounting.post_purchase_
-# receive) — the ledger currently does NOT get a correcting entry when items
-# are edited, so a purchase corrected here will disagree with its own journal
-# entry until this is extended to post a delta (or edits are blocked once a
-# purchase has posted). Same known gap as pos.edit_sale_items.
 def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
@@ -1497,6 +1487,14 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
     vat_applied = bool(data.get("vat_applied")) if "vat_applied" in data else bool(purchase.vat_amount)
     purchase.vat_amount = _vat_of(purchase.total) if vat_applied else Decimal("0")
     purchase.net_amount = purchase.total - purchase.vat_amount
+
+    # The ledger has to follow the corrected amounts, or this purchase
+    # disagrees with its own journal entry forever.
+    try:
+        accounting.repost_purchase_receive(db, purchase, reason=f"Items corrected on {purchase.ref_no}", entered_by_id=user.id)
+    except accounting.PostingError as e:
+        db.rollback()
+        return JSONResponse({"ok": False, "error": f"Couldn't update the books: {e} — nothing was changed."}, status_code=400)
 
     audit.record(
         db, user=user, request=request, action="update", entity_type="purchase",

@@ -80,12 +80,20 @@
 {% endif %}
 
 <h2 style="margin:28px 0 6px;font-size:18px;">Inventory: ledger vs shelf</h2>
+{% if unbooked_count %}
+<div class="alert" style="background:#fffbeb;border-color:#fde68a;color:#92400e;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+  <span><strong>{{ unbooked_count }}</strong> stock count / import movement(s) worth <strong>{{ unbooked_total|peso }}</strong> never reached the books
+    (their posting failed, e.g. an unmapped account).</span>
+  <form method="post" action="/accounting/reconcile-sales/post-stock">
+    <button class="btn" type="submit">Book them now</button>
+  </form>
+</div>
+{% endif %}
 <div class="stat-row">
   <div class="mini-stat"><span class="mini-num">{{ ledger_inventory|peso }}</span><span>Inventory account (ledger)</span></div>
   <div class="mini-stat"><span class="mini-num">{{ stock_value|peso }}</span><span>Stock on hand × cost (today)</span></div>
   <div class="mini-stat"><span class="mini-num">{{ (ledger_inventory - stock_value)|peso }}</span><span>Difference</span></div>
 </div>
-<p class="hint">Opening inventory (Jul 30) and every stock count and manual stock edit up to Sep 23, 2026 are in the books, the counts
-  and edits as Inventory Corrections. Stock counts completed after that, exchanges, and sale re-dates that cross a count still don't
-  post, so a small difference here is expected.</p>
+<p class="hint">Purchases, sales (with their cost), inventory adjustments, stock counts, bulk imports and the opening inventory all post.
+  Exchanges, refunds, and sale re-dates that cross a stock count still don't, so a small difference here is expected.</p>
 {% endblock %}

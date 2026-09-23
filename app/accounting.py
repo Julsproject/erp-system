@@ -672,6 +672,48 @@ def reverse_purchase_posting(db: Session, purchase: models.Purchase, *, reason: 
                             txn_date=entry.txn_date if same_date else None)
 
 
+def repost_purchase_receive(db: Session, purchase: models.Purchase, *, reason: str, entered_by_id: int = None):
+    """A receive's amounts changed after it was posted (items corrected, VAT
+    switched on/off): reverse its entry and post the corrected one, both on
+    the purchase's own date. The credit side stays on whatever account the
+    original entry credited — Accounts Payable if it was received on credit
+    (even if it has since been settled, which flips purchase.status to
+    "paid"; the settlements already debited AP on their own), otherwise the
+    cash/bank account it was paid from. Deciding that from purchase.status
+    instead would credit Cash for a settled payable and double-count it."""
+    entry = (
+        db.query(models.JournalEntry)
+        .filter(models.JournalEntry.source_type == "purchase", models.JournalEntry.source_id == purchase.id,
+                models.JournalEntry.status == "posted")
+        .first()
+    )
+    if not entry:
+        return post_purchase_receive(db, purchase, is_payable=(purchase.status == "confirmed"),
+                                     payment_method=purchase.payment_method, entered_by_id=entered_by_id)
+    credit_lines = [ln for ln in entry.lines if (ln.credit or 0) > 0]
+    credit_account_ids = {ln.account_id for ln in credit_lines}
+    if len(credit_account_ids) != 1:
+        raise PostingError(f"{entry.journal_no} doesn't have a single payment/AP line to carry over — correct it by hand.")
+    credit_account_id = credit_account_ids.pop()
+    memo = credit_lines[0].memo
+    txn_date = entry.txn_date
+    reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id, txn_date=txn_date)
+
+    total = Decimal(str(purchase.total or 0))
+    if total <= 0:
+        return None
+    vat = Decimal(str(purchase.vat_amount or 0))
+    lines = [{"function_key": "INVENTORY_MERCHANDISE", "amount": total - vat, "side": "debit"}]
+    if vat > 0:
+        lines.append({"function_key": "INPUT_VAT", "amount": vat, "side": "debit"})
+    lines.append({"_account_id": credit_account_id, "amount": total, "side": "credit", "memo": memo})
+    return post_journal(
+        db, txn_date=txn_date, source_type="purchase", source_id=purchase.id,
+        description=f"Receive {purchase.ref_no} (corrected)", reference_no=purchase.ref_no,
+        lines=lines, entered_by_id=entered_by_id,
+    )
+
+
 EXPENSE_PAY_FUNCTION_KEYS = {
     "cash": "EXPENSE_PAY_CASH", "gcash": "EXPENSE_PAY_GCASH",
     "maya": "EXPENSE_PAY_MAYA", "other_ewallet": "EXPENSE_PAY_OTHER_EWALLET",
@@ -2208,6 +2250,10 @@ def reconcile_sales(
     ]
     missing_total = sum((should - have for _, have, should in missing_all), ZERO)
 
+    from .inventory_adjustments import unbooked_stock_movements
+    unbooked = unbooked_stock_movements(db)
+    unbooked_total = sum((Decimal(str(m.value)) for m in unbooked), ZERO)
+
     # Inventory on the ledger vs on the shelf (stock x current cost), today.
     inv_account = db.query(models.Account).filter(models.Account.system_key == "INVENTORY_MERCHANDISE").first()
     ledger_inventory = _account_balance_before(db, inv_account, _today() + timedelta(days=1)) if inv_account else ZERO
@@ -2224,9 +2270,30 @@ def reconcile_sales(
          "missing_all": missing_all, "missing_period": missing_period, "missing_total": missing_total,
          "cogs_error": cogs_error, "cogs_msg": request.query_params.get("cogs_msg", ""),
          "ledger_inventory": ledger_inventory, "stock_value": stock_value,
+         "unbooked_count": len(unbooked), "unbooked_total": unbooked_total,
          "days": days, "date_from": date_from, "date_to": date_to,
          "period_start": period_start, "period_end": period_end, "custom": custom},
     )
+
+
+@router.post("/accounting/reconcile-sales/post-stock")
+def reconcile_post_unbooked_stock(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Catch-up for stock count / bulk import movements whose posting failed."""
+    from .inventory_adjustments import book_unbooked_stock_movements
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+    try:
+        entries = book_unbooked_stock_movements(db, entered_by_id=user.id)
+    except PostingError as e:
+        db.rollback()
+        return RedirectResponse(f"/accounting/reconcile-sales?cogs_msg={quote('Could not post: ' + str(e))}", status_code=302)
+    audit.record(db, user=user, request=request, action="create", entity_type="journal_entry",
+                 summary=f"Booked unposted stock counts / imports: {len(entries)} entr(ies)")
+    db.commit()
+    msg = f"Booked {len(entries)} stock count / import entr{'y' if len(entries) == 1 else 'ies'}."
+    return RedirectResponse(f"/accounting/reconcile-sales?cogs_msg={quote(msg)}", status_code=302)
 
 
 @router.post("/accounting/reconcile-sales/post-cogs")
