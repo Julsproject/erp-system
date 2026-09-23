@@ -921,6 +921,11 @@ class StockMovement(Base):
     # The Inventory Adjustment that wrote this movement (reason adjustment /
     # adjustment-correction / revaluation) — a cancel reverses exactly these.
     inventory_adjustment_id = Column(Integer, ForeignKey("inventory_adjustments.id"), nullable=True, index=True)
+    # The journal entry that booked this movement's value after the fact —
+    # set on the historical stock counts / manual edits folded into the
+    # ledger with the opening inventory (migration 0073). Set = already in
+    # the books; never post it again.
+    journal_entry_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=True, index=True)
 
 
 class InventoryAdjustment(Base):

@@ -85,6 +85,7 @@
   <div class="mini-stat"><span class="mini-num">{{ stock_value|peso }}</span><span>Stock on hand × cost (today)</span></div>
   <div class="mini-stat"><span class="mini-num">{{ (ledger_inventory - stock_value)|peso }}</span><span>Difference</span></div>
 </div>
-<p class="hint">These only match once every stock movement reaches the books. Stock you already had before the system started
-  (opening inventory), stock counts, and exchanges still don't post, so a difference here is expected for now.</p>
+<p class="hint">Opening inventory (Jul 30) and every stock count and manual stock edit up to Sep 23, 2026 are in the books, the counts
+  and edits as Inventory Corrections. Stock counts completed after that, exchanges, and sale re-dates that cross a count still don't
+  post, so a small difference here is expected.</p>
 {% endblock %}
