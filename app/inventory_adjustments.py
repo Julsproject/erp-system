@@ -133,7 +133,7 @@ def compute_line(db: Session, adj: models.InventoryAdjustment, line: models.Inve
     value_qty = _money(qty_base * cost_after)
     return {
         "on_hand": on_hand, "on_hand_at_date": on_hand_at_date, "qty_base": qty_base,
-        "on_hand_after": on_hand + qty_base, "factor": factor,
+        "on_hand_after": on_hand + qty_base, "factor": factor, "is_move": bool(line.is_move),
         "old_cost": old_cost, "new_cost": new_cost, "cost_after": cost_after,
         "value_reval": value_reval, "value_qty": value_qty, "value_total": value_reval + value_qty,
     }
@@ -179,7 +179,7 @@ def preview_journal(adj: models.InventoryAdjustment, computed: list) -> list:
     fake = []
     for c in computed:
         fake.append(_M(MV_REVAL, c["value_reval"]))
-        fake.append(_M(qty_reason, c["value_qty"]))
+        fake.append(_M(MV_CORRECTION if c.get("is_move") else qty_reason, c["value_qty"]))
     return _journal_lines(adj, fake)
 
 
@@ -242,7 +242,8 @@ def post_adjustment(db: Session, adj: models.InventoryAdjustment, *, user, reque
             if not already_applied:
                 _apply_stock_count_correction(product, c["qty_base"])
             movements.append(models.StockMovement(
-                product_id=product.id, qty_base=c["qty_base"], reason=qty_reason, ref=adj.ref_no,
+                product_id=product.id, qty_base=c["qty_base"], reason=MV_CORRECTION if line.is_move else qty_reason,
+                ref=adj.ref_no,
                 unit_cost=c["cost_after"], value=c["value_qty"], created_at=stamp, note=note,
                 inventory_adjustment_id=adj.id,
             ))
@@ -532,7 +533,7 @@ def adjustment_list(request: Request, status: str = "", q: str = "", page: int =
 
 @router.post("/inventory-adjustments/new")
 def adjustment_create(request: Request, adj_date: str = Form(""), reason: str = Form(""), notes: str = Form(""),
-                      product_id: int = Form(0),
+                      product_id: int = Form(0), move: int = Form(0),
                       db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -543,17 +544,51 @@ def adjustment_create(request: Request, adj_date: str = Form(""), reason: str = 
         reason = "encoding_correction"
     adj = _new_adjustment(db, adj_date=min(d, _today()), reason=reason, notes=notes.strip()[:255] or None, user=user)
     db.commit()
-    suffix = f"?add={product_id}" if product_id else ""
+    if product_id:
+        suffix = f"?move_from={product_id}" if move else f"?add={product_id}"
+    else:
+        suffix = ""
     return RedirectResponse(f"/inventory-adjustments/{adj.id}{suffix}", status_code=302)
 
 
-def _product_payload(p: models.Product) -> dict:
+def _product_payload(p: models.Product, db: Session = None) -> dict:
     base = p.unit_type.name if p.unit_type else "Unit"
     units = [{"name": base, "factor": 1.0}] + [
         {"name": u.name, "factor": float(u.factor_to_base or 1)} for u in p.units if (u.factor_to_base or 0) > 0
     ]
-    return {"id": p.id, "name": p.name, "base_unit": base, "units": units,
-            "cost_price": float(p.cost_price or 0), "on_hand": float(p.total_qty or 0)}
+    out = {"id": p.id, "name": p.name, "base_unit": base, "units": units,
+           "cost_price": float(p.cost_price or 0), "on_hand": float(p.total_qty or 0),
+           "replenish_from_id": p.replenish_from_id, "replenish_factor": float(p.replenish_factor or 0),
+           "unit_type_id": p.unit_type_id}
+    if db is not None:
+        # Its sealed/open partner — the usual other side of a move.
+        partner = (db.get(models.Product, p.replenish_from_id) if p.replenish_from_id else
+                   db.query(models.Product).filter(models.Product.replenish_from_id == p.id,
+                                                   models.Product.is_active.is_(True)).first())
+        out["partner"] = _product_payload(partner) if partner else None
+    return out
+
+
+def base_ratio(src: models.Product, dst: models.Product):
+    """How many of dst's base units one of src's base units is, when that's
+    knowable: a sealed item and its Open/Retail item (1 box opens into
+    replenish_factor Kg), or two items counted in the same unit. None
+    otherwise — the person types both quantities."""
+    def one_way(source, opened):
+        if opened.replenish_from_id != source.id:
+            return None
+        if opened.unit_type_id != source.unit_type_id:
+            return Decimal(str(opened.replenish_factor)) if opened.replenish_factor else None
+        return Decimal("1")
+    r = one_way(src, dst)
+    if r:
+        return r
+    r = one_way(dst, src)
+    if r:
+        return Decimal("1") / r
+    if src.unit_type_id and src.unit_type_id == dst.unit_type_id:
+        return Decimal("1")
+    return None
 
 
 @router.get("/inventory-adjustments/product-search")
@@ -568,11 +603,11 @@ def adjustment_product_search(q: str = "", id: int = 0, db: Session = Depends(ge
         query = query.filter(multi_word_ilike(models.Product.name, q.strip()))
     else:
         return {"products": []}
-    return {"products": [_product_payload(p) for p in query.order_by(models.Product.name).limit(25).all()]}
+    return {"products": [_product_payload(p, db) for p in query.order_by(models.Product.name).limit(25).all()]}
 
 
 @router.get("/inventory-adjustments/{adj_id:int}", response_class=HTMLResponse)
-def adjustment_view(adj_id: int, request: Request, error: str = "", add: int = 0,
+def adjustment_view(adj_id: int, request: Request, error: str = "", add: int = 0, move_from: int = 0,
                     db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -611,13 +646,16 @@ def adjustment_view(adj_id: int, request: Request, error: str = "", add: int = 0
                 "credit": ln["amount"] if ln["side"] == "credit" else None,
             })
     total_value = sum((r["c"]["value_total"] for r in rows), ZERO)
-    add_product = None
+    add_product = move_product = None
     if add and adj.status == "draft":
         p = db.get(models.Product, add)
-        add_product = _product_payload(p) if p else None
+        add_product = _product_payload(p, db) if p else None
+    if move_from and adj.status == "draft":
+        p = db.get(models.Product, move_from)
+        move_product = _product_payload(p, db) if p else None
     return _render(request, "inventory_adjustments/view.html", user, adj=adj, rows=rows, je_preview=je_preview,
                    total_value=total_value, error=error, today=_today(), add_product=add_product,
-                   can_post=is_staff(user))
+                   move_product=move_product, can_post=is_staff(user))
 
 
 def _draft_or_redirect(db, adj_id):
@@ -700,6 +738,65 @@ def adjustment_add_line(adj_id: int, product_id: int = Form(...), unit_name: str
     return RedirectResponse(f"/inventory-adjustments/{adj_id}", status_code=302)
 
 
+def _unit_factor(product: models.Product, unit_name: str):
+    base = product.unit_type.name if product.unit_type else "Unit"
+    if not unit_name or unit_name == base:
+        return base, Decimal("1")
+    unit = next((u for u in product.units if u.name == unit_name), None)
+    if not unit or not unit.factor_to_base or unit.factor_to_base <= 0:
+        raise AdjustmentError(f"“{unit_name}” isn't a unit of {product.name}.")
+    return unit.name, Decimal(str(unit.factor_to_base))
+
+
+@router.post("/inventory-adjustments/{adj_id:int}/move")
+def adjustment_add_move(adj_id: int, from_id: int = Form(0), from_unit: str = Form(""), from_qty: str = Form(""),
+                        to_id: int = Form(0), to_unit: str = Form(""), to_qty: str = Form(""), note: str = Form(""),
+                        db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Stock recorded on the wrong item: take it off one and put it on the
+    other, as a pair of lines. Valued at each item's own cost; any
+    difference between the two is a correction (equity), never P&L."""
+    if not user or not is_floor_staff(user):
+        return RedirectResponse("/login", status_code=302)
+    adj, redirect = _draft_or_redirect(db, adj_id)
+    if redirect:
+        return redirect
+    src, dst = db.get(models.Product, from_id), db.get(models.Product, to_id)
+    if not src or not dst:
+        return _err(adj_id, "Pick both the item to move from and the item to move to.")
+    if src.id == dst.id:
+        return _err(adj_id, "Pick two different items.")
+    for p in (src, dst):
+        if any(l.product_id == p.id for l in adj.lines):
+            return _err(adj_id, f"“{p.name}” is already on this adjustment — remove that line first, or start a new adjustment.")
+    try:
+        src_unit, src_factor = _unit_factor(src, from_unit)
+        dst_unit, dst_factor = _unit_factor(dst, to_unit)
+        out_qty = _dec(from_qty)
+        in_qty = _dec(to_qty) if (to_qty or "").strip() else None
+    except AdjustmentError as e:
+        return _err(adj_id, str(e))
+    if out_qty <= 0:
+        return _err(adj_id, "Enter how much to move.")
+    if in_qty is None:
+        ratio = base_ratio(src, dst)
+        if ratio is None:
+            return _err(adj_id, f"Enter how much that is in {dst.name} — the two items aren't linked, so it can't be worked out.")
+        in_qty = (out_qty * src_factor * ratio / dst_factor).quantize(Decimal("0.000001"))
+    if in_qty <= 0:
+        return _err(adj_id, "The quantity going in must be more than 0.")
+    note = note.strip()
+    adj.lines.append(models.InventoryAdjustmentLine(
+        product_id=src.id, product_name=src.name, unit_name=src_unit, unit_factor=src_factor, mode="delta",
+        qty_input=-out_qty, is_move=True, note=(f"Moved to {dst.name}" + (f" — {note}" if note else ""))[:255],
+    ))
+    adj.lines.append(models.InventoryAdjustmentLine(
+        product_id=dst.id, product_name=dst.name, unit_name=dst_unit, unit_factor=dst_factor, mode="delta",
+        qty_input=in_qty, is_move=True, note=(f"Moved from {src.name}" + (f" — {note}" if note else ""))[:255],
+    ))
+    db.commit()
+    return RedirectResponse(f"/inventory-adjustments/{adj_id}", status_code=302)
+
+
 @router.post("/inventory-adjustments/{adj_id:int}/lines/{line_id:int}/delete")
 def adjustment_delete_line(adj_id: int, line_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user or not is_floor_staff(user):
@@ -709,6 +806,12 @@ def adjustment_delete_line(adj_id: int, line_id: int, db: Session = Depends(get_
         return redirect
     line = next((l for l in adj.lines if l.id == line_id), None)
     if line:
+        if line.is_move:
+            # A move is a pair (out line, then in line) — never leave half of one.
+            partner_id = line.id + 1 if (line.qty_input or 0) < 0 else line.id - 1
+            partner = next((l for l in adj.lines if l.id == partner_id and l.is_move), None)
+            if partner:
+                adj.lines.remove(partner)
         adj.lines.remove(line)
         db.commit()
     return RedirectResponse(f"/inventory-adjustments/{adj_id}", status_code=302)

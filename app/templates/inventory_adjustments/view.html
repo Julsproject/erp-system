@@ -103,6 +103,48 @@
     </p>
   </form>
 </section>
+
+<section class="card" id="moveCard" style="margin-bottom:18px;">
+  <h3 style="margin:0 0 4px;">Move between items</h3>
+  <p class="hint" style="margin:0 0 12px;">Stock sitting on the wrong item, like a box recorded on the Open/Retail item. This takes it off one item and puts it on the other.
+    It's a correction, so it stays off the P&amp;L. Each side is valued at its own item's cost.</p>
+  <form method="post" action="/inventory-adjustments/{{ adj.id }}/move" id="moveForm">
+    <input type="hidden" name="from_id" id="mvFromId">
+    <input type="hidden" name="to_id" id="mvToId">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;">
+      <div>
+        <label style="margin:0 0 4px;display:block;">From (take off)</label>
+        <div style="position:relative;">
+          <input id="mvFromSearch" class="search" type="search" placeholder="Item it's wrongly on…" autocomplete="off" style="width:100%;box-sizing:border-box;">
+          <div id="mvFromChoices" class="pos-results" style="display:none;position:absolute;left:0;right:0;z-index:20;max-height:280px;overflow:auto;"></div>
+        </div>
+        <p style="margin:6px 0;"><strong id="mvFromName"></strong> <span class="muted" id="mvFromInfo"></span></p>
+        <div style="display:flex;gap:8px;align-items:flex-end;">
+          <label style="margin:0;">Qty <input type="number" name="from_qty" id="mvFromQty" step="any" min="0" style="max-width:110px;"></label>
+          <label style="margin:0;">Unit <select name="from_unit" id="mvFromUnit"></select></label>
+        </div>
+      </div>
+      <div>
+        <label style="margin:0 0 4px;display:block;">To (put on)</label>
+        <div style="position:relative;">
+          <input id="mvToSearch" class="search" type="search" placeholder="Item it belongs to…" autocomplete="off" style="width:100%;box-sizing:border-box;">
+          <div id="mvToChoices" class="pos-results" style="display:none;position:absolute;left:0;right:0;z-index:20;max-height:280px;overflow:auto;"></div>
+        </div>
+        <p style="margin:6px 0;"><strong id="mvToName"></strong> <span class="muted" id="mvToInfo"></span>
+          <button type="button" class="btn-link" id="mvPartner" style="display:none;"></button></p>
+        <div style="display:flex;gap:8px;align-items:flex-end;">
+          <label style="margin:0;">Qty <input type="number" name="to_qty" id="mvToQty" step="any" min="0" style="max-width:110px;"></label>
+          <label style="margin:0;">Unit <select name="to_unit" id="mvToUnit"></select></label>
+        </div>
+        <small class="hint" id="mvConv"></small>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:flex-end;margin-top:12px;flex-wrap:wrap;">
+      <label style="margin:0;flex:1;min-width:200px;">Note <input type="text" name="note" maxlength="200" placeholder="e.g. DR 46450 box encoded on the open item"></label>
+      <button class="btn" type="submit">Add move</button>
+    </div>
+  </form>
+</section>
 {% endif %}
 
 <div class="table-wrap">
@@ -120,6 +162,7 @@
       {% set u = l.unit_name or 'unit' %}
       <tr>
         <td class="strong"><a class="btn-link" href="/products/{{ l.product_id }}/stock-card">{{ l.product_name }}</a>
+          {% if l.is_move %}<span class="warn-tag" style="background:#eff6ff;color:#1d4ed8;">move</span>{% endif %}
           {% if l.note %}<div class="mv-note">{{ l.note }}</div>{% endif %}
           {% if draft and l.mode == 'set' %}<div class="mv-note">Counted {{ l.qty_input|qty }} {{ u }} as of {{ adj.adj_date.strftime('%b %d') }}{% if c.on_hand_at_date is not none %}; the system had {{ (c.on_hand_at_date / f)|qty }} then{% endif %}</div>{% endif %}
         </td>
@@ -170,7 +213,7 @@
   </table>
 </section>
 {% elif rows %}
-<p class="hint" style="margin-top:12px;">No peso effect (the item has no cost), so no journal entry. Only the stock will change.</p>
+<p class="hint" style="margin-top:12px;">No net peso effect (the values cancel out, or the items have no cost), so there's no journal entry. Only the stock will change.</p>
 {% endif %}
 
 <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap;">
@@ -263,6 +306,81 @@
   });
 
   {% if add_product %}pick({{ add_product|tojson }});{% endif %}
+})();
+
+(function () {
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const fmt = n => (Math.round(n * 1e6) / 1e6).toLocaleString();
+  const side = {from: null, to: null};
+  const $ = id => document.getElementById(id);
+  const K = {from: 'mvFrom', to: 'mvTo'};
+
+  // Same rule as inventory_adjustments.base_ratio: 1 of src's base = ? of dst's base.
+  function baseRatio(src, dst) {
+    const oneWay = (source, opened) => {
+      if (opened.replenish_from_id !== source.id) return null;
+      if (opened.unit_type_id !== source.unit_type_id) return opened.replenish_factor || null;
+      return 1;
+    };
+    let r = oneWay(src, dst); if (r) return r;
+    r = oneWay(dst, src); if (r) return 1 / r;
+    if (src.unit_type_id && src.unit_type_id === dst.unit_type_id) return 1;
+    return null;
+  }
+  const factorOf = (sel) => parseFloat(sel.selectedOptions[0] ? sel.selectedOptions[0].dataset.factor : 1) || 1;
+  function convert() {
+    const f = side.from, t = side.to, out = $('mvConv');
+    if (!f || !t) { out.textContent = ''; return; }
+    const r = baseRatio(f, t), q = parseFloat($('mvFromQty').value);
+    if (r === null) { out.textContent = 'These two items aren\'t linked. Type how much it is on this side.'; return; }
+    if (!(q > 0)) { out.textContent = ''; return; }
+    const inQty = q * factorOf($('mvFromUnit')) * r / factorOf($('mvToUnit'));
+    $('mvToQty').value = Math.round(inQty * 1e6) / 1e6;
+    const val = q * factorOf($('mvFromUnit')) * f.cost_price, val2 = inQty * factorOf($('mvToUnit')) * t.cost_price;
+    out.textContent = '= ' + fmt(inQty) + ' ' + $('mvToUnit').value + ' · value out ₱' + val.toFixed(2) + ', in ₱' + val2.toFixed(2);
+  }
+  function setSide(which, p) {
+    side[which] = p;
+    $(K[which] + 'Id').value = p.id;
+    $(K[which] + 'Name').textContent = p.name;
+    $(K[which] + 'Info').textContent = '· on hand ' + fmt(p.on_hand) + ' ' + p.base_unit + ' · ₱' + p.cost_price.toFixed(2) + ' / ' + p.base_unit;
+    const sel = $(K[which] + 'Unit'); sel.innerHTML = '';
+    p.units.forEach(u => { const o = document.createElement('option'); o.value = u.name; o.dataset.factor = u.factor;
+      o.textContent = u.name + (u.factor !== 1 ? ' (' + fmt(u.factor) + ' ' + p.base_unit + ')' : ''); sel.appendChild(o); });
+    $(K[which] + 'Search').value = ''; $(K[which] + 'Choices').style.display = 'none';
+    if (which === 'from') {
+      const b = $('mvPartner');
+      if (p.partner) { b.style.display = 'inline'; b.textContent = 'Use ' + p.partner.name; b.onclick = () => setSide('to', p.partner); }
+      else { b.style.display = 'none'; }
+      if (p.partner && !side.to) setSide('to', p.partner);
+    }
+    convert();
+  }
+  ['from', 'to'].forEach(which => {
+    let t = null;
+    const box = $(K[which] + 'Search'), choices = $(K[which] + 'Choices');
+    box.addEventListener('input', () => {
+      clearTimeout(t); const q = box.value.trim();
+      if (!q) { choices.style.display = 'none'; return; }
+      t = setTimeout(async () => {
+        const data = await (await fetch('/inventory-adjustments/product-search?q=' + encodeURIComponent(q))).json();
+        if (box.value.trim() !== q) return;
+        choices.innerHTML = '';
+        (data.products || []).forEach(p => {
+          const el = document.createElement('button'); el.type = 'button'; el.className = 'pos-item';
+          el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + esc(p.name) + '</span><span class="muted" style="font-size:12px;">on hand ' + fmt(p.on_hand) + ' ' + esc(p.base_unit) + '</span></div>';
+          el.onclick = () => setSide(which, p); choices.appendChild(el);
+        });
+        choices.style.display = data.products && data.products.length ? 'block' : 'none';
+      }, 200);
+    });
+    $(K[which] + 'Unit').addEventListener('change', convert);
+  });
+  $('mvFromQty').addEventListener('input', convert);
+  $('moveForm').addEventListener('submit', e => {
+    if (!side.from || !side.to) { e.preventDefault(); alert('Pick both items first.'); }
+  });
+  {% if move_product %}setSide('from', {{ move_product|tojson }}); $('moveCard').scrollIntoView(); $('mvFromQty').focus();{% endif %}
 })();
 </script>
 {% endif %}

@@ -976,6 +976,9 @@ class InventoryAdjustmentLine(Base):
     qty_input = Column(Numeric(14, 3))
     new_cost = Column(Numeric(12, 2))
     note = Column(String(255))
+    # One side of a "Move between items" — always posts as a correction
+    # (equity, off the P&L), whatever the adjustment's own reason.
+    is_move = Column(Boolean, nullable=False, server_default="false")
     # Filled in when posted — what it actually did.
     qty_base = Column(Numeric(18, 6))
     on_hand_before = Column(Numeric(18, 6))
