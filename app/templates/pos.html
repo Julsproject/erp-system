@@ -767,7 +767,43 @@ function flashCartRow(i) {
   tr.classList.add('row-bumped');
   setTimeout(() => tr.classList.remove('row-bumped'), 700);
 }
-function setCustomPrice(i, v) { cart[i].product.units[cart[i].unitIndex].price = parseFloat(v) || 0; refreshCartComputed(); }
+function setCustomPrice(i, v) {
+  const u = cart[i].product.units[cart[i].unitIndex];
+  if (u.origPrice === undefined) u.origPrice = u.price;  // the price it had before this sale touched it
+  u.price = parseFloat(v) || 0;
+  const btn = (document.querySelectorAll('#cartBody tr')[i] || document).querySelector('.set-price-btn');
+  if (btn) { btn.style.display = priceChanged(cart[i]) ? 'block' : 'none'; btn.textContent = '★ Set as new price'; }
+  refreshCartComputed();
+}
+
+// "★ Set as new price" — a manager who types a new price on a line (the
+// supplier's price went up) can keep it as the item's selling price instead
+// of re-typing it on every sale. Only the unit's Fixed price, and only for
+// a real product line (not a quick-created one).
+function canSetPrice(line) {
+  const u = line.product.units[line.unitIndex];
+  return IS_STAFF_USER && !line.customPrice && (u.tier || 'fixed') === 'fixed';
+}
+function priceChanged(line) {
+  const u = line.product.units[line.unitIndex];
+  return u.origPrice !== undefined && Math.abs(u.price - u.origPrice) > 0.004 && u.price > 0;
+}
+async function saveAsSellingPrice(i) {
+  const line = cart[i], u = line.product.units[line.unitIndex];
+  const cost = (line.product.cost_price || 0) * (u.factor || 1);
+  let msg = 'Set the selling price of ' + line.product.name + ' (' + u.name + ') to ' + peso(u.price) +
+            ' from now on?\n\nWas ' + peso(u.origPrice) + '.';
+  if (cost > 0 && u.price <= cost) msg += '\n\n⚠ That is at or below its cost (' + peso(cost) + ').';
+  if (!confirm(msg)) return;
+  const res = await fetch('/pos/set-price', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({product_id: line.product.id, unit_name: u.name, tier: u.tier || 'fixed', price: u.price})});
+  const data = await res.json().catch(() => ({}));
+  if (!data.ok) { alert(data.error || 'Could not save the new price.'); return; }
+  // Every cart line of this product/unit now starts from the new price.
+  cart.forEach(l => l.product.units.forEach(x => { if (x.name === u.name && (x.tier || 'fixed') === 'fixed') { x.origPrice = u.price; } }));
+  const btn = (document.querySelectorAll('#cartBody tr')[i] || document).querySelector('.set-price-btn');
+  if (btn) { btn.textContent = '✓ Saved as new price'; setTimeout(() => { btn.style.display = 'none'; }, 1800); }
+}
 
 function baseNeededByProduct() {
   const m = {};
@@ -796,7 +832,10 @@ function renderCart() {
         (over ? ' <span class="warn-tag" title="Selling beyond stock (allowed)">⚠ over stock</span>' : '') + '</td>' +
       '<td>' + (line.customPrice ? escapeHtml(unit.name) : '<select class="cart-unit" onchange="setUnit(' + i + ', this.value)">' + opts + '</select>') + '</td>' +
       '<td class="num"><input class="cart-qty' + (over ? ' over' : '') + '" type="number" step="0.001" min="0" value="' + fmtQty(line.qty) + '" oninput="setQty(' + i + ', this.value)"></td>' +
-      '<td class="num"><input class="cart-price" type="number" step="0.01" min="0" value="' + unit.price.toFixed(2) + '" oninput="setCustomPrice(' + i + ', this.value)"></td>' +
+      '<td class="num"><input class="cart-price" type="number" step="0.01" min="0" value="' + unit.price.toFixed(2) + '" oninput="setCustomPrice(' + i + ', this.value)">' +
+        (canSetPrice(line) ? '<button type="button" class="btn-link set-price-btn" style="display:' + (priceChanged(line) ? 'block' : 'none') +
+          ';font-size:11.5px;margin:3px 0 0 auto;white-space:nowrap;" onclick="saveAsSellingPrice(' + i + ')" title="Use this price from now on">★ Set as new price</button>' : '') +
+      '</td>' +
       '<td class="num"><div class="disc-cell"><button type="button" class="disc-toggle" onclick="toggleLineDiscType(' + i + ')">' + (line.discType === 'pct' ? '%' : '₱') + '</button><input class="cart-disc" type="number" step="0.01" min="0" value="' + line.discount + '" oninput="setDisc(' + i + ', this.value)"></div></td>' +
       '<td class="num strong">' + peso(total) + '</td>' +
       '<td><button class="btn-link danger" onclick="removeLine(' + i + ')">✕</button></td>';

@@ -583,7 +583,57 @@ def _product_payload_for_pos(db: Session, p: models.Product) -> dict:
         "on_hand": float((p.beginning_stock or 0) + (p.stock_qty or 0)),
         "units": units,
         "container": container,
+        "cost_price": float(p.cost_price or 0),  # per base unit — for the "below cost" check when saving a new price
     }
+
+
+@router.post("/pos/set-price")
+def pos_set_price(data: dict, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Save a price typed on a POS cart line as the item's selling price from
+    now on — for when a supplier's price went up and the shelf price has to
+    follow. Only the Fixed price of the unit on that line changes (the base
+    unit's selling price, or that ladder unit's own price); markup/margin
+    percentages are left as set. Admin/manager only, same as the Selling
+    Price tab — a cashier can still charge a different price on one sale."""
+    from . import pricing
+    if not user:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    if not is_staff(user):
+        return JSONResponse({"ok": False, "error": "Only a manager or admin can change a selling price."}, status_code=403)
+    product = db.get(models.Product, int(data.get("product_id") or 0))
+    if not product:
+        return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
+    if (data.get("tier") or "fixed") != "fixed":
+        return JSONResponse({"ok": False, "error": "Only the Fixed price can be set from here — markup/margin prices follow their percentage."}, status_code=400)
+    price = _money(_dec(data.get("price")))
+    if price <= 0:
+        return JSONResponse({"ok": False, "error": "The price must be more than ₱0."}, status_code=400)
+    unit_name = (data.get("unit_name") or "").strip()
+    base_unit = product.unit_type.name if product.unit_type else "Unit"
+    unit = None if unit_name in ("", base_unit) else next((u for u in product.units if u.name == unit_name), None)
+    if unit_name not in ("", base_unit) and unit is None:
+        return JSONResponse({"ok": False, "error": f"“{unit_name}” isn't a unit of {product.name}."}, status_code=400)
+    if unit is None:
+        old = Decimal(str(product.selling_price or 0))
+        product.selling_price = price
+        pricing.apply_to(product, product.cost_price, product.markup_pct, product.margin_pct)
+        changes = {"selling_price": [str(old), str(price)]}
+        per = base_unit
+    else:
+        old = Decimal(str(unit.price or 0))
+        unit.price = price
+        changes = {f"unit_price:{unit.name}": [str(old), str(price)]}
+        per = unit.name
+    factor = Decimal(str(unit.factor_to_base)) if unit is not None else Decimal("1")
+    cost = Decimal(str(product.cost_price or 0)) * factor
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="product", entity_id=product.id,
+        entity_label=product.name, changes=changes,
+        summary=f"Updated selling price for “{product.name}” from POS: ₱{old:,.2f} → ₱{price:,.2f} per {per}",
+    )
+    db.commit()
+    return {"ok": True, "old": float(old), "price": float(price), "per": per,
+            "below_cost": bool(cost > 0 and price <= cost), "cost": float(cost)}
 
 
 @router.get("/pos/search")
