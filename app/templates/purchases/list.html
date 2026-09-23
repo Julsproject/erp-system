@@ -23,42 +23,32 @@
 </div>
 
 <div class="tabs" style="margin-bottom:18px;">
-  <a class="tab {{ 'active' if not status_filter }}" href="/purchases">All <span class="muted">({{ all_count }})</span></a>
+  <a class="tab {{ 'active' if not status_filter }}" href="/purchases{{ ('?date_from=' ~ date_from ~ '&date_to=' ~ date_to) if (date_from and date_to) }}">All <span class="muted">({{ all_count }})</span></a>
   {% for s, label in labels.items() %}
-  <a class="tab {{ 'active' if status_filter == s }}" href="/purchases?status_filter={{ s }}">{{ label }} <span class="muted">({{ counts.get(s, 0) }})</span></a>
+  <a class="tab {{ 'active' if status_filter == s }}" href="/purchases?status_filter={{ s }}{{ ('&date_from=' ~ date_from ~ '&date_to=' ~ date_to) if (date_from and date_to) }}">{{ label }} <span class="muted">({{ counts.get(s, 0) }})</span></a>
   {% endfor %}
-  <a class="tab {{ 'active' if status_filter == 'return' }}" href="/purchases?status_filter=return">Returns <span class="muted">({{ counts.get('return', 0) }})</span></a>
+  <a class="tab {{ 'active' if status_filter == 'return' }}" href="/purchases?status_filter=return{{ ('&date_from=' ~ date_from ~ '&date_to=' ~ date_to) if (date_from and date_to) }}">Returns <span class="muted">({{ counts.get('return', 0) }})</span></a>
 </div>
 
 {% set qs = '&status_filter=' ~ status_filter if status_filter else '' %}
 {% set qs = qs ~ ('&q=' ~ q if q else '') %}
 {% set qs = qs ~ ('&date_from=' ~ date_from if date_from else '') %}
 {% set qs = qs ~ ('&date_to=' ~ date_to if date_to else '') %}
-{% set filter_count = (1 if date_from else 0) + (1 if date_to else 0) %}
+{# Dates: the same picker as the reports — keeps the status tab and search. #}
+{% set custom = date_from and date_to %}{% set days = 0 %}
+{% set pp_url = "/purchases" %}{% set pp_mode = "all" %}
+{% set pp_keep = {} %}
+{% if status_filter %}{% set _ = pp_keep.update({"status_filter": status_filter}) %}{% endif %}
+{% if q %}{% set _ = pp_keep.update({"q": q}) %}{% endif %}
 
 <form class="toolbar" method="get" action="/purchases">
   <input type="hidden" name="status_filter" value="{{ status_filter }}">
+  {% if date_from %}<input type="hidden" name="date_from" value="{{ date_from }}">{% endif %}
+  {% if date_to %}<input type="hidden" name="date_to" value="{{ date_to }}">{% endif %}
   <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search ref #, invoice #, or supplier…">
   <button class="btn-secondary" type="submit">Search</button>
-
-  <details class="filter-drop" {{ 'open' if filter_count }}>
-    <summary>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16l-6.5 7.5V19l-3 1.5v-8z"/></svg>
-      Filters
-      {% if filter_count %}<span class="filter-count">{{ filter_count }}</span>{% endif %}
-    </summary>
-    <div class="filter-panel">
-      <div class="field-row">
-        <div class="field"><label>From</label><input type="date" name="date_from" value="{{ date_from }}"></div>
-        <div class="field"><label>To</label><input type="date" name="date_to" value="{{ date_to }}"></div>
-      </div>
-      <div class="actions">
-        <a class="btn-link" href="/purchases{{ '?status_filter=' ~ status_filter if status_filter }}">Clear all</a>
-        <button class="btn" type="submit">Apply</button>
-      </div>
-    </div>
-  </details>
 </form>
+<div style="margin:-4px 0 12px;">{% include "_period_picker.html" %}</div>
 
 <div class="table-wrap">
   <table class="grid">
