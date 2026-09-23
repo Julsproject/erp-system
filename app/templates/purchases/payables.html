@@ -72,6 +72,24 @@
       <tr><td colspan="6" class="empty">No outstanding payables{{ ' match that search' if q or supplier_id or date_from else '' }}. 🎉</td></tr>
       {% endfor %}
     </tbody>
+    {% if rows %}
+    {% set pt = namespace(v=0) %}
+    {% for p, outstanding in rows %}{% set pt.v = pt.v + outstanding %}{% endfor %}
+    <tfoot>
+      <tr{% if pages <= 1 %} style="background:var(--surface-2);"{% endif %}>
+        <td colspan="4" class="strong">{{ 'Page total' if pages > 1 else 'Total' }}{% if pages > 1 %} <span class="muted" style="font-weight:400;">(page {{ page }} of {{ pages }})</span>{% endif %}</td>
+        <td class="num strong owed">{{ pt.v|peso }}</td>
+        <td></td>
+      </tr>
+      {% if pages > 1 %}
+      <tr style="background:var(--surface-2);">
+        <td colspan="4" class="strong">Total owed, all {{ pages }} pages{{ ' (this filter)' if (q or supplier_id or date_from) }}</td>
+        <td class="num strong owed">{{ total_owed|peso }}</td>
+        <td></td>
+      </tr>
+      {% endif %}
+    </tfoot>
+    {% endif %}
   </table>
 </div>
 
