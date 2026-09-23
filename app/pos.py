@@ -2112,6 +2112,7 @@ def void_sale(
         product = db.get(models.Product, pid, with_for_update=True)
         if not product or not base_qty:
             continue
+        value_before = Decimal(str(product.total_qty or 0)) * Decimal(str(product.cost_price or 0))
         _add_stock(product, base_qty)
         unit_cost = unit_cost_by_pid.get(pid, Decimal("0"))
         db.add(models.StockMovement(
@@ -2119,6 +2120,11 @@ def void_sale(
             ref=_display_invoice(sale), unit_cost=unit_cost, value=base_qty * unit_cost,
             note=f"Void: {reason}",
         ))
+        # The books take the goods back at the sale's cost; the shelf at
+        # today's — book the difference so the two stay in step.
+        stock_books.book_cost_variance(db, product, value_before=value_before, value_added=base_qty * unit_cost,
+                                       ref=_display_invoice(sale), note="Voided sale: cost changed since the sale",
+                                       entered_by_id=user.id)
     # Re-date corrections moved stock with their own journal entries; the
     # void hands that stock back too, so their entries are reversed with it.
     for entry in _sale_correction_entries(db, sale):
@@ -2210,6 +2216,7 @@ def unvoid_sale(
         if not product or base_qty <= 0:
             continue
         _replenish_from_source(db, product, base_qty, ref=_display_invoice(sale), note="Auto-opened restoring an un-voided sale")
+        value_before = Decimal(str(product.total_qty or 0)) * Decimal(str(product.cost_price or 0))
         _deduct_stock(product, base_qty)
         unit_cost = unit_cost_by_pid[pid]
         db.add(models.StockMovement(
@@ -2217,6 +2224,9 @@ def unvoid_sale(
             ref=_display_invoice(sale), unit_cost=unit_cost, value=-base_qty * unit_cost,
             note="Restored (un-voided)",
         ))
+        stock_books.book_cost_variance(db, product, value_before=value_before, value_added=-base_qty * unit_cost,
+                                       ref=_display_invoice(sale), note="Restored sale: cost changed since the sale",
+                                       entered_by_id=user.id)
     # Bring back the re-date corrections' entries the void reversed.
     for entry in _sale_correction_entries(db, sale):
         if entry.status == "reversed":
@@ -2801,6 +2811,7 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
         product = db.get(models.Product, pid, with_for_update=True)
         if not product:
             continue
+        value_before = Decimal(str(product.total_qty or 0)) * Decimal(str(product.cost_price or 0))
         _add_stock(product, qty_back)
         # Label the row with the cost the reversal actually works out to,
         # so the Stock Card's cost column can't disagree with its own value.
@@ -2810,6 +2821,9 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
             ref=ref, unit_cost=unit_cost, value=value_back,
             note="Reversed for item correction", created_at=sale.created_at,
         ))
+        stock_books.book_cost_variance(db, product, value_before=value_before, value_added=value_back, ref=ref,
+                                       note="Item correction: cost changed since the sale", stamp=sale.created_at,
+                                       entered_by_id=user.id)
     sale.lines = []  # cascade="all, delete-orphan" removes the old rows
 
     subtotal = Decimal("0")

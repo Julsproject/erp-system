@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from . import accounting, audit, models, pricing, settings_store, stock_books, stock_dates
 from .database import get_db
 from .deps import get_current_user, is_floor_staff, is_staff
-from .pos import MANILA, _find_backdated_stock_conflicts, _resolve_txn_datetime, _vat_of
+from .pos import MANILA, VAT_DIVISOR, VAT_RATE, _find_backdated_stock_conflicts, _resolve_txn_datetime, _vat_of
 from .sales import _resolve_settlement_datetime
 from .products import _get_or_create_category, _get_or_create_unit_type
 from .search_utils import multi_word_ilike
@@ -718,6 +718,12 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
 
     total = Decimal("0")
     new_movements = []  # ref (the PO #) isn't known until after purchase.id/ref_no
+    # The shop claims Input VAT, so a VAT invoice's goods cost the NET price:
+    # the VAT sits in Input VAT on the books, not in the item's cost. Costing
+    # items VAT-inclusive made every VAT delivery value the shelf ~12% above
+    # the ledger and put the claimed VAT into cost of goods a second time.
+    vat_applied = txn_type == "receive" and bool(data.get("vat_applied"))
+    net_factor = (Decimal("1") - VAT_RATE / VAT_DIVISOR) if vat_applied else Decimal("1")
                          # are assigned below, so these get it filled in afterward.
     for ln in lines:
         # Row-level lock — see the matching comment in pos.py's _finalize_sale.
@@ -798,6 +804,7 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
         note = "Already counted in a stock count covering this date — no stock effect" if product.id in skip_stock_ids else None
 
         if txn_type == "return":
+            value_before = Decimal(str(product.total_qty or 0)) * old_cost
             product.stock_qty = (product.stock_qty or Decimal("0")) - stock_qty
             movement = models.StockMovement(
                 product_id=product.id, qty_base=-stock_qty, reason="purchase-return",
@@ -805,10 +812,20 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
             )
             db.add(movement)
             new_movements.append(movement)
+            # The books take the goods out at the return's invoice price; the
+            # shelf at the item's average cost — book the difference.
+            variance_mv = stock_books.book_cost_variance(
+                db, product, value_before=value_before,
+                value_added=-(stock_qty * (unit_cost / factor if unit_cost > 0 else old_cost)),
+                ref=None, note="Returned at a price different from the average cost", stamp=stamp, entered_by_id=user.id,
+            )
+            if variance_mv is not None:
+                new_movements.append(variance_mv)
         else:
             value_before = Decimal(str(product.total_qty or 0)) * old_cost
+            net_unit_cost = unit_cost * net_factor
             if unit_cost > 0:
-                new_cost = _weighted_avg_cost(product, base_qty, unit_cost / factor)
+                new_cost = _weighted_avg_cost(product, base_qty, net_unit_cost / factor)
                 product.cost_price = new_cost
             product.stock_qty = (product.stock_qty or Decimal("0")) + stock_qty
             movement = models.StockMovement(
@@ -821,7 +838,7 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
             # goods already there or already sold — see stock_books.
             variance_mv = stock_books.book_cost_variance(
                 db, product, value_before=value_before,
-                value_added=stock_qty * (unit_cost / factor if unit_cost > 0 else old_cost),
+                value_added=stock_qty * (net_unit_cost / factor if unit_cost > 0 else old_cost),
                 ref=None, note="Cost re-averaged on this delivery", stamp=stamp, entered_by_id=user.id,
             )
             if variance_mv is not None:
@@ -843,7 +860,6 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
         return JSONResponse({"ok": False, "error": "No valid items to save."}, status_code=400)
 
     purchase.total = _money(total)
-    vat_applied = txn_type == "receive" and bool(data.get("vat_applied"))
     purchase.vat_amount = _vat_of(purchase.total) if vat_applied else Decimal("0")
     purchase.net_amount = purchase.total - purchase.vat_amount
     db.flush()
@@ -1022,20 +1038,38 @@ def cancel_purchase(purchase_id: int, request: Request, db: Session = Depends(ge
     if not purchase or purchase.status == "cancelled":
         return RedirectResponse(f"/purchases/{purchase_id}", status_code=http_status.HTTP_302_FOUND)
 
-    for line in purchase.lines:
-        if not line.product_id:
-            continue
-        product = db.get(models.Product, line.product_id, with_for_update=True)
+    # Undo only what the purchase really moved — a line dated inside a Stock
+    # Count moved nothing (the count already had it), so cancelling it must
+    # not move stock either. Lines of the same product share one reversal.
+    moved = {}
+    for m in (db.query(models.StockMovement)
+              .filter(models.StockMovement.ref == purchase.ref_no,
+                      models.StockMovement.reason.in_(("purchase", "purchase-return", "purchase-edit-reverse"))).all()):
+        moved[m.product_id] = moved.get(m.product_id, Decimal("0")) + Decimal(str(m.qty_base or 0))
+    p_total = Decimal(str(purchase.total or 0))
+    net_ratio = ((p_total - Decimal(str(purchase.vat_amount or 0))) / p_total) if p_total else Decimal("1")
+    for pid in dict.fromkeys(l.product_id for l in purchase.lines if l.product_id):
+        product = db.get(models.Product, pid, with_for_update=True)
         if not product:
             continue
-        base_qty = (line.qty or Decimal("0")) * (line.unit_factor or Decimal("1"))
-        delta = -base_qty if purchase.txn_type == "receive" else base_qty
+        delta = -moved.get(pid, Decimal("0"))
+        line_net = sum((Decimal(str(l.line_total or 0)) for l in purchase.lines if l.product_id == pid), Decimal("0")) * net_ratio
+        value_before = Decimal(str(product.total_qty or 0)) * Decimal(str(product.cost_price or 0))
         product.stock_qty = (product.stock_qty or Decimal("0")) + delta
-        cancel_unit_cost = Decimal(str(line.new_cost or product.cost_price or 0))
+        cancel_unit_cost = Decimal(str(product.cost_price or 0))
         db.add(models.StockMovement(
             product_id=product.id, qty_base=delta, reason="purchase-cancelled",
             unit_cost=cancel_unit_cost, value=delta * cancel_unit_cost, ref=purchase.ref_no,
         ))
+        # The books reverse the value that went to Inventory for this line;
+        # book whatever the shelf moved differently.
+        expected = sum((Decimal(str(l.qty or 0)) * Decimal(str(l.unit_factor or 1)) for l in purchase.lines if l.product_id == pid), Decimal("0"))
+        share = (abs(moved.get(pid, Decimal("0"))) / expected) if expected else Decimal("1")
+        sign = Decimal("-1") if purchase.txn_type == "receive" else Decimal("1")
+        stock_books.book_cost_variance(
+            db, product, value_before=value_before, value_added=sign * line_net * share,
+            ref=purchase.ref_no, note="Cancelled purchase", stamp=purchase.created_at, entered_by_id=user.id,
+        )
 
     purchase.status = "cancelled"
     purchase.cancelled_at = func.now()
@@ -1419,6 +1453,8 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
     # counterpart steering below only blocks a *newly chosen* base-unit line,
     # not the same one this purchase already had.
     old_unit_by_product = {}
+    old_total = Decimal(str(purchase.total or 0))
+    old_net_ratio = ((old_total - Decimal(str(purchase.vat_amount or 0))) / old_total) if old_total else Decimal("1")
     for line in purchase.lines:
         if not line.product_id:
             continue
@@ -1427,7 +1463,15 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
         if not product:
             continue
         base_qty = Decimal(str(line.qty or 0)) * Decimal(str(line.unit_factor or 1))
+        value_before = Decimal(str(product.total_qty or 0)) * Decimal(str(product.cost_price or 0))
         product.stock_qty = (product.stock_qty or Decimal("0")) - base_qty
+        # The books take this line's net invoice value back out; the shelf
+        # removes it at today's average — book the difference (see stock_books).
+        stock_books.book_cost_variance(
+            db, product, value_before=value_before, value_added=-Decimal(str(line.line_total or 0)) * old_net_ratio,
+            ref=purchase.ref_no, note="Item correction: reversing the old line", stamp=purchase.created_at,
+            entered_by_id=user.id,
+        )
         unit_cost = Decimal(str(line.new_cost or product.cost_price or 0))
         db.add(models.StockMovement(
             product_id=product.id, qty_base=-base_qty, reason="purchase-edit-reverse",
@@ -1437,6 +1481,8 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
     purchase.lines = []  # cascade="all, delete-orphan" removes the old rows
 
     total = Decimal("0")
+    vat_applied = bool(data.get("vat_applied")) if "vat_applied" in data else bool(purchase.vat_amount)
+    net_factor = (Decimal("1") - VAT_RATE / VAT_DIVISOR) if (vat_applied and purchase.txn_type == "receive") else Decimal("1")
     for ln in new_lines:
         product = db.get(models.Product, int(ln["product_id"]), with_for_update=True) if ln.get("product_id") else None
         if not product:
@@ -1470,8 +1516,9 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
         old_cost = Decimal(str(product.cost_price or 0))
         new_cost = old_cost
         value_before = Decimal(str(product.total_qty or 0)) * old_cost
+        net_unit_cost = unit_cost * net_factor   # VAT invoice: the item costs the net price (see create_purchase)
         if unit_cost > 0:
-            new_cost = _weighted_avg_cost(product, base_qty, unit_cost / factor)
+            new_cost = _weighted_avg_cost(product, base_qty, net_unit_cost / factor)
             product.cost_price = new_cost
         product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
         db.add(models.StockMovement(
@@ -1481,7 +1528,7 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
         ))
         stock_books.book_cost_variance(
             db, product, value_before=value_before,
-            value_added=base_qty * (unit_cost / factor if unit_cost > 0 else old_cost),
+            value_added=base_qty * (net_unit_cost / factor if unit_cost > 0 else old_cost),
             ref=purchase.ref_no, note="Cost re-averaged on this delivery (items corrected)",
             stamp=purchase.created_at, entered_by_id=user.id,
         )
@@ -1503,7 +1550,6 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
         return JSONResponse({"ok": False, "error": "No valid items to save."}, status_code=400)
 
     purchase.total = _money(total)
-    vat_applied = bool(data.get("vat_applied")) if "vat_applied" in data else bool(purchase.vat_amount)
     purchase.vat_amount = _vat_of(purchase.total) if vat_applied else Decimal("0")
     purchase.net_amount = purchase.total - purchase.vat_amount
 

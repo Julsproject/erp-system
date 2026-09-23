@@ -1928,6 +1928,10 @@ def merge_products(
 
     keep.beginning_stock = (keep.beginning_stock or 0) + (dup.beginning_stock or 0)
     keep.stock_qty = (keep.stock_qty or 0) + (dup.stock_qty or 0)
+    # The stock now lives on `keep` — leaving it on the archived duplicate
+    # too counts it twice (archived items still hold value on the books).
+    dup.beginning_stock = 0
+    dup.stock_qty = 0
 
     if not keep.barcode and dup.barcode:
         keep.barcode = dup.barcode
