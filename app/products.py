@@ -1550,6 +1550,7 @@ def price_search(
                 "markup_pct": float(p.markup_pct or 0),
                 "margin_pct": float(p.margin_pct or 0),
                 "needs_review": flagged, "review_reason": reason,
+                **_pricing_packs(db, p),
             })
         return {"products": flagged_rows, "review_count": review_count}
 
@@ -1574,8 +1575,30 @@ def price_search(
             "markup_pct": float(p.markup_pct or 0),
             "margin_pct": float(p.margin_pct or 0),
             "needs_review": flagged, "review_reason": reason,
+            **_pricing_packs(db, p),
         })
     return {"products": rows, "review_count": review_count}
+
+
+def _pricing_packs(db: Session, p: models.Product) -> dict:
+    """What the cost box is per, and the packs it adds up to — so the Selling
+    Price tab can show "₱12.00 per Piece = ₱960.00 per Box" as it's typed. A
+    per-box cost typed into a per-piece box is otherwise easy to miss (TOX 6,
+    2026-09-23). An Open/Retail item also shows the sealed pack it opens from."""
+    base = p.unit_type.name if p.unit_type else "unit"
+    packs = [{"name": u.name, "factor": float(u.factor_to_base)}
+             for u in sorted(p.units, key=lambda u: u.factor_to_base or 0) if (u.factor_to_base or 0) > 1]
+    if p.replenish_from_id:
+        src = db.get(models.Product, p.replenish_from_id)
+        if src:
+            if src.unit_type_id != p.unit_type_id and p.replenish_factor:
+                factor, pack = float(p.replenish_factor), (src.unit_type.name if src.unit_type else "pack")
+            else:
+                big = max(src.units, key=lambda u: u.factor_to_base or 0, default=None)
+                factor, pack = (float(big.factor_to_base), big.name) if big else (0, None)
+            if factor > 1 and pack and not any(x["name"] == pack and x["factor"] == factor for x in packs):
+                packs.append({"name": pack, "factor": factor, "source": src.name})
+    return {"base_unit": base, "packs": packs}
 
 
 @router.post("/products/{product_id:int}/pricing")

@@ -36,8 +36,9 @@
 
     <div class="pe-cost-row">
       <label style="display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--muted);font-weight:600;">
-        Cost of Sales
+        <span>Cost of Sales <span id="peCostPer" style="font-weight:700;color:var(--ink,#0f172a);"></span></span>
         <input id="peCost" class="pe-cost-input" type="number" step="0.01" min="0" inputmode="decimal" oninput="peRecalc()">
+        <span id="peCostPacks" style="font-weight:600;color:var(--ink,#0f172a);font-size:13px;"></span>
       </label>
     </div>
 
@@ -304,9 +305,26 @@ function peShowRow(price, cost, priceEl, profitEl, marginEl) {
   marginEl.title = belowTarget ? ('Below your ' + MIN_MARGIN_PCT + '% minimum margin target') : '';
 }
 
+// The cost box is per base unit. Spell out what that means per pack, live,
+// so "₱12 a box" typed as "₱12 a piece" (₱960 a box) is obvious before saving.
+function peShowPacks(cost) {
+  var p = peProducts.find(function (x) { return x.id === peSelectedId; });
+  var per = document.getElementById('peCostPer'), out = document.getElementById('peCostPacks');
+  if (!p) { per.textContent = ''; out.textContent = ''; return; }
+  per.textContent = '· per ' + (p.base_unit || 'unit');
+  var packs = p.packs || [];
+  if (!packs.length) { out.textContent = ''; return; }
+  out.innerHTML = packs.map(function (k) {
+    return '= <span style="color:var(--accent,#1d4ed8);">' + peMoney(cost * k.factor) + ' per ' + peEsc(k.name) + '</span>' +
+      ' <span class="muted" style="font-weight:400;">(' + (+k.factor.toFixed(4)) + ' ' + peEsc(p.base_unit) +
+      (k.source ? ', sealed ' + peEsc(k.source) : '') + ')</span>';
+  }).join('<br>');
+}
+
 function peRecalc(skipPriceId) {
   if (!peSelectedId) return;
   var cost = parseFloat(document.getElementById('peCost').value) || 0;
+  peShowPacks(cost);
   var hint = document.getElementById('peHint');
 
   var fixed = parseFloat(document.getElementById('peFixedPrice').value) || 0;
