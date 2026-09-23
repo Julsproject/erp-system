@@ -40,4 +40,51 @@
   </table>
 </div>
 {% endif %}
+
+<h2 style="margin:28px 0 6px;font-size:18px;">Cost of sales</h2>
+<p class="muted" style="margin:0 0 12px;">Every sale posts Dr Cost of Sales / Cr Inventory for what it took off the shelf (qty × the cost frozen on the sale line).
+  Sales entered before this was switched on have revenue in the books but no cost yet.</p>
+{% if cogs_msg %}<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;">{{ cogs_msg }}</div>{% endif %}
+{% if cogs_error %}<div class="alert">{{ cogs_error }}</div>{% endif %}
+{% if not missing_all and not cogs_error %}
+<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;">Every posted sale has its cost of sales in the books.</div>
+{% elif missing_all %}
+<div class="alert" style="background:#fffbeb;border-color:#fde68a;color:#92400e;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+  <span><strong>{{ missing_all|length }}</strong> sale(s) are missing cost of sales, <strong>{{ missing_total|peso }}</strong> in total
+    ({{ missing_period|length }} in this period). Posting adds one entry per sale, dated the sale's own date.</span>
+  <form method="post" action="/accounting/reconcile-sales/post-cogs"
+        onsubmit="return confirm('Post cost of sales for {{ missing_all|length }} sale(s), {{ missing_total|peso }} in total? Each gets its own journal entry dated on the sale.');">
+    <button class="btn" type="submit">Post missing cost of sales</button>
+  </form>
+</div>
+{% if missing_period %}
+<div class="table-wrap">
+  <table class="grid">
+    <thead><tr><th>Invoice #</th><th>Date</th><th class="num">Booked</th><th class="num">Should be</th><th class="num">To post</th><th></th></tr></thead>
+    <tbody>
+      {% for s, have, should in missing_period[:50] %}
+      <tr>
+        <td class="strong">{{ s.invoice_no }}{% if s.is_voided %} <span class="muted">(voided)</span>{% endif %}</td>
+        <td>{{ s.created_at.strftime('%b %d, %Y') if s.created_at else '' }}</td>
+        <td class="num">{{ have|peso }}</td>
+        <td class="num">{{ should|peso }}</td>
+        <td class="num strong">{{ (should - have)|peso }}</td>
+        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales">Receipt</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if missing_period|length > 50 %}<p class="muted">…and {{ missing_period|length - 50 }} more in this period.</p>{% endif %}
+{% endif %}
+{% endif %}
+
+<h2 style="margin:28px 0 6px;font-size:18px;">Inventory: ledger vs shelf</h2>
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ ledger_inventory|peso }}</span><span>Inventory account (ledger)</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ stock_value|peso }}</span><span>Stock on hand × cost (today)</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ (ledger_inventory - stock_value)|peso }}</span><span>Difference</span></div>
+</div>
+<p class="hint">These only match once every stock movement reaches the books. Stock you already had before the system started
+  (opening inventory), stock counts, and exchanges still don't post, so a difference here is expected for now.</p>
 {% endblock %}

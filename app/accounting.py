@@ -7,6 +7,7 @@ accounting module plan for why, and the order they're meant to land in.
 """
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import openpyxl
@@ -15,9 +16,9 @@ from openpyxl.utils import get_column_letter
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
-from . import models
+from . import audit, models
 from .database import get_db
 from .deps import get_current_user, is_admin
 from .templating import templates
@@ -276,11 +277,43 @@ SALE_FUNCTION_KEYS = {
 }
 
 
+def sale_cogs(sale: models.Sale) -> Decimal:
+    """Cost of what this sale took off the shelf: qty x factor x the cost
+    frozen on each line at the moment of sale — the same formula the
+    operational P&L's gross profit uses, so the two agree. Only a plain
+    "sale" carries COGS: an SI just re-documents DRs that already did."""
+    if sale.txn_type != "sale":
+        return ZERO
+    total = sum(
+        (Decimal(str(ln.qty or 0)) * Decimal(str(ln.unit_factor or 1)) * Decimal(str(ln.unit_cost or 0))
+         for ln in sale.lines),
+        ZERO,
+    )
+    return _money(total)
+
+
+def _cogs_lines(amount: Decimal) -> list:
+    """Dr Cost of Sales / Cr Inventory (swapped for a negative amount)."""
+    if not amount:
+        return []
+    forward = amount > 0
+    return [
+        {"function_key": "SALE_COGS", "amount": abs(amount), "side": "debit" if forward else "credit", "memo": "cost of goods sold"},
+        {"function_key": "SALE_INVENTORY", "amount": abs(amount), "side": "credit" if forward else "debit", "memo": "cost of goods sold"},
+    ]
+
+
+def _sale_txn_date(sale: models.Sale) -> date:
+    return sale.created_at.astimezone(MANILA).date() if sale.created_at else _today()
+
+
 def post_sale(db: Session, sale: models.Sale, *, method_rows: list, receivable_amount: Decimal, entered_by_id: int = None):
-    """Called from pos.py's _finalize_sale right after sale.id is flushed.
-    Posts revenue + VAT + whatever the customer actually paid with — no
-    COGS/Inventory leg yet (see the accounting plan: that waits on Purchases
-    posting, which is what actually builds up the Inventory account)."""
+    """Called from pos.py's _finalize_sale right after sale.id is flushed,
+    and again by every correction flow after reversing the old entry.
+    Posts revenue + VAT + whatever the customer actually paid with, plus
+    the cost leg (Dr Cost of Sales / Cr Inventory, see sale_cogs) in the
+    same entry — so a void, un-void or item correction that reverses or
+    re-posts this entry carries the cost with it automatically."""
     lines = []
     for method, amount in method_rows:
         if method in ("receivable", "cheque"):
@@ -298,6 +331,7 @@ def post_sale(db: Session, sale: models.Sale, *, method_rows: list, receivable_a
         lines.append({"function_key": "SALES_REVENUE", "amount": net, "side": "credit"})
     if vat > 0:
         lines.append({"function_key": "OUTPUT_VAT", "amount": vat, "side": "credit"})
+    lines.extend(_cogs_lines(sale_cogs(sale)))
 
     if not lines:
         return None
@@ -351,6 +385,17 @@ def reverse_sale_posting(db: Session, sale: models.Sale, *, reason: str, entered
                 models.JournalEntry.status == "posted")
         .first()
     )
+    # A sale posted before COGS went inline got its cost as separate
+    # "sale_cogs" entries (see sync_sale_cogs) — they go with it, or a
+    # re-post (which now carries COGS inline) would book the cost twice.
+    for cogs_entry in (
+        db.query(models.JournalEntry)
+        .filter(models.JournalEntry.source_type == "sale_cogs", models.JournalEntry.source_id == sale.id,
+                models.JournalEntry.status == "posted")
+        .all()
+    ):
+        reverse_journal(db, cogs_entry, reason=reason, entered_by_id=entered_by_id,
+                        txn_date=cogs_entry.txn_date if same_date else None)
     if not entry:
         return None
     return reverse_journal(db, entry, reason=reason, entered_by_id=entered_by_id,
@@ -379,7 +424,105 @@ def restore_sale_posting(db: Session, sale: models.Sale, *, reason: str, entered
     )
     if not reversal:
         return None
-    return reverse_journal(db, reversal, reason=reason, entered_by_id=entered_by_id)
+    restored = reverse_journal(db, reversal, reason=reason, entered_by_id=entered_by_id)
+    # The restored entry brings back exactly what was reversed — for a sale
+    # posted before COGS went inline that's revenue only, so top up the
+    # cost, on the day it was restored (same as the restore itself).
+    db.flush()
+    try:
+        sync_sale_cogs(db, sale, entered_by_id=entered_by_id, txn_date=_today())
+    except PostingError:
+        pass
+    return restored
+
+
+def booked_cogs_by_sale(db: Session, sale_ids=None) -> dict:
+    """Net Cost of Sales the ledger actually holds for each sale: every
+    "sale"/"sale_cogs" entry tied to it, plus reversals of those (and
+    reversals of reversals, from an un-void), summed on the Cost of Sales
+    account. {sale_id: Decimal}; a sale with nothing booked is left out."""
+    cogs_account = _resolve_mapping(db, "SALE_COGS")
+    q = db.query(models.JournalEntry.id, models.JournalEntry.source_id).filter(
+        models.JournalEntry.source_type.in_(("sale", "sale_cogs")),
+        models.JournalEntry.status != "draft",
+    )
+    if sale_ids is not None:
+        q = q.filter(models.JournalEntry.source_id.in_(list(sale_ids) or [0]))
+    owner = {eid: sid for eid, sid in q.all()}
+    frontier = set(owner)
+    while frontier:
+        rows = (
+            db.query(models.JournalEntry.id, models.JournalEntry.is_reversal_of_id)
+            .filter(models.JournalEntry.is_reversal_of_id.in_(frontier), models.JournalEntry.status != "draft")
+            .all()
+        )
+        frontier = set()
+        for eid, of in rows:
+            if eid not in owner:
+                owner[eid] = owner[of]
+                frontier.add(eid)
+    booked = {}
+    ids = list(owner)
+    for i in range(0, len(ids), 5000):
+        for entry_id, debit, credit in (
+            db.query(models.JournalLine.entry_id, models.JournalLine.debit, models.JournalLine.credit)
+            .filter(models.JournalLine.entry_id.in_(ids[i:i + 5000]), models.JournalLine.account_id == cogs_account.id)
+            .all()
+        ):
+            sid = owner[entry_id]
+            booked[sid] = booked.get(sid, ZERO) + Decimal(str(debit or 0)) - Decimal(str(credit or 0))
+    return booked
+
+
+def _sale_has_revenue_entry(db: Session, sale_id: int) -> bool:
+    return db.query(models.JournalEntry.id).filter(
+        models.JournalEntry.source_type == "sale", models.JournalEntry.source_id == sale_id,
+    ).first() is not None
+
+
+def sync_sale_cogs(db: Session, sale: models.Sale, *, booked: Decimal = None, entered_by_id: int = None, txn_date=None):
+    """Post whatever Cost of Sales this sale is missing (or has too much of)
+    as a separate "sale_cogs" entry, dated the sale's own date unless told
+    otherwise. What it should hold: sale_cogs() for a live sale, nothing for
+    a voided one. Skips a sale whose revenue never reached the books at all
+    — that's a gap for Reconcile Sales to fix first, not half-post. Returns
+    the entry, or None when it was already right."""
+    if not _sale_has_revenue_entry(db, sale.id):
+        return None
+    should = ZERO if sale.is_voided else sale_cogs(sale)
+    if booked is None:
+        booked = booked_cogs_by_sale(db, [sale.id]).get(sale.id, ZERO)
+    diff = _money(should - booked)
+    if not diff:
+        return None
+    return post_journal(
+        db, txn_date=txn_date or _sale_txn_date(sale), source_type="sale_cogs", source_id=sale.id,
+        description=f"Cost of sales — {sale.invoice_no}", reference_no=sale.invoice_no,
+        lines=_cogs_lines(diff), entered_by_id=entered_by_id,
+    )
+
+
+def sales_missing_cogs(db: Session, period_start: date = None, period_end: date = None):
+    """[(sale, booked, should)] for every sale whose booked Cost of Sales
+    doesn't match its lines — mostly sales posted before COGS went inline.
+    Only sales whose revenue reached the books (see sync_sale_cogs)."""
+    booked = booked_cogs_by_sale(db)
+    with_revenue = {sid for (sid,) in db.query(models.JournalEntry.source_id.distinct())
+                    .filter(models.JournalEntry.source_type == "sale").all()}
+    q = (
+        db.query(models.Sale)
+        .options(selectinload(models.Sale.lines))
+        .filter(models.Sale.id.in_(with_revenue or {0}), models.Sale.txn_type == "sale")
+    )
+    if period_start and period_end:
+        q = q.filter(_local_date(models.Sale.created_at).between(period_start, period_end))
+    out = []
+    for sale in q.order_by(models.Sale.created_at).all():
+        should = ZERO if sale.is_voided else sale_cogs(sale)
+        have = booked.get(sale.id, ZERO)
+        if _money(should - have):
+            out.append((sale, have, should))
+    return out
 
 
 def post_receivable_settlement(db: Session, sale: models.Sale, *, amount: Decimal, method: str, entered_by_id: int = None, txn_date=None):
@@ -2053,11 +2196,62 @@ def reconcile_sales(
         }
         unposted = [s for s in sales if s.id not in posted_ids]
 
+    # Cost of sales: what the ledger holds vs what the sales' own lines say.
+    try:
+        missing_all = sales_missing_cogs(db)
+        cogs_error = ""
+    except PostingError as e:
+        missing_all, cogs_error = [], str(e)
+    missing_period = [
+        m for m in missing_all
+        if m[0].created_at and period_start <= m[0].created_at.astimezone(MANILA).date() <= period_end
+    ]
+    missing_total = sum((should - have for _, have, should in missing_all), ZERO)
+
+    # Inventory on the ledger vs on the shelf (stock x current cost), today.
+    inv_account = db.query(models.Account).filter(models.Account.system_key == "INVENTORY_MERCHANDISE").first()
+    ledger_inventory = _account_balance_before(db, inv_account, _today() + timedelta(days=1)) if inv_account else ZERO
+    stock_value = db.query(func.coalesce(func.sum(
+        (models.Product.beginning_stock + models.Product.stock_qty) * models.Product.cost_price), 0)
+    ).filter(models.Product.is_active.is_(True)).scalar()
+    stock_value = _money(stock_value or 0)
+
     return templates.TemplateResponse(
         "accounting/reconcile_sales.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "ledger_total": ledger_total, "report_total": report_total,
          "diff": ledger_total - report_total, "unposted": unposted,
+         "missing_all": missing_all, "missing_period": missing_period, "missing_total": missing_total,
+         "cogs_error": cogs_error, "cogs_msg": request.query_params.get("cogs_msg", ""),
+         "ledger_inventory": ledger_inventory, "stock_value": stock_value,
          "days": days, "date_from": date_from, "date_to": date_to,
          "period_start": period_start, "period_end": period_end, "custom": custom},
     )
+
+
+@router.post("/accounting/reconcile-sales/post-cogs")
+def reconcile_post_missing_cogs(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Catch-up for sales posted before COGS went inline (and any other
+    mismatch): one "sale_cogs" entry per sale, dated the sale's own date,
+    for exactly the difference. Safe to run again — a sale already right
+    is skipped."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+    try:
+        missing = sales_missing_cogs(db)
+        total = ZERO
+        for sale, have, should in missing:
+            sync_sale_cogs(db, sale, booked=have, entered_by_id=user.id)
+            total += should - have
+    except PostingError as e:
+        db.rollback()
+        return RedirectResponse(f"/accounting/reconcile-sales?cogs_msg={quote('Could not post: ' + str(e))}", status_code=302)
+    audit.record(
+        db, user=user, request=request, action="create", entity_type="journal_entry",
+        summary=f"Posted missing cost of sales for {len(missing)} sale(s), net ₱{total:,.2f}",
+    )
+    db.commit()
+    msg = f"Posted cost of sales for {len(missing)} sale(s), net ₱{total:,.2f}."
+    return RedirectResponse(f"/accounting/reconcile-sales?cogs_msg={quote(msg)}", status_code=302)
