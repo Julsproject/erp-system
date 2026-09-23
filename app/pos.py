@@ -539,27 +539,36 @@ def _product_payload_for_pos(db: Session, p: models.Product) -> dict:
     # products priced the old way look exactly as before.
     # `name` stays the plain unit (what's stored on the sale line); `label`
     # is what the dropdown shows; `tier` is recorded against the line.
+    # A markup/margin price only counts as "set" once its percentage is. At
+    # 0% it's simply the cost (cost x 1.00), and offering that in the
+    # dropdown next to the real price let a cashier sell at cost by picking
+    # the wrong line.
+    def _is_set(price, pct):
+        return (price or 0) > 0 and (pct or 0) != 0
+
     units = []
     if not has_open_counterpart:
         units.append({"name": base_unit, "label": base_unit, "factor": 1.0,
                       "price": float(p.selling_price or 0), "tier": "fixed"})
-        if (p.markup_price or 0) > 0:
+        if _is_set(p.markup_price, p.markup_pct):
             units.append({"name": base_unit, "label": f"{base_unit} · Markup", "factor": 1.0,
                           "price": float(p.markup_price), "tier": "markup"})
-        if (p.margin_price or 0) > 0:
+        if _is_set(p.margin_price, p.margin_pct):
             units.append({"name": base_unit, "label": f"{base_unit} · Margin", "factor": 1.0,
                           "price": float(p.margin_price), "tier": "margin"})
     for u in p.units:
         # Same "one price stays plain, markup/margin only show up once set"
         # rule as the base unit above — an existing product with a flat
         # per-unit price still looks exactly as it did before this existed.
-        if (u.price or 0) > 0 or ((u.markup_price or 0) <= 0 and (u.margin_price or 0) <= 0):
+        u_markup = _is_set(u.markup_price, u.markup_pct)
+        u_margin = _is_set(u.margin_price, u.margin_pct)
+        if (u.price or 0) > 0 or (not u_markup and not u_margin):
             units.append({"name": u.name, "label": u.name, "factor": float(u.factor_to_base or 1),
                           "price": float(u.price or 0), "tier": "fixed"})
-        if (u.markup_price or 0) > 0:
+        if u_markup:
             units.append({"name": u.name, "label": f"{u.name} · Markup", "factor": float(u.factor_to_base or 1),
                           "price": float(u.markup_price), "tier": "markup"})
-        if (u.margin_price or 0) > 0:
+        if u_margin:
             units.append({"name": u.name, "label": f"{u.name} · Margin", "factor": float(u.factor_to_base or 1),
                           "price": float(u.margin_price), "tier": "margin"})
     if not units:
