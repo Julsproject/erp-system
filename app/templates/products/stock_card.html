@@ -139,6 +139,12 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
         </td>
         <td class="num strong">{{ range_value_opening|peso }}</td>
       </tr>
+      <tr style="background:var(--surface-2);border-top:2px solid var(--line);">
+        <td class="strong" colspan="3">Total{{ ' for this range' if (date_from or date_to) }}</td>
+        <td class="num" style="color:var(--ok);font-weight:700;">+{{ range_value_in|peso }}</td>
+        <td class="num" style="color:var(--danger);font-weight:700;">−{{ range_value_out|peso }}</td>
+        <td></td>
+      </tr>
       {% endif %}
     </tbody>
     {% else %}
@@ -182,6 +188,12 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
         </td>
         <td class="num strong">{{ range_opening_disp if view_unit_id else range_opening|qty }}</td>
         <td colspan="2"></td>
+      </tr>
+      <tr style="background:var(--surface-2);border-top:2px solid var(--line);">
+        <td class="strong" colspan="3">Total{{ ' for this range' if (date_from or date_to) }}</td>
+        <td class="num" style="color:var(--ok);font-weight:700;">+{{ range_in_disp if view_unit_id else range_in|qty }}</td>
+        <td class="num" style="color:var(--danger);font-weight:700;">−{{ range_out_disp if view_unit_id else range_out|qty }}</td>
+        <td colspan="3"></td>
       </tr>
       {% endif %}
     </tbody>
