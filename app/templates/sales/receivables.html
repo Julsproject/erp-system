@@ -63,6 +63,25 @@
       <tr><td colspan="7" class="empty">No outstanding receivables{{ ' match that search' if q else '' }}. 🎉</td></tr>
       {% endfor %}
     </tbody>
+    {% if rows %}
+    {% set pt = namespace(total=0, credit=0) %}
+    {% for s, outstanding in rows %}{% set pt.total = pt.total + (s.total or 0) %}{% set pt.credit = pt.credit + outstanding %}{% endfor %}
+    <tfoot>
+      <tr{% if pages <= 1 %} style="background:var(--surface-2);"{% endif %}>
+        <td colspan="4" class="strong">{{ 'Page total' if pages > 1 else 'Total' }}{% if pages > 1 %} <span class="muted" style="font-weight:400;">(page {{ page }} of {{ pages }})</span>{% endif %}</td>
+        <td class="num strong">{{ pt.total|peso }}</td>
+        <td class="num strong owed">{{ pt.credit|peso }}</td>
+        <td></td>
+      </tr>
+      {% if pages > 1 %}
+      <tr style="background:var(--surface-2);">
+        <td colspan="5" class="strong">Total credit, all {{ pages }} pages{{ ' (this filter)' if (q or date_from) }}</td>
+        <td class="num strong owed">{{ total_credit|peso }}</td>
+        <td></td>
+      </tr>
+      {% endif %}
+    </tfoot>
+    {% endif %}
   </table>
 </div>
 

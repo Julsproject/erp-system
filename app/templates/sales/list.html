@@ -130,7 +130,16 @@
       {% endfor %}
     </tbody>
     {% if sales %}
+    {% set pt = namespace(v=0) %}
+    {% for s in sales %}{% if not (search_all and row_status.get(s.id) == 'voided') %}{% set pt.v = pt.v + row_totals.get(s.id, s.total) %}{% endif %}{% endfor %}
     <tfoot>
+      {% if pages > 1 %}
+      <tr>
+        <td colspan="{{ 8 if search_all else 7 }}" class="strong">Page total <span class="muted" style="font-weight:400;">(page {{ page }} of {{ pages }}{{ ', excl. voided' if search_all }})</span></td>
+        <td class="num strong {{ 'neg' if pt.v < 0 }}">{{ pt.v|peso }}</td>
+        <td></td>
+      </tr>
+      {% endif %}
       <tr style="background:var(--surface-2);">
         <td colspan="{{ 8 if search_all else 7 }}" class="strong">Total{{ ' (excl. voided)' if search_all else (' (this filter)' if (q or type_filter or date_from or date_to or receipt_type)) }}</td>
         <td class="num strong">{{ totals.sales|peso }}</td>
