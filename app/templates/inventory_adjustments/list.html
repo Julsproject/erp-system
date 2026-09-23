@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Inventory Adjustments · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Inventory Adjustments</h1>
+    <p class="muted">Correct an item's stock and/or cost on a given date. Posting updates the Stock Card and the books together.</p>
+  </div>
+  <div class="head-actions">
+    <a class="btn-link" href="/reports/inventory-adjustments">Adjustments report →</a>
+  </div>
+</div>
+
+<section class="card" style="margin-bottom:18px;">
+  <form method="post" action="/inventory-adjustments/new" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+    <label style="margin:0;">Adjustment date
+      <input type="date" name="adj_date" value="{{ today.isoformat() }}" max="{{ today.isoformat() }}" required>
+    </label>
+    <label style="margin:0;min-width:260px;">Reason
+      <select name="reason">
+        {% for key, label, books in reasons %}
+        <option value="{{ key }}">{{ label }} {{ '— not P&L' if books == 'equity' else '— P&L' }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label style="margin:0;flex:1;min-width:200px;">Notes <span class="muted">(optional)</span>
+      <input type="text" name="notes" maxlength="255" placeholder="e.g. DR 1234 encoded as 50 instead of 5">
+    </label>
+    <button class="btn" type="submit">+ New adjustment</button>
+  </form>
+  <p class="hint" style="margin:10px 0 0;">
+    Correction reasons (encoding, initial balance, cost) post to <strong>Inventory Corrections</strong> in equity, so they
+    don't show as profit or loss. Damage, theft, expired, count and found post to the P&amp;L.
+  </p>
+</section>
+
+<div class="pill-filter-bar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+  <a class="cat-pill {{ 'active' if not status }}" href="/inventory-adjustments{{ '?q=' ~ q|urlencode if q }}">All</a>
+  {% for s in ['draft', 'posted', 'cancelled'] %}
+  <a class="cat-pill {{ 'active' if status == s }}" href="/inventory-adjustments?status={{ s }}{{ '&q=' ~ q|urlencode if q }}">
+    {{ s|title }} <span class="cat-pill-count">{{ counts.get(s, 0) }}</span>
+  </a>
+  {% endfor %}
+  <form method="get" action="/inventory-adjustments" style="margin-left:auto;">
+    {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+    <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search ref, item or note…">
+  </form>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Ref #</th><th>Date</th><th>Reason</th><th>Items</th><th>From</th><th class="num">Value effect</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for a in rows %}
+      {% set value = namespace(v=0) %}
+      {% for l in a.lines %}{% set value.v = value.v + (l.value_qty or 0) + (l.value_reval or 0) %}{% endfor %}
+      <tr>
+        <td class="strong">{{ a.ref_no }}</td>
+        <td>{{ a.adj_date.strftime('%b %d, %Y') }}</td>
+        <td>{{ reason_labels.get(a.reason, a.reason) }}
+          {% if reason_books.get(a.reason) == 'equity' %}<span class="warn-tag" style="background:#eff6ff;color:#1d4ed8;">not P&amp;L</span>{% endif %}</td>
+        <td>
+          {% if a.lines|length == 1 %}{{ a.lines[0].product_name }}{% elif a.lines %}{{ a.lines[0].product_name }} <span class="muted">+{{ a.lines|length - 1 }} more</span>{% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td class="muted">{{ source_labels.get(a.source, a.source) }}</td>
+        <td class="num {{ 'neg' if value.v < 0 }}">{{ (value.v|peso) if a.status != 'draft' else '—' }}</td>
+        <td>
+          {% if a.status == 'posted' %}<span class="txn" style="background:#f0fdf4;color:#15803d;">posted</span>
+          {% elif a.status == 'draft' %}<span class="txn" style="background:#fffbeb;color:#92400e;">draft</span>
+          {% else %}<span class="txn" style="background:#f1f5f9;color:#64748b;">cancelled</span>{% endif %}
+        </td>
+        <td class="row-actions"><a class="btn-link" href="/inventory-adjustments/{{ a.id }}">{{ 'Continue' if a.status == 'draft' else 'View' }}</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="empty">No adjustments{{ ' match' if q or status else ' yet' }}.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pages > 1 %}
+<div class="pager">
+  {% set qs = ('&status=' ~ status if status else '') ~ ('&q=' ~ q|urlencode if q else '') %}
+  {% if page > 1 %}<a class="btn-secondary" href="/inventory-adjustments?page={{ page - 1 }}{{ qs }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-secondary" href="/inventory-adjustments?page={{ page + 1 }}{{ qs }}">Next →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

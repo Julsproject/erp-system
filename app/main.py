@@ -11,7 +11,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from . import (
     accounting, activity, audit, backup, banking, cheque_books, credits, customers, dashboard, deliveries,
-    display, encoders, expenses, models, notifications, payments, pdc, pos, products, purchases, quotations,
+    display, encoders, expenses, inventory_adjustments, models, notifications, payments, pdc, pos, products, purchases, quotations,
     reports, sales, shelves, shifts, stock_count, suppliers, users,
 )
 from . import settings as settings_module   # app/settings.py — the Settings UI router
@@ -97,6 +97,7 @@ app.include_router(banking.router)
 app.include_router(notifications.router)
 app.include_router(shifts.router)
 app.include_router(stock_count.router)
+app.include_router(inventory_adjustments.router)
 app.include_router(shelves.router)
 app.include_router(encoders.router)
 app.include_router(accounting.router)

@@ -918,6 +918,68 @@ class StockMovement(Base):
     # specific past sale-deduction found to be a double-deduction — see
     # app/double_deductions.py. Lets the finder skip anything already fixed.
     corrects_movement_id = Column(Integer, ForeignKey("stock_movements.id"), nullable=True)
+    # The Inventory Adjustment that wrote this movement (reason adjustment /
+    # adjustment-correction / revaluation) — a cancel reverses exactly these.
+    inventory_adjustment_id = Column(Integer, ForeignKey("inventory_adjustments.id"), nullable=True, index=True)
+
+
+class InventoryAdjustment(Base):
+    """One stock and/or cost correction document — see app/inventory_adjustments.py.
+    Posting moves stock, updates cost and posts the peso effect to the books
+    together; cancelling reverses all three and never deletes anything."""
+    __tablename__ = "inventory_adjustments"
+
+    id = Column(Integer, primary_key=True)
+    ref_no = Column(String(20), unique=True)                     # ADJ-000001
+    adj_date = Column(Date, nullable=False)                      # the reference date stock + books follow
+    reason = Column(String(30), nullable=False)                  # key into inventory_adjustments.REASONS
+    notes = Column(String(255))
+    status = Column(String(12), nullable=False, server_default="draft")  # draft | posted | cancelled
+    source = Column(String(20), nullable=False, server_default="manual")  # manual | product_edit | pricing
+    created_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    posted_by = Column(Integer, ForeignKey("users.id"))
+    posted_at = Column(DateTime(timezone=True))
+    cancelled_by = Column(Integer, ForeignKey("users.id"))
+    cancelled_at = Column(DateTime(timezone=True))
+    cancel_reason = Column(String(255))
+    journal_entry_id = Column(Integer, ForeignKey("journal_entries.id"))
+    cancel_journal_entry_id = Column(Integer, ForeignKey("journal_entries.id"))
+
+    lines = relationship("InventoryAdjustmentLine", back_populates="adjustment",
+                         cascade="all, delete-orphan", order_by="InventoryAdjustmentLine.id")
+    creator = relationship("User", foreign_keys=[created_by])
+    poster = relationship("User", foreign_keys=[posted_by])
+    canceller = relationship("User", foreign_keys=[cancelled_by])
+    journal_entry = relationship("JournalEntry", foreign_keys=[journal_entry_id])
+    cancel_journal_entry = relationship("JournalEntry", foreign_keys=[cancel_journal_entry_id])
+
+
+class InventoryAdjustmentLine(Base):
+    __tablename__ = "inventory_adjustment_lines"
+
+    id = Column(Integer, primary_key=True)
+    adjustment_id = Column(Integer, ForeignKey("inventory_adjustments.id"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    product_name = Column(String(150), nullable=False)
+    # What was typed, in the unit it was typed in: qty_input of unit_name
+    # (unit_factor base units each). mode "delta" = change on-hand by it,
+    # "set" = on-hand as of adj_date should be it. new_cost is per BASE unit.
+    unit_name = Column(String(40))
+    unit_factor = Column(Numeric(14, 4), nullable=False, server_default="1")
+    mode = Column(String(8), nullable=False, server_default="delta")
+    qty_input = Column(Numeric(14, 3))
+    new_cost = Column(Numeric(12, 2))
+    note = Column(String(255))
+    # Filled in when posted — what it actually did.
+    qty_base = Column(Numeric(14, 3))
+    on_hand_before = Column(Numeric(14, 3))
+    old_cost = Column(Numeric(12, 2))
+    value_qty = Column(Numeric(14, 2))
+    value_reval = Column(Numeric(14, 2))
+
+    adjustment = relationship("InventoryAdjustment", back_populates="lines")
+    product = relationship("Product")
 
 
 class MonthEndRolloverLine(Base):

@@ -49,12 +49,17 @@ AUDIT_FIELDS = ["name", "barcode", "cost_price", "selling_price", "beginning_sto
 # Why a manual stock quantity changed — required whenever an edit moves
 # Beginning Stock or Stock Qty, so the eventual peso value (qty * cost) has
 # an accountable reason attached, not just a silent number change.
+# Same keys as inventory_adjustments.REASONS (which also says where each one
+# posts in the books) — kept as a plain list here because that module
+# imports this one.
 ADJUSTMENT_REASONS = [
+    ("encoding_correction", "Encoding / opening-balance correction"),
+    ("initial_balance", "Initial balance correction"),
     ("count_correction", "Count correction"),
     ("damage", "Damage / breakage"),
     ("theft", "Theft / loss"),
     ("expired", "Expired / spoiled"),
-    ("initial_balance", "Initial balance correction"),
+    ("found", "Found / extra stock"),
     ("other", "Other"),
 ]
 ADJUSTMENT_REASON_LABELS = dict(ADJUSTMENT_REASONS)
@@ -370,7 +375,8 @@ def _find_recent_manual_adjustment_ids(db: Session) -> set:
     cutoff = datetime.now(MANILA) - timedelta(days=MANUAL_ADJUSTMENT_WINDOW_DAYS)
     rows = (
         db.query(models.StockMovement.product_id.distinct())
-        .filter(models.StockMovement.reason == "adjustment", models.StockMovement.created_at >= cutoff)
+        .filter(models.StockMovement.reason.in_(("adjustment", "adjustment-correction")),
+                models.StockMovement.created_at >= cutoff)
         .all()
     )
     return {row[0] for row in rows}
@@ -1428,6 +1434,7 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
         if barcode and db.query(models.Product).filter(models.Product.barcode == barcode, models.Product.id != product.id).first():
             return _render_form(request, db, user, product=product, error=f"Barcode “{barcode}” is already assigned to another product.", back=back)
         old_total = Decimal(str(product.total_qty or 0))
+        old_cost = Decimal(str(product.cost_price or 0))
         new_total_preview = _to_decimal(form.get("beginning_stock")) + _to_decimal(form.get("stock_qty"))
         adjustment_reason = (form.get("adjustment_reason") or "").strip()
         if new_total_preview != old_total and not adjustment_reason:
@@ -1442,7 +1449,6 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
             return _render_form(request, db, user, product=product, error=str(e), back=back)
         db.flush()
         after = _product_snapshot(product)
-        new_total = Decimal(str(product.total_qty or 0))
         changes = audit.diff(before, after)
         if changes:
             # Flag a stock correction distinctly — it's the theft-sensitive edit.
@@ -1454,19 +1460,14 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
                 summary=(f"Adjusted stock for “{product.name}”" if stock_touched else f"Edited “{product.name}”"),
                 changes=changes,
             )
-            # Record the net stock change as a movement too, so the Stock Card
-            # ledger reconciles — manual edits used to leave no trace here. Value
-            # it at current cost so it also shows up as shrinkage/gain in P&L.
-            delta = new_total - old_total
-            if delta != 0:
-                unit_cost = Decimal(str(product.cost_price or 0))
-                reason_label = ADJUSTMENT_REASON_LABELS.get(adjustment_reason, adjustment_reason or "manual edit")
-                note_text = (form.get("adjustment_note") or "").strip()
-                db.add(models.StockMovement(
-                    product_id=product.id, qty_base=delta, reason="adjustment", ref="manual edit",
-                    unit_cost=unit_cost, value=delta * unit_cost,
-                    note=f"{reason_label}: {note_text}" if note_text else reason_label,
-                ))
+        # A stock or cost change becomes a posted Inventory Adjustment, so
+        # it lands on the Stock Card and in the books together — see
+        # app/inventory_adjustments.py for where each reason posts.
+        from .inventory_adjustments import record_product_edit
+        record_product_edit(
+            db, product, old_total=old_total, old_cost=old_cost, reason=adjustment_reason,
+            note=(form.get("adjustment_note") or "").strip() or None, user=user, request=request,
+        )
         db.commit()
         return RedirectResponse(safe_back_url(back, "/products"), status_code=status.HTTP_302_FOUND)
 
@@ -1580,6 +1581,7 @@ def update_pricing(product_id: int, data: dict, request: Request, db: Session = 
             status_code=400,
         )
     before = _product_snapshot(product)
+    old_cost = Decimal(str(product.cost_price or 0))
     if "cost_price" in data:
         product.cost_price = _to_decimal(data.get("cost_price"))
     product.selling_price = new_selling_price
@@ -1594,6 +1596,11 @@ def update_pricing(product_id: int, data: dict, request: Request, db: Session = 
             summary=f"Updated selling price for “{product.name}”",
             changes=changes,
         )
+    from .inventory_adjustments import record_product_edit
+    record_product_edit(
+        db, product, old_total=Decimal(str(product.total_qty or 0)), old_cost=old_cost,
+        reason="cost_correction", source="pricing", user=user, request=request,
+    )
     db.commit()
     min_margin = settings_store.min_margin_pct()
     flagged, reason = pricing.needs_review(product.selling_price, product.cost_price, min_margin)
@@ -2221,7 +2228,8 @@ MOVEMENT_LABELS = {
     "sale": "Sale", "refund": "Refund (returned)",
     "exchange-return": "Exchange — returned in", "exchange-sale": "Exchange — sold out",
     "purchase": "Purchase received", "purchase-return": "Purchase return",
-    "adjustment": "Manual adjustment", "void": "Sale voided",
+    "adjustment": "Adjustment", "void": "Sale voided",
+    "adjustment-correction": "Adjustment — correction", "revaluation": "Cost correction",
     "sale-edit-reverse": "Item correction (reversed)",
     "correction": "Double-deduction void",
     "unvoid": "Sale restored",
@@ -2476,6 +2484,8 @@ def stock_card(
             ref_link = f"/purchases/{purchase_id_by_ref[m.ref]}" if m.ref in purchase_id_by_ref else None
         elif m.reason == "stock_count":
             ref_link = f"/stock-count/{count_id_by_ref[m.ref]}" if m.ref in count_id_by_ref else None
+        elif m.inventory_adjustment_id:
+            ref_link = f"/inventory-adjustments/{m.inventory_adjustment_id}"
         elif m.ref in sale_id_by_ref:
             ref_link = f"/pos/receipt/{sale_id_by_ref[m.ref]}?from=stock_card&back={quote(self_url)}"
         else:

@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+{% block title %}{{ adj.ref_no }} · Inventory Adjustment · {{ app_name }}{% endblock %}
+{% block content %}
+{% set draft = adj.status == 'draft' %}
+{% set equity = reason_books.get(adj.reason) == 'equity' %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{{ adj.ref_no }}
+      {% if adj.status == 'posted' %}<span class="txn" style="background:#f0fdf4;color:#15803d;font-size:13px;vertical-align:middle;">posted</span>
+      {% elif draft %}<span class="txn" style="background:#fffbeb;color:#92400e;font-size:13px;vertical-align:middle;">draft</span>
+      {% else %}<span class="txn" style="background:#f1f5f9;color:#64748b;font-size:13px;vertical-align:middle;">cancelled</span>{% endif %}
+    </h1>
+    <p class="muted">
+      Inventory adjustment · {{ source_labels.get(adj.source, adj.source) }}
+      {% if adj.creator %}· created by {{ adj.creator.username }}{% endif %}
+      {% if adj.poster %}· posted by {{ adj.poster.username }} {{ adj.posted_at.strftime('%b %d, %Y %I:%M %p') if adj.posted_at }}{% endif %}
+    </p>
+  </div>
+  <div class="head-actions">
+    <a class="btn-link" href="/inventory-adjustments">← All adjustments</a>
+  </div>
+</div>
+
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+{% if adj.status == 'cancelled' %}
+<div class="alert" style="background:#f8fafc;border-color:#e2e8f0;color:#475569;">
+  Cancelled {{ adj.cancelled_at.strftime('%b %d, %Y %I:%M %p') if adj.cancelled_at }}{% if adj.canceller %} by {{ adj.canceller.username }}{% endif %}{% if adj.cancel_reason %}: {{ adj.cancel_reason }}{% endif %}.
+  Stock, cost and the books were reversed on the adjustment's own date{% if adj.cancel_journal_entry %} (<a href="/accounting/journal-entries/{{ adj.cancel_journal_entry.id }}/view">{{ adj.cancel_journal_entry.journal_no }}</a>){% endif %}.
+</div>
+{% endif %}
+
+<section class="card" style="margin-bottom:18px;">
+  {% if draft %}
+  <form method="post" action="/inventory-adjustments/{{ adj.id }}/header" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+    <label style="margin:0;">Adjustment date
+      <input type="date" name="adj_date" value="{{ adj.adj_date.isoformat() }}" max="{{ today.isoformat() }}" required>
+    </label>
+    <label style="margin:0;min-width:260px;">Reason
+      <select name="reason">
+        {% for key, label, books in reasons %}
+        <option value="{{ key }}" {{ 'selected' if key == adj.reason }}>{{ label }} {{ '— not P&L' if books == 'equity' else '— P&L' }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label style="margin:0;flex:1;min-width:200px;">Notes
+      <input type="text" name="notes" maxlength="255" value="{{ adj.notes or '' }}">
+    </label>
+    <button class="btn-secondary" type="submit">Save</button>
+  </form>
+  {% else %}
+  <div style="display:flex;gap:28px;flex-wrap:wrap;">
+    <div><span class="muted" style="font-size:12.5px;">Date</span><br><strong>{{ adj.adj_date.strftime('%b %d, %Y') }}</strong></div>
+    <div><span class="muted" style="font-size:12.5px;">Reason</span><br><strong>{{ reason_labels.get(adj.reason, adj.reason) }}</strong></div>
+    <div><span class="muted" style="font-size:12.5px;">Books</span><br><strong>{{ 'Inventory Corrections (equity)' if equity else 'P&L — shrinkage / gain' }}</strong></div>
+    {% if adj.journal_entry %}<div><span class="muted" style="font-size:12.5px;">Journal entry</span><br><a class="btn-link" href="/accounting/journal-entries/{{ adj.journal_entry.id }}/view">{{ adj.journal_entry.journal_no }}</a></div>{% endif %}
+    {% if adj.notes %}<div style="flex:1;min-width:200px;"><span class="muted" style="font-size:12.5px;">Notes</span><br>{{ adj.notes }}</div>{% endif %}
+  </div>
+  {% endif %}
+  <p class="hint" style="margin:10px 0 0;">
+    {% if equity %}
+      This is a <strong>correction</strong>: the peso difference goes to Inventory Corrections (equity), not to profit or loss.
+    {% else %}
+      This reason counts on the P&amp;L: a shortage goes to Inventory Shrinkage &amp; Losses, extra stock goes to Inventory Gain.
+    {% endif %}
+    A cost change always goes to Inventory Corrections, because it corrects the item's value rather than recording a loss.
+  </p>
+</section>
+
+{% if draft %}
+<section class="card" style="margin-bottom:18px;">
+  <h3 style="margin:0 0 10px;">Add an item</h3>
+  <div style="position:relative;">
+    <input id="adjSearch" class="search" type="search" placeholder="Type a product name…" autocomplete="off" style="width:100%;box-sizing:border-box;">
+    <div id="adjChoices" class="pos-results" style="display:none;position:absolute;left:0;right:0;z-index:20;max-height:320px;overflow:auto;"></div>
+  </div>
+  <form id="lineForm" method="post" action="/inventory-adjustments/{{ adj.id }}/lines" style="display:none;margin-top:14px;">
+    <input type="hidden" name="product_id" id="lfProduct">
+    <p style="margin:0 0 10px;"><strong id="lfName"></strong> <span class="muted" id="lfInfo"></span></p>
+    <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+      <label style="margin:0;">Unit
+        <select name="unit_name" id="lfUnit"></select>
+      </label>
+      <label style="margin:0;">Quantity
+        <select name="mode" id="lfMode">
+          <option value="delta">Change by (+ / −)</option>
+          <option value="set">Set to counted qty</option>
+        </select>
+      </label>
+      <label style="margin:0;"><span id="lfQtyLabel">Qty (+ add, − remove)</span>
+        <input type="number" name="qty" step="any" style="max-width:130px;" placeholder="leave blank = no qty change">
+      </label>
+      <label style="margin:0;">New cost <span class="muted" id="lfCostUnit"></span>
+        <input type="number" name="new_cost" step="0.01" min="0" style="max-width:130px;" placeholder="blank = keep">
+      </label>
+      <label style="margin:0;flex:1;min-width:160px;">Line note
+        <input type="text" name="note" maxlength="255">
+      </label>
+      <button class="btn" type="submit">Add line</button>
+    </div>
+    <p class="hint" id="lfSetHint" style="display:none;margin:8px 0 0;">
+      "Set to counted qty" means this is what was on hand on {{ adj.adj_date.strftime('%b %d, %Y') }}. Anything dated after that still applies on top.
+    </p>
+  </form>
+</section>
+{% endif %}
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>Item</th><th class="num">On hand</th><th class="num">Qty change</th><th class="num">After</th>
+        <th class="num">Cost</th><th class="num">Value — qty</th><th class="num">Value — cost</th><th class="num">Total</th>
+        {% if draft %}<th></th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      {% set l = r.line %}{% set c = r.c %}{% set f = c.factor %}
+      {% set u = l.unit_name or 'unit' %}
+      <tr>
+        <td class="strong"><a class="btn-link" href="/products/{{ l.product_id }}/stock-card">{{ l.product_name }}</a>
+          {% if l.note %}<div class="mv-note">{{ l.note }}</div>{% endif %}
+          {% if draft and l.mode == 'set' %}<div class="mv-note">Counted {{ l.qty_input|qty }} {{ u }} as of {{ adj.adj_date.strftime('%b %d') }}{% if c.on_hand_at_date is not none %}; the system had {{ (c.on_hand_at_date / f)|qty }} then{% endif %}</div>{% endif %}
+        </td>
+        <td class="num">{{ (c.on_hand / f)|qty }} <span class="muted" style="font-size:11.5px;">{{ u }}</span></td>
+        <td class="num {{ 'neg' if c.qty_base < 0 }}" style="font-weight:600;">{% if c.qty_base %}{{ '+' if c.qty_base > 0 }}{{ (c.qty_base / f)|qty }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="num">{{ (c.on_hand_after / f)|qty }}</td>
+        <td class="num">
+          {% if c.new_cost is not none %}<span class="muted" style="text-decoration:line-through;">{{ (c.old_cost * f)|peso }}</span> → <strong>{{ (c.new_cost * f)|peso }}</strong>
+          {% else %}{{ (c.old_cost * f)|peso }}{% endif %}
+          <span class="muted" style="font-size:11.5px;">/ {{ u }}</span>
+        </td>
+        <td class="num {{ 'neg' if c.value_qty < 0 }}">{{ c.value_qty|peso if c.value_qty else '—' }}</td>
+        <td class="num {{ 'neg' if c.value_reval < 0 }}">{{ c.value_reval|peso if c.value_reval else '—' }}</td>
+        <td class="num strong {{ 'neg' if c.value_total < 0 }}">{{ c.value_total|peso }}</td>
+        {% if draft %}
+        <td class="row-actions">
+          <form method="post" action="/inventory-adjustments/{{ adj.id }}/lines/{{ l.id }}/delete" style="display:inline;">
+            <button class="btn-link" type="submit" style="color:var(--danger);">Remove</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+      {% else %}
+      <tr><td colspan="{{ 9 if draft else 8 }}" class="empty">No items yet. Search above to add one.</td></tr>
+      {% endfor %}
+      {% if rows %}
+      <tr style="background:var(--surface-2);">
+        <td colspan="7" class="strong">Inventory value effect</td>
+        <td class="num strong {{ 'neg' if total_value < 0 }}">{{ total_value|peso }}</td>
+        {% if draft %}<td></td>{% endif %}
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+
+{% if draft %}
+{% if je_preview %}
+<section class="card" style="margin-top:18px;">
+  <h3 style="margin:0 0 10px;">Journal entry this will post <span class="muted" style="font-weight:400;font-size:13px;">· dated {{ adj.adj_date.strftime('%b %d, %Y') }}</span></h3>
+  <table class="grid">
+    <thead><tr><th>Account</th><th class="num">Debit</th><th class="num">Credit</th></tr></thead>
+    <tbody>
+      {% for j in je_preview %}
+      <tr><td>{{ j.account }}</td><td class="num">{{ j.debit|peso if j.debit else '' }}</td><td class="num">{{ j.credit|peso if j.credit else '' }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% elif rows %}
+<p class="hint" style="margin-top:12px;">No peso effect (the item has no cost), so no journal entry. Only the stock will change.</p>
+{% endif %}
+
+<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap;">
+  <form method="post" action="/inventory-adjustments/{{ adj.id }}/delete" onsubmit="return confirm('Delete this draft? Nothing has been posted yet.');">
+    <button class="btn-secondary" type="submit">Delete draft</button>
+  </form>
+  {% if can_post %}
+  <form method="post" action="/inventory-adjustments/{{ adj.id }}/post" onsubmit="return confirm('Post {{ adj.ref_no }}? Stock, cost and the books will be updated.');">
+    <button class="btn" type="submit" {{ 'disabled' if not rows }}>Post adjustment</button>
+  </form>
+  {% else %}
+  <span class="muted" style="align-self:center;">Saved as a draft. A manager or admin needs to post it.</span>
+  {% endif %}
+</div>
+{% elif adj.status == 'posted' and can_post %}
+<section class="card" style="margin-top:18px;">
+  <h3 style="margin:0 0 6px;">Cancel this adjustment</h3>
+  <p class="hint" style="margin:0 0 10px;">Reverses the stock, the cost and the journal entry on {{ adj.adj_date.strftime('%b %d, %Y') }}. Nothing is deleted, and you can post a corrected adjustment afterwards.</p>
+  <form method="post" action="/inventory-adjustments/{{ adj.id }}/cancel" style="display:flex;gap:10px;flex-wrap:wrap;"
+        onsubmit="return confirm('Cancel {{ adj.ref_no }} and reverse it?');">
+    <input type="text" name="reason" required maxlength="255" placeholder="Why is it being cancelled?" style="flex:1;min-width:240px;">
+    <button class="btn-secondary" type="submit" style="color:var(--danger);">Cancel adjustment</button>
+  </form>
+</section>
+{% endif %}
+
+{% if draft %}
+<script>
+(function () {
+  const box = document.getElementById('adjSearch');
+  const choices = document.getElementById('adjChoices');
+  const form = document.getElementById('lineForm');
+  const unitSel = document.getElementById('lfUnit');
+  const modeSel = document.getElementById('lfMode');
+  let current = null;
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const fmt = n => (Math.round(n * 1000) / 1000).toLocaleString();
+
+  function refreshInfo() {
+    if (!current) return;
+    const f = parseFloat(unitSel.value ? unitSel.selectedOptions[0].dataset.factor : 1) || 1;
+    const u = unitSel.value;
+    document.getElementById('lfInfo').textContent =
+      '· on hand ' + fmt(current.on_hand / f) + ' ' + u + ' · cost ₱' + (current.cost_price * f).toFixed(2) + ' / ' + u;
+    document.getElementById('lfCostUnit').textContent = '(per ' + u + ')';
+  }
+  function pick(p) {
+    current = p;
+    choices.style.display = 'none';
+    box.value = '';
+    document.getElementById('lfProduct').value = p.id;
+    document.getElementById('lfName').textContent = p.name;
+    unitSel.innerHTML = '';
+    p.units.forEach(u => {
+      const o = document.createElement('option');
+      o.value = u.name; o.dataset.factor = u.factor; o.textContent = u.name + (u.factor !== 1 ? ' (' + fmt(u.factor) + ' ' + p.base_unit + ')' : '');
+      unitSel.appendChild(o);
+    });
+    form.style.display = 'block';
+    refreshInfo();
+    form.querySelector('input[name=qty]').focus();
+  }
+  unitSel.addEventListener('change', refreshInfo);
+  modeSel.addEventListener('change', () => {
+    const set = modeSel.value === 'set';
+    document.getElementById('lfQtyLabel').textContent = set ? 'Counted qty' : 'Qty (+ add, − remove)';
+    document.getElementById('lfSetHint').style.display = set ? 'block' : 'none';
+  });
+
+  let t = null;
+  box.addEventListener('input', () => {
+    clearTimeout(t);
+    const q = box.value.trim();
+    if (!q) { choices.style.display = 'none'; return; }
+    t = setTimeout(async () => {
+      const res = await fetch('/inventory-adjustments/product-search?q=' + encodeURIComponent(q));
+      const data = await res.json();
+      if (box.value.trim() !== q) return;
+      choices.innerHTML = '';
+      (data.products || []).forEach(p => {
+        const el = document.createElement('button');
+        el.type = 'button'; el.className = 'pos-item';
+        el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + esc(p.name) +
+          '</span><span class="muted" style="font-size:12px;">on hand ' + fmt(p.on_hand) + ' ' + esc(p.base_unit) + ' · ₱' + p.cost_price.toFixed(2) + '</span></div>';
+        el.onclick = () => pick(p);
+        choices.appendChild(el);
+      });
+      choices.style.display = data.products && data.products.length ? 'block' : 'none';
+    }, 200);
+  });
+
+  {% if add_product %}pick({{ add_product|tojson }});{% endif %}
+})();
+</script>
+{% endif %}
+{% endblock %}

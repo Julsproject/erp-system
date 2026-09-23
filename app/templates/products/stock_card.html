@@ -14,6 +14,10 @@
   <div class="head-actions">
     <a class="btn-secondary" href="{{ back }}" onclick="try { localStorage.removeItem('last_product_view'); } catch (e) {}">← Inventory</a>
     <a class="btn-secondary" href="/products/{{ product.id }}/edit?back={{ back|urlencode }}">Edit product</a>
+    <form method="post" action="/inventory-adjustments/new" style="display:inline;">
+      <input type="hidden" name="product_id" value="{{ product.id }}">
+      <button class="btn-secondary" type="submit" title="Correct this item's stock and/or cost, with a date, and post it to the books">Adjust stock / cost</button>
+    </form>
     <a class="btn-secondary" href="/?track_product={{ product.id }}">📈 Cost &amp; price history</a>
   </div>
 </div>

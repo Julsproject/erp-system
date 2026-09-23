@@ -166,8 +166,10 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
       </label>
     </div>
     <p class="hint" style="margin-top:6px;">
-      This change will be valued at current cost and recorded as inventory shrinkage/gain in the
-      <a href="/reports/inventory-adjustments">Inventory Adjustments</a> report and P&amp;L.
+      Saving posts this as an <a href="/inventory-adjustments">Inventory Adjustment</a> dated today, valued at cost.
+      A <strong>correction</strong> reason (encoding, initial balance, cost) goes to Inventory Corrections in equity and
+      stays off the P&amp;L; damage, theft, expired, count and found go to the P&amp;L as shrinkage or gain.
+      Need a past date? Use <a href="/inventory-adjustments">Inventory Adjustments</a> instead.
     </p>
   </div>
   {% endif %}

@@ -119,7 +119,7 @@ def _pl_data(db: Session, period_start: date, period_end: date):
 
     inventory_adjustment_total = (
         db.query(func.coalesce(func.sum(models.StockMovement.value), 0))
-        .filter(models.StockMovement.reason.in_(("adjustment", "stock_count")),
+        .filter(models.StockMovement.reason.in_(PNL_ADJUSTMENT_REASONS),
                 _local_date(models.StockMovement.created_at).between(period_start, period_end))
         .scalar()
     )
@@ -1087,15 +1087,24 @@ def export_inventory_pricing(
     )
 
 
+# Only these hit the operational P&L as shrinkage/gain. An Inventory
+# Adjustment with a correction reason ("adjustment-correction") or a cost
+# correction ("revaluation") posts to equity instead, and is listed on the
+# Inventory Adjustments report separately — see app/inventory_adjustments.py.
+PNL_ADJUSTMENT_REASONS = ("adjustment", "stock_count")
+CORRECTION_REASONS = ("adjustment-correction", "revaluation")
+
+
 def _inventory_adjustment_rows(db: Session, period_start: date, period_end: date):
-    """Every manual stock edit or completed stock count in the window,
+    """Every stock/cost adjustment or completed stock count in the window,
     valued at the product's cost at the time — negative value = shrinkage
-    (loss), positive = a find (gain)."""
+    (loss), positive = a find (gain). `books` says whether it counts on the
+    P&L or is a correction booked to equity."""
     rows = (
         db.query(models.StockMovement, models.Product)
         .join(models.Product, models.StockMovement.product_id == models.Product.id)
         .filter(
-            models.StockMovement.reason.in_(("adjustment", "stock_count")),
+            models.StockMovement.reason.in_(PNL_ADJUSTMENT_REASONS + CORRECTION_REASONS),
             _local_date(models.StockMovement.created_at).between(period_start, period_end),
         )
         .order_by(models.StockMovement.created_at.desc())
@@ -1106,7 +1115,11 @@ def _inventory_adjustment_rows(db: Session, period_start: date, period_end: date
         out.append({
             "created_at": mv.created_at,
             "product_name": product.name,
-            "reason": "Stock count" if mv.reason == "stock_count" else "Manual edit",
+            "reason": {"stock_count": "Stock count", "revaluation": "Cost correction",
+                       "adjustment-correction": "Correction"}.get(
+                mv.reason, "Adjustment" if mv.inventory_adjustment_id else "Manual edit"),
+            "books": "equity" if mv.reason in CORRECTION_REASONS else "pnl",
+            "adjustment_id": mv.inventory_adjustment_id,
             "note": mv.note or "—",
             "ref": mv.ref or "—",
             "qty_base": Decimal(str(mv.qty_base or 0)),
@@ -1136,9 +1149,10 @@ def inventory_adjustments(
 
     period_start, period_end, custom = _resolve_period(days, date_from, date_to)
     all_rows = _inventory_adjustment_rows(db, period_start, period_end)
-    loss_total = sum((r["value"] for r in all_rows if r["value"] < 0), ZERO)
-    gain_total = sum((r["value"] for r in all_rows if r["value"] > 0), ZERO)
+    loss_total = sum((r["value"] for r in all_rows if r["books"] == "pnl" and r["value"] < 0), ZERO)
+    gain_total = sum((r["value"] for r in all_rows if r["books"] == "pnl" and r["value"] > 0), ZERO)
     net_total = loss_total + gain_total
+    correction_total = sum((r["value"] for r in all_rows if r["books"] == "equity"), ZERO)
 
     total = len(all_rows)
     pages = max((total + INV_ADJ_PAGE_SIZE - 1) // INV_ADJ_PAGE_SIZE, 1)
@@ -1158,6 +1172,7 @@ def inventory_adjustments(
             "month_start": month_start, "today": today, "this_month": this_month,
             "rows": rows, "total": total, "page": page, "pages": pages,
             "loss_total": loss_total, "gain_total": gain_total, "net_total": net_total,
+            "correction_total": correction_total,
         },
     )
 

@@ -88,6 +88,7 @@
         ,{"label": "Payables", "href": "/purchases/payables"}
         ,{"label": "AP Aging", "href": "/purchases/payables/aging"}
         ,{"label": "Stock Count", "href": "/stock-count"}
+        ,{"label": "Inventory Adjustments", "href": "/inventory-adjustments"}
         ,{"label": "Cheques", "href": "/pdc"}
         ,{"label": "Expenses", "href": "/expenses"}
         ,{"label": "Cash & Banking", "href": "/banking"}
@@ -253,6 +254,10 @@
       <a class="nav-item {{ 'active' if path.startswith('/stock-count') }}" href="/stock-count">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
         <span>Stock Count</span>
+      </a>
+      <a class="nav-item {{ 'active' if path.startswith('/inventory-adjustments') }}" href="/inventory-adjustments">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+        <span>Adjustments</span>
       </a>
       {% if is_staff %}
       <details class="nav-group" {{ 'open' if finance_active }}>

@@ -5,7 +5,7 @@
 <div class="page-head">
   <div>
     <h1 class="page-title">Inventory Adjustments</h1>
-    <p class="muted">{{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }} · manual stock edits and stock counts, valued at cost</p>
+    <p class="muted">{{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }} · stock and cost adjustments and stock counts, valued at cost · <a href="/inventory-adjustments">Adjustment documents →</a></p>
   </div>
   <div style="display:flex;gap:10px;align-items:center;">
     <div class="seg">
@@ -39,29 +39,31 @@
   <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>Adjustments</span></div>
   <div class="mini-stat owed"><span class="mini-num">{{ loss_total|peso }}</span><span>Shrinkage (loss)</span></div>
   <div class="mini-stat"><span class="mini-num">{{ gain_total|peso }}</span><span>Gains found</span></div>
-  <div class="mini-stat {{ 'owed' if net_total < 0 }}"><span class="mini-num">{{ net_total|peso }}</span><span>Net inventory impact</span></div>
+  <div class="mini-stat {{ 'owed' if net_total < 0 }}"><span class="mini-num">{{ net_total|peso }}</span><span>Net P&amp;L impact</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ correction_total|peso }}</span><span>Corrections (equity, not P&amp;L)</span></div>
 </div>
 
-<p class="hint" style="margin:-6px 0 16px;">This net figure also appears as "Inventory Shrinkage / Gain" on the <a href="/reports/profit-loss">Profit &amp; Loss</a> report for the same period.</p>
+<p class="hint" style="margin:-6px 0 16px;">The net P&amp;L figure also appears as "Inventory Shrinkage / Gain" on the <a href="/reports/profit-loss">Profit &amp; Loss</a> report for the same period. Rows marked <em>equity</em> are encoding, opening-balance or cost corrections: they're booked to Inventory Corrections and don't count as profit or loss.</p>
 
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Date</th><th>Product</th><th>Type</th><th>Reason</th><th class="num">Qty Change</th><th class="num">Unit Cost</th><th class="num">Value</th></tr>
+      <tr><th>Date</th><th>Product</th><th>Type</th><th>Reason</th><th>Ref</th><th class="num">Qty Change</th><th class="num">Unit Cost</th><th class="num">Value</th></tr>
     </thead>
     <tbody>
       {% for r in rows %}
       <tr>
         <td>{{ r.created_at.strftime('%b %d, %Y %I:%M %p') if r.created_at else '' }}</td>
         <td class="strong">{{ r.product_name }}</td>
-        <td>{{ r.reason }}</td>
+        <td>{{ r.reason }}{% if r.books == 'equity' %} <span class="warn-tag" style="background:#eff6ff;color:#1d4ed8;">equity</span>{% endif %}</td>
         <td>{{ r.note }}</td>
+        <td>{% if r.adjustment_id %}<a class="btn-link" href="/inventory-adjustments/{{ r.adjustment_id }}">{{ r.ref }}</a>{% else %}<span class="muted">{{ r.ref }}</span>{% endif %}</td>
         <td class="num {{ 'neg' if r.qty_base < 0 }}">{{ r.qty_base|qty }}</td>
         <td class="num">{{ r.unit_cost|peso }}</td>
         <td class="num {{ 'neg' if r.value < 0 }}">{{ r.value|peso }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="empty">No inventory adjustments in this period.</td></tr>
+      <tr><td colspan="8" class="empty">No inventory adjustments in this period.</td></tr>
       {% endfor %}
     </tbody>
   </table>
