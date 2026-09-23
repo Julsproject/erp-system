@@ -25,7 +25,12 @@
   <a href="/purchases">Purchase History</a>.
 </p>
 
+{% set pp_url = "/purchases/payables" %}{% set pp_mode = "all" %}
+{% set pp_keep = {} %}{% if q %}{% set _ = pp_keep.update({"q": q}) %}{% endif %}{% if supplier_id %}{% set _ = pp_keep.update({"supplier_id": supplier_id}) %}{% endif %}
+<div style="margin-bottom:12px;">{% include "_period_picker.html" %}</div>
+
 <form class="toolbar" method="get" action="/purchases/payables">
+  {% if date_from and date_to %}<input type="hidden" name="date_from" value="{{ date_from }}"><input type="hidden" name="date_to" value="{{ date_to }}">{% endif %}
   <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search ref #, invoice #, or supplier…">
   <select name="supplier_id" onchange="this.form.submit()" class="search" style="max-width:220px;flex:none;">
     <option value="0">All suppliers</option>
@@ -34,7 +39,7 @@
     {% endfor %}
   </select>
   <button class="btn-secondary" type="submit">Search</button>
-  {% if q or supplier_id %}<a class="btn-link" href="/purchases/payables">Clear</a>{% endif %}
+  {% if q or supplier_id or date_from %}<a class="btn-link" href="/purchases/payables">Clear</a>{% endif %}
 </form>
 
 <div class="table-wrap">
@@ -64,7 +69,7 @@
         <td class="row-actions"><a class="btn-pay" href="/purchases/{{ p.id }}">View / Pay</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="empty">No outstanding payables{{ ' match that search' if q or supplier_id else '' }}. 🎉</td></tr>
+      <tr><td colspan="6" class="empty">No outstanding payables{{ ' match that search' if q or supplier_id or date_from else '' }}. 🎉</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -72,9 +77,9 @@
 
 {% if pages > 1 %}
 <div class="pager">
-  {% if page > 1 %}<a class="btn-secondary" href="/purchases/payables?page={{ page - 1 }}&q={{ q }}{{ '&supplier_id=' ~ supplier_id if supplier_id }}">← Prev</a>{% endif %}
+  {% if page > 1 %}<a class="btn-secondary" href="/purchases/payables?page={{ page - 1 }}&q={{ q }}{{ '&supplier_id=' ~ supplier_id if supplier_id }}{{ ('&date_from=' ~ date_from ~ '&date_to=' ~ date_to) if (date_from and date_to) }}">← Prev</a>{% endif %}
   <span class="muted">Page {{ page }} of {{ pages }}</span>
-  {% if page < pages %}<a class="btn-secondary" href="/purchases/payables?page={{ page + 1 }}&q={{ q }}{{ '&supplier_id=' ~ supplier_id if supplier_id }}">Next →</a>{% endif %}
+  {% if page < pages %}<a class="btn-secondary" href="/purchases/payables?page={{ page + 1 }}&q={{ q }}{{ '&supplier_id=' ~ supplier_id if supplier_id }}{{ ('&date_from=' ~ date_from ~ '&date_to=' ~ date_to) if (date_from and date_to) }}">Next →</a>{% endif %}
 </div>
 {% endif %}
 {% endblock %}

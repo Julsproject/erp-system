@@ -57,6 +57,18 @@ def _local_date(col):
     return func.date(func.timezone("Asia/Manila", col))
 
 
+def _date_filter(query, date_from: str, date_to: str):
+    """The shared date picker's range (see _period_picker.html), on the sale's
+    own date. Returns (query, context) — context carries the picker's state."""
+    df, dt = _parse_date(date_from), _parse_date(date_to)
+    if df:
+        query = query.filter(_local_date(models.Sale.created_at) >= df)
+    if dt:
+        query = query.filter(_local_date(models.Sale.created_at) <= dt)
+    return query, {"date_from": date_from if df else "", "date_to": date_to if dt else "",
+                   "custom": bool(df and dt), "days": 0}
+
+
 def _dec(value, default="0") -> Decimal:
     try:
         return Decimal(str(value).strip().replace(",", "") or default)
@@ -340,7 +352,8 @@ def export_sales(
 
 
 @router.get("/sales/returns", response_class=HTMLResponse)
-def sales_returns(request: Request, page: int = 1, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def sales_returns(request: Request, page: int = 1, date_from: str = "", date_to: str = "",
+                  db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Straight, unfiltered listing of what product was actually returned on
     each refund — the search/type/date Filters panel belongs on Cash Sales,
     not here; this is meant to be glanced at, not sliced."""
@@ -356,6 +369,7 @@ def sales_returns(request: Request, page: int = 1, db: Session = Depends(get_db)
         .filter(models.Sale.txn_type == "refund")
         .order_by(models.Sale.id.desc(), models.SaleLine.id.asc())
     )
+    query, period = _date_filter(query, date_from, date_to)
     total_count = query.count()
     pages = max((total_count + PAGE_SIZE - 1) // PAGE_SIZE, 1)
     page = min(page, pages)
@@ -364,12 +378,13 @@ def sales_returns(request: Request, page: int = 1, db: Session = Depends(get_db)
     return templates.TemplateResponse(
         "sales/returns.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "rows": rows, "total_count": total_count, "page": page, "pages": pages},
+         "rows": rows, "total_count": total_count, "page": page, "pages": pages, **period},
     )
 
 
 @router.get("/sales/exchanges", response_class=HTMLResponse)
-def sales_exchanges(request: Request, page: int = 1, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def sales_exchanges(request: Request, page: int = 1, date_from: str = "", date_to: str = "",
+                  db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Same idea as Sales Returns, but for exchanges — each row is one
     product moved, tagged with which direction it moved (given back vs
     taken), so it reads as "what did they actually exchange" at a glance."""
@@ -385,6 +400,7 @@ def sales_exchanges(request: Request, page: int = 1, db: Session = Depends(get_d
         .filter(models.Sale.txn_type == "exchange")
         .order_by(models.Sale.id.desc(), models.SaleLine.id.asc())
     )
+    query, period = _date_filter(query, date_from, date_to)
     total_count = query.count()
     pages = max((total_count + PAGE_SIZE - 1) // PAGE_SIZE, 1)
     page = min(page, pages)
@@ -393,12 +409,13 @@ def sales_exchanges(request: Request, page: int = 1, db: Session = Depends(get_d
     return templates.TemplateResponse(
         "sales/exchanges.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "rows": rows, "total_count": total_count, "page": page, "pages": pages},
+         "rows": rows, "total_count": total_count, "page": page, "pages": pages, **period},
     )
 
 
 @router.get("/sales/voided", response_class=HTMLResponse)
-def sales_voided(request: Request, page: int = 1, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def sales_voided(request: Request, page: int = 1, date_from: str = "", date_to: str = "",
+                  db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Every voided sale, most recent first — voiding erases a sale from
     every other list/report (Cash Sales, Dashboard, P&L, ...), so this is the
     one place left to see what got voided, by whom, and why."""
@@ -413,6 +430,7 @@ def sales_voided(request: Request, page: int = 1, db: Session = Depends(get_db),
         .filter(models.Sale.is_voided.is_(True))
         .order_by(models.Sale.voided_at.desc().nullslast(), models.Sale.id.desc())
     )
+    query, period = _date_filter(query, date_from, date_to)
     total_count = query.count()
     pages = max((total_count + PAGE_SIZE - 1) // PAGE_SIZE, 1)
     page = min(page, pages)
@@ -421,7 +439,7 @@ def sales_voided(request: Request, page: int = 1, db: Session = Depends(get_db),
     return templates.TemplateResponse(
         "sales/voided.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "rows": rows, "total_count": total_count, "page": page, "pages": pages},
+         "rows": rows, "total_count": total_count, "page": page, "pages": pages, **period},
     )
 
 
@@ -430,6 +448,8 @@ def receivables(
     request: Request,
     q: str = "",
     page: int = 1,
+    date_from: str = "",
+    date_to: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -461,6 +481,7 @@ def receivables(
     if q:
         like = f"%{q}%"
         query = query.filter(or_(models.Sale.invoice_no.ilike(like), models.Sale.customer_name.ilike(like)))
+    query, period = _date_filter(query, date_from, date_to)
 
     total_count, total_credit = query.with_entities(
         func.count(models.Sale.id), func.coalesce(func.sum(outstanding_expr), 0)
@@ -485,7 +506,7 @@ def receivables(
         {"request": request, "app_name": request.app.title, "user": user,
          "rows": rows, "total_credit": Decimal(str(total_credit or 0)), "tab": "receivables", "q": q,
          "cod_ids": cod_ids,
-         "page": page, "pages": pages, "total": total_count},
+         "page": page, "pages": pages, "total": total_count, **period},
     )
 
 

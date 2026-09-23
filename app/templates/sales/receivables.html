@@ -15,6 +15,9 @@
   <a class="tab" href="/customers">Customers</a>
 </div>
 
+{% set pp_url = "/sales/receivables" %}{% set pp_mode = "all" %}{% set pp_keep = ({"q": q} if q else {}) %}
+<div style="margin:0 0 12px;">{% include "_period_picker.html" %}</div>
+
 <div class="stat-row">
   <div class="mini-stat owed"><span class="mini-num">{{ total_credit|peso }}</span><span>Total Outstanding Credits</span></div>
   <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>Unpaid Invoices</span></div>
@@ -23,6 +26,7 @@
 <p class="muted" style="margin:-6px 0 16px;">Invoices with outstanding credit. Once fully paid, they move to <a href="/sales">All Sales</a>.</p>
 
 <form class="toolbar" method="get" action="/sales/receivables">
+  {% if date_from and date_to %}<input type="hidden" name="date_from" value="{{ date_from }}"><input type="hidden" name="date_to" value="{{ date_to }}">{% endif %}
   <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search invoice # or customer…">
   <button class="btn-secondary" type="submit">Search</button>
   {% if q %}<a class="btn-link" href="/sales/receivables">Clear</a>{% endif %}
@@ -64,9 +68,9 @@
 
 {% if pages > 1 %}
 <div class="pager">
-  {% if page > 1 %}<a class="btn-secondary" href="/sales/receivables?page={{ page - 1 }}&q={{ q }}">← Prev</a>{% endif %}
+  {% if page > 1 %}<a class="btn-secondary" href="/sales/receivables?page={{ page - 1 }}&q={{ q }}{{ ('&date_from=' ~ date_from ~ '&date_to=' ~ date_to) if (date_from and date_to) }}">← Prev</a>{% endif %}
   <span class="muted">Page {{ page }} of {{ pages }}</span>
-  {% if page < pages %}<a class="btn-secondary" href="/sales/receivables?page={{ page + 1 }}&q={{ q }}">Next →</a>{% endif %}
+  {% if page < pages %}<a class="btn-secondary" href="/sales/receivables?page={{ page + 1 }}&q={{ q }}{{ ('&date_from=' ~ date_from ~ '&date_to=' ~ date_to) if (date_from and date_to) }}">Next →</a>{% endif %}
 </div>
 {% endif %}
 {% endblock %}

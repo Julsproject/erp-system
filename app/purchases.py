@@ -355,6 +355,8 @@ def list_payables(
     request: Request,
     q: str = "",
     supplier_id: int = 0,
+    date_from: str = "",
+    date_to: str = "",
     page: int = 1,
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
@@ -400,6 +402,11 @@ def list_payables(
         query = query.outerjoin(models.Supplier, models.Purchase.supplier_id == models.Supplier.id).filter(
             or_(models.Purchase.ref_no.ilike(like), models.Purchase.invoice_no.ilike(like), models.Supplier.name.ilike(like))
         )
+    df, dt = _parse_date(date_from), _parse_date(date_to)
+    if df:
+        query = query.filter(_local_date(models.Purchase.created_at) >= df)
+    if dt:
+        query = query.filter(_local_date(models.Purchase.created_at) <= dt)
 
     total_count, total_owed = query.with_entities(
         func.count(models.Purchase.id), func.coalesce(func.sum(outstanding_expr), 0)
@@ -428,6 +435,8 @@ def list_payables(
             "overdue_count": overdue_count, "due_soon_count": due_soon_count,
             "q": q, "supplier_id": supplier_id, "suppliers": suppliers,
             "page": page, "pages": pages,
+            "date_from": date_from if df else "", "date_to": date_to if dt else "",
+            "custom": bool(df and dt), "days": 0,
         },
     )
 
