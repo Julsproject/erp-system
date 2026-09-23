@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Negative Stock · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Negative Stock</h1>
+    <p class="muted">Items below zero — when each went negative, its deliveries and last count, and the likely reason.
+      Encode missing deliveries first; only stock that was really on hand before the system started should get an opening-balance correction.</p>
+  </div>
+  <a class="btn-secondary" href="/reports/negative-stock/export">⬇ Download Excel</a>
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>Items below zero</span></div>
+  <div class="mini-stat owed"><span class="mini-num">{{ total_value|peso }}</span><span>Value at cost</span></div>
+</div>
+
+<div class="pill-filter-bar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+  <a class="cat-pill {{ 'active' if not cause }}" href="/reports/negative-stock{{ '?q=' ~ q|urlencode if q }}">All <span class="cat-pill-count">{{ total }}</span></a>
+  {% for key, label, todo, n, v in causes %}
+  <a class="cat-pill {{ 'active' if cause == key }}" href="/reports/negative-stock?cause={{ key }}{{ '&q=' ~ q|urlencode if q }}" title="{{ todo }}">
+    {{ label }} <span class="cat-pill-count">{{ n }}</span>
+  </a>
+  {% endfor %}
+  <form method="get" action="/reports/negative-stock" style="margin-left:auto;">
+    {% if cause %}<input type="hidden" name="cause" value="{{ cause }}">{% endif %}
+    <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search item…">
+  </form>
+</div>
+
+{% for key, label, todo, n, v in causes %}{% if cause == key %}
+<div class="hint-box" style="margin:8px 0 14px;max-width:900px;"><strong>{{ label }}</strong> — {{ todo }} ({{ n }} item{{ '' if n == 1 else 's' }}, {{ v|peso }})</div>
+{% endif %}{% endfor %}
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Item</th><th class="num">On hand</th><th class="num">Value</th><th>Negative since</th>
+        <th class="num">Deliveries</th><th>Last delivery</th><th>Last count</th><th>Likely cause</th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="strong"><a href="/products/{{ r.product.id }}/stock-card">{{ r.product.name }}</a></td>
+        <td class="num neg">{{ r.on_hand|qty }} <span class="muted" style="font-size:11.5px;">{{ r.unit }}</span></td>
+        <td class="num {{ 'neg' if r.value < 0 }}">{{ r.value|peso }}</td>
+        <td>{% if r.negative_since is string %}<span class="muted">{{ r.negative_since }}</span>{% elif r.negative_since %}{{ r.negative_since.strftime('%b %d, %Y') }}{% else %}—{% endif %}</td>
+        <td class="num">{{ r.deliveries or '—' }}</td>
+        <td>{{ r.last_delivery.strftime('%b %d, %Y') if r.last_delivery else '—' }}</td>
+        <td>{{ r.last_count.strftime('%b %d, %Y') if r.last_count else '—' }}</td>
+        <td>{{ r.cause_label }}
+          {% if r.cause == 'open_a_pack' %}<div class="mv-note">{{ r.source.name }} has {{ r.source_packs|qty }} {{ r.source.unit_type.name if r.source.unit_type else '' }}</div>{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="empty">{{ 'No items match.' if (q or cause) else 'Nothing is below zero.' }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

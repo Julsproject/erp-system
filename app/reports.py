@@ -768,6 +768,143 @@ def _low_margin_rows(db: Session, threshold: float):
     return rows
 
 
+NEGATIVE_CAUSES = [
+    # (key, label, what to do)
+    ("open_a_pack", "Open item — its sealed item still has packs",
+     "Open a pack into it (Move between items, or the next loose sale auto-opens one)."),
+    ("after_count", "Went negative after its last stock count",
+     "More was sold than was counted plus delivered since — a delivery after the count is probably not encoded, or the count was off."),
+    ("missing_delivery", "Sold more than delivered",
+     "A later delivery is probably not encoded yet — encode it with its real date."),
+    ("no_delivery", "No delivery on record",
+     "Stock from before the system started, or a delivery never encoded. If it was on hand before Jul 30, an opening-balance correction fixes it."),
+]
+NEGATIVE_CAUSE_LABELS = {k: (label, todo) for k, label, todo in NEGATIVE_CAUSES}
+
+
+def _negative_stock_rows(db: Session):
+    """Every active item below zero, with when it went negative (from its
+    own Stock Card history), its deliveries and last count, and the likely
+    reason — so missing deliveries get encoded before anything is written
+    off as opening stock."""
+    products = (db.query(models.Product)
+                .filter(models.Product.is_active.is_(True),
+                        (models.Product.beginning_stock + models.Product.stock_qty) < 0)
+                .all())
+    if not products:
+        return []
+    ids = [p.id for p in products]
+    moves = {}
+    for m in (db.query(models.StockMovement.product_id, models.StockMovement.qty_base, models.StockMovement.created_at)
+              .filter(models.StockMovement.product_id.in_(ids))
+              .order_by(models.StockMovement.created_at, models.StockMovement.id)):
+        moves.setdefault(m.product_id, []).append(m)
+    deliveries = {}
+    for pid, n, last in (db.query(models.PurchaseLine.product_id, func.count(models.PurchaseLine.id), func.max(models.Purchase.created_at))
+                         .join(models.Purchase)
+                         .filter(models.PurchaseLine.product_id.in_(ids), models.Purchase.status != "cancelled",
+                                 models.Purchase.txn_type == "receive")
+                         .group_by(models.PurchaseLine.product_id)):
+        deliveries[pid] = (n, last.astimezone(MANILA).date() if last else None)
+    counts = dict(db.query(models.StockCountLine.product_id, func.max(models.StockCount.count_date))
+                  .join(models.StockCount)
+                  .filter(models.StockCountLine.product_id.in_(ids), models.StockCount.status == "completed")
+                  .group_by(models.StockCountLine.product_id).all())
+
+    rows = []
+    for p in products:
+        on_hand = Decimal(str(p.total_qty or 0))
+        mv = moves.get(p.id, [])
+        running = on_hand - sum((Decimal(str(m.qty_base or 0)) for m in mv), Decimal("0"))   # implied opening
+        negative_since = "before its first movement" if running < 0 else None
+        for m in mv:
+            was = running
+            running += Decimal(str(m.qty_base or 0))
+            if was >= 0 and running < 0:
+                negative_since = m.created_at.astimezone(MANILA).date()
+            elif running >= 0:
+                negative_since = None
+        n_del, last_del = deliveries.get(p.id, (0, None))
+        last_count = counts.get(p.id)
+        src = db.get(models.Product, p.replenish_from_id) if p.replenish_from_id else None
+        src_packs = Decimal(str(src.total_qty or 0)) if src else Decimal("0")
+        since_date = negative_since if isinstance(negative_since, date) else None
+        if src is not None and src.is_active and src_packs >= 1:
+            cause = "open_a_pack"
+        elif last_count and since_date and since_date > last_count:
+            cause = "after_count"
+        elif n_del:
+            cause = "missing_delivery"
+        else:
+            cause = "no_delivery"
+        rows.append({
+            "product": p, "unit": p.unit_type.name if p.unit_type else "unit",
+            "on_hand": on_hand, "value": on_hand * Decimal(str(p.cost_price or 0)),
+            "negative_since": negative_since, "deliveries": n_del, "last_delivery": last_del,
+            "last_count": last_count, "cause": cause, "cause_label": NEGATIVE_CAUSE_LABELS[cause][0],
+            "source": src, "source_packs": src_packs,
+        })
+    rows.sort(key=lambda r: (r["value"], r["on_hand"]))
+    return rows
+
+
+@router.get("/reports/negative-stock", response_class=HTMLResponse)
+def negative_stock_report(request: Request, cause: str = "", q: str = "",
+                          db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    all_rows = _negative_stock_rows(db)
+    by_cause = {k: [r for r in all_rows if r["cause"] == k] for k, _, _ in NEGATIVE_CAUSES}
+    rows = by_cause[cause] if cause in by_cause else all_rows
+    q = (q or "").strip()
+    if q:
+        words = q.lower().split()
+        rows = [r for r in rows if all(w in r["product"].name.lower() for w in words)]
+    return templates.TemplateResponse("reports/negative_stock.html", {
+        "request": request, "app_name": request.app.title, "user": user,
+        "rows": rows, "total": len(all_rows), "total_value": sum((r["value"] for r in all_rows), Decimal("0")),
+        "causes": [(k, label, todo, len(by_cause[k]), sum((r["value"] for r in by_cause[k]), Decimal("0")))
+                   for k, label, todo in NEGATIVE_CAUSES],
+        "cause": cause if cause in by_cause else "", "q": q,
+    })
+
+
+@router.get("/reports/negative-stock/export")
+def export_negative_stock(db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    rows = _negative_stock_rows(db)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Negative Stock"
+    ws.append([f"Items below zero — {len(rows)} as of {_today():%b %d, %Y}"])
+    ws.append([])
+    ws.append(["Product", "On hand", "Unit", "Value (cost)", "Negative since", "Deliveries", "Last delivery",
+               "Last count", "Likely cause", "What to do"])
+    header_fill = PatternFill("solid", fgColor="1F6FEB")
+    for cell in ws[ws.max_row]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+    for r in rows:
+        since = r["negative_since"]
+        ws.append([r["product"].name, float(r["on_hand"]), r["unit"], float(round(r["value"], 2)),
+                   since.isoformat() if isinstance(since, date) else (since or ""), r["deliveries"],
+                   r["last_delivery"].isoformat() if r["last_delivery"] else "",
+                   r["last_count"].isoformat() if r["last_count"] else "",
+                   r["cause_label"], NEGATIVE_CAUSE_LABELS[r["cause"]][1]])
+    for i, w in enumerate([44, 11, 9, 14, 18, 11, 14, 12, 44, 70], start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    buf = io.BytesIO()
+    wb.save(buf)
+    return Response(content=buf.getvalue(),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="negative_stock_{_today().isoformat()}.xlsx"'})
+
+
 @router.get("/reports/low-margin", response_class=HTMLResponse)
 def low_margin_report(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
