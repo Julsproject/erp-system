@@ -7,11 +7,7 @@
     <p class="muted">{{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }}{% if selected_party %} · {{ selected_party.name }}{% endif %}</p>
   </div>
   <div style="display:flex;gap:10px;align-items:center;">
-    <div class="seg">
-      <a class="seg-btn {{ 'active' if days == 7 and not custom }}" href="{{ route }}?days=7&party_id={{ party_id }}">7 days</a>
-      <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="{{ route }}?days=30&party_id={{ party_id }}">30 days</a>
-      <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="{{ route }}?days=90&party_id={{ party_id }}">90 days</a>
-    </div>
+    {% set pp_url = route %}{% set pp_keep = ({"party_id": party_id} if party_id else {}) %}{% include "_period_picker.html" %}
   </div>
 </div>
 {% include "accounting/_subnav.html" %}

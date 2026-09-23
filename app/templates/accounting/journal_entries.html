@@ -4,9 +4,11 @@
 <div class="page-head">
   <div>
     <h1 class="page-title">Manual Journal Entries</h1>
-    <p class="muted">For anything the automatic posting engine doesn't cover — capital injections, corrections, closing entries.</p>
+    <p class="muted">For anything the automatic posting engine doesn't cover — capital injections, corrections, closing entries.
+      {% if custom %}<br>Dated {{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }}{% else %}<br>Latest 100{% endif %}</p>
   </div>
   <div class="head-actions">
+    {% set pp_url = "/accounting/journal-entries" %}{% set pp_keep = {} %}{% set pp_mode = "all" %}{% include "_period_picker.html" %}
     <a class="btn" href="/accounting/journal-entries/new">+ New Entry</a>
   </div>
 </div>

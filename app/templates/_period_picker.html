@@ -1,0 +1,57 @@
+{#- Shared date-range picker for accounting pages and reports.
+    Set before including:
+      pp_url   the page's path, e.g. "/accounting/general-ledger"
+      pp_keep  (optional) other query params to carry along, e.g. {"account_id": 5}
+      pp_mode  (optional) "range" (default) · "as_of" (one date, e.g. Balance Sheet) · "all" (adds an "All" preset, no default filter)
+    and the page context's days / custom / date_from / date_to. -#}
+{%- set pr = period_presets() -%}
+{%- set keep = pp_keep or {} -%}
+{%- set kq = keep|urlencode -%}
+{%- set k = ('&' ~ kq) if kq else '' -%}
+{%- set mode = pp_mode or 'range' -%}
+{%- set is_range = custom and date_from and date_to -%}
+{%- set this_month = is_range and date_from == pr.month_start and date_to == pr.today -%}
+{%- set last_month = is_range and date_from == pr.last_month_start and date_to == pr.last_month_end -%}
+<div class="period-picker" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+  <div class="seg">
+    {% if mode == 'as_of' %}
+      <a class="seg-btn {{ 'active' if not custom }}" href="{{ pp_url }}?days=30{{ k }}">Today</a>
+      <a class="seg-btn {{ 'active' if is_range and date_to == pr.last_month_end }}" href="{{ pp_url }}?date_from={{ pr.last_month_end }}&date_to={{ pr.last_month_end }}{{ k }}">End of last month</a>
+    {% else %}
+      {% if mode == 'all' %}<a class="seg-btn {{ 'active' if not is_range }}" href="{{ pp_url }}{{ ('?' ~ kq) if kq else '' }}">All</a>{% endif %}
+      {% if mode != 'all' %}
+      <a class="seg-btn {{ 'active' if days == 7 and not custom }}" href="{{ pp_url }}?days=7{{ k }}">7 days</a>
+      <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="{{ pp_url }}?days=30{{ k }}">30 days</a>
+      <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="{{ pp_url }}?days=90{{ k }}">90 days</a>
+      {% endif %}
+      <a class="seg-btn {{ 'active' if this_month }}" href="{{ pp_url }}?date_from={{ pr.month_start }}&date_to={{ pr.today }}{{ k }}">This Month</a>
+      <a class="seg-btn {{ 'active' if last_month }}" href="{{ pp_url }}?date_from={{ pr.last_month_start }}&date_to={{ pr.last_month_end }}{{ k }}">Last Month</a>
+    {% endif %}
+  </div>
+  <details class="filter-drop filter-drop-right" {{ 'open' if (is_range and not this_month and not last_month and mode != 'as_of') }}>
+    <summary>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M3 9.5h18M8 3v3M16 3v3"/></svg>
+      {% if mode == 'as_of' %}
+        {% if is_range %}As of {{ date_to }}{% else %}As of a date{% endif %}
+      {% elif is_range and not this_month and not last_month %}{{ date_from }} – {{ date_to }}{% else %}Custom range{% endif %}
+    </summary>
+    <div class="filter-panel">
+      <form method="get" action="{{ pp_url }}" {% if mode == 'as_of' %}onsubmit="this.date_from.value = this.date_to.value;"{% endif %}>
+        {% for name, value in keep.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+        {% if mode == 'as_of' %}
+          <input type="hidden" name="date_from" value="{{ date_to }}">
+          <div class="field-row"><div class="field"><label>As of</label><input type="date" name="date_to" value="{{ date_to or pr.today }}" max="{{ pr.today }}" required></div></div>
+        {% else %}
+          <div class="field-row">
+            <div class="field"><label>From</label><input type="date" name="date_from" value="{{ date_from }}" max="{{ pr.today }}" required></div>
+            <div class="field"><label>To</label><input type="date" name="date_to" value="{{ date_to or pr.today }}" max="{{ pr.today }}" required></div>
+          </div>
+        {% endif %}
+        <div class="actions">
+          <a class="btn-link" href="{{ pp_url }}{{ ('?' ~ kq) if kq else '' }}">Clear</a>
+          <button class="btn" type="submit">Apply</button>
+        </div>
+      </form>
+    </div>
+  </details>
+</div>

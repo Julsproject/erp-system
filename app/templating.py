@@ -199,6 +199,18 @@ def min_margin_pct():
         return None
 
 
+def period_presets() -> dict:
+    """Dates the shared period picker (_period_picker.html) offers as quick
+    choices, as YYYY-MM-DD strings — Manila time, same as every report."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    today = datetime.now(ZoneInfo("Asia/Manila")).date()
+    month_start = today.replace(day=1)
+    last_month_end = month_start - timedelta(days=1)
+    return {"today": today.isoformat(), "month_start": month_start.isoformat(),
+            "last_month_start": last_month_end.replace(day=1).isoformat(), "last_month_end": last_month_end.isoformat()}
+
+
 templates.env.filters["peso"] = peso
 templates.env.filters["qty"] = qty
 templates.env.filters["qty_input"] = qty_input
@@ -210,3 +222,4 @@ templates.env.globals["asset_version"] = asset_version
 templates.env.globals["notif_unread_count"] = notif_unread_count
 templates.env.globals["business_info"] = business_info
 templates.env.globals["min_margin_pct"] = min_margin_pct
+templates.env.globals["period_presets"] = period_presets

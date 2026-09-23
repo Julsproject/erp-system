@@ -7,30 +7,7 @@
     <p class="muted">{{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }} · sale lines charged a different price than the product's current set price</p>
   </div>
   <div style="display:flex;gap:10px;align-items:center;">
-    <div class="seg">
-      <a class="seg-btn {{ 'active' if days == 7 and not custom }}" href="/reports/price-overrides?days=7{{ '&direction=' ~ direction if direction }}">7 days</a>
-      <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="/reports/price-overrides?days=30{{ '&direction=' ~ direction if direction }}">30 days</a>
-      <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="/reports/price-overrides?days=90{{ '&direction=' ~ direction if direction }}">90 days</a>
-    </div>
-    <details class="filter-drop filter-drop-right" {{ 'open' if custom }}>
-      <summary>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M3 9.5h18M8 3v3M16 3v3"/></svg>
-        {% if custom %}{{ period_start.strftime('%b %d') }} – {{ period_end.strftime('%b %d, %Y') }}{% else %}Custom range{% endif %}
-      </summary>
-      <div class="filter-panel">
-        <form method="get" action="/reports/price-overrides">
-          {% if direction %}<input type="hidden" name="direction" value="{{ direction }}">{% endif %}
-          <div class="field-row">
-            <div class="field"><label>From</label><input type="date" name="date_from" value="{{ date_from }}"></div>
-            <div class="field"><label>To</label><input type="date" name="date_to" value="{{ date_to }}"></div>
-          </div>
-          <div class="actions">
-            <a class="btn-link" href="/reports/price-overrides?days=30{{ '&direction=' ~ direction if direction }}">Clear</a>
-            <button class="btn" type="submit">Apply</button>
-          </div>
-        </form>
-      </div>
-    </details>
+    {% set pp_url = "/reports/price-overrides" %}{% set pp_keep = ({"direction": direction} if direction else {}) %}{% include "_period_picker.html" %}
     <a class="btn-secondary" href="/reports/price-overrides/export?{{ ('date_from=' ~ date_from ~ '&date_to=' ~ date_to) if custom else ('days=' ~ days) }}{{ '&direction=' ~ direction if direction }}">⬇ Download Excel</a>
   </div>
 </div>

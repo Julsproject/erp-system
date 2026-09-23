@@ -2015,23 +2015,27 @@ def ap_subledger(
 # every other accounting screen in this app is already is_staff-gated.
 # --------------------------------------------------------------------------- #
 @router.get("/accounting/journal-entries", response_class=HTMLResponse)
-def journal_entries_list(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def journal_entries_list(request: Request, date_from: str = "", date_to: str = "",
+                         db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
-    entries = (
-        db.query(models.JournalEntry)
-        .filter(models.JournalEntry.source_type == "manual")
-        .order_by(models.JournalEntry.id.desc())
-        .limit(100)
-        .all()
-    )
+    query = db.query(models.JournalEntry).filter(models.JournalEntry.source_type == "manual")
+    # No range = the latest 100, as before; a range shows every entry dated in it.
+    custom = bool(_parse_date(date_from) and _parse_date(date_to))
+    if custom:
+        period_start, period_end, _ = _resolve_period(30, date_from, date_to)
+        query = query.filter(models.JournalEntry.txn_date.between(period_start, period_end))
+    else:
+        period_start = period_end = None
+    entries = query.order_by(models.JournalEntry.id.desc()).limit(None if custom else 100).all()
     editable_ids = {e.id for e in entries if manual_entry_is_editable(e)}
     return templates.TemplateResponse(
         "accounting/journal_entries.html",
         {"request": request, "app_name": request.app.title, "user": user, "entries": entries,
-         "editable_ids": editable_ids},
+         "editable_ids": editable_ids, "days": 0, "custom": custom, "date_from": date_from, "date_to": date_to,
+         "period_start": period_start, "period_end": period_end},
     )
 
 

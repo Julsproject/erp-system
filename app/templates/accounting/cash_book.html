@@ -7,11 +7,7 @@
     <p class="muted">{{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }}{% if all_accounts %} · All accounts{% elif account %} · {{ account.code }} {{ account.name }}{% endif %}</p>
   </div>
   <div style="display:flex;gap:10px;align-items:center;">
-    <div class="seg">
-      <a class="seg-btn {{ 'active' if days == 7 and not custom }}" href="/accounting/cash-book?days=7&account_id={{ -1 if all_accounts else (account.id if account) }}">7 days</a>
-      <a class="seg-btn {{ 'active' if days == 30 and not custom }}" href="/accounting/cash-book?days=30&account_id={{ -1 if all_accounts else (account.id if account) }}">30 days</a>
-      <a class="seg-btn {{ 'active' if days == 90 and not custom }}" href="/accounting/cash-book?days=90&account_id={{ -1 if all_accounts else (account.id if account) }}">90 days</a>
-    </div>
+    {% set pp_url = "/accounting/cash-book" %}{% set pp_keep = {"account_id": (-1 if all_accounts else (account.id if account else ""))} %}{% include "_period_picker.html" %}
   </div>
 </div>
 {% include "accounting/_subnav.html" %}
