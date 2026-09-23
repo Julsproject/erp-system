@@ -3,6 +3,9 @@
 Phase 1 - Step 1: login/logout + dashboard.
 Phase 1 - Step 2: Inventory (Products) module.
 """
+import logging
+import threading
+
 from fastapi import Depends, FastAPI, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -77,6 +80,41 @@ def load_business_name() -> None:
     and receipts all reflect a name changed from the Settings screen. Falls
     back to the .env APP_NAME when nothing has been saved yet."""
     app.title = settings_store.business_name()
+
+
+def _run_cheque_auto_clear() -> None:
+    db = SessionLocal()
+    try:
+        n = pdc.auto_clear_issued_cheques(db)
+        if n:
+            logging.getLogger(__name__).info("Auto-cleared %d issued cheque(s) on their cheque date", n)
+    except Exception:
+        db.rollback()
+        logging.getLogger(__name__).exception("Issued-cheque auto-clear failed")
+    finally:
+        db.close()
+
+
+@app.on_event("startup")
+def start_cheque_auto_clear() -> None:
+    """Issued cheques clear themselves once their date comes: once at
+    startup, then hourly, so one dated today clears soon after midnight."""
+    stop = threading.Event()
+
+    def loop():
+        while not stop.is_set():
+            _run_cheque_auto_clear()
+            stop.wait(3600)
+
+    threading.Thread(target=loop, name="cheque-auto-clear", daemon=True).start()
+    app.state.cheque_auto_clear_stop = stop
+
+
+@app.on_event("shutdown")
+def stop_cheque_auto_clear() -> None:
+    stop = getattr(app.state, "cheque_auto_clear_stop", None)
+    if stop is not None:
+        stop.set()
 
 
 app.include_router(products.router)

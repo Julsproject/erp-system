@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 from . import accounting, audit, models
@@ -223,6 +223,12 @@ def _apply_clearing(db: Session, pdc: models.PostDatedCheque, clear_dt, user) ->
             purchase = db.get(models.Purchase, app.purchase_id)
             if not purchase:
                 continue
+            # A delivery saved as "paid by cheque" is already booked as paid
+            # (Cr Bank on its delivery date) and already marked paid — its
+            # cheque clearing only confirms that. Settling it again would
+            # post the payment a second time.
+            if purchase.status == "paid":
+                continue
             # Same partial-payment idea as the received side: clearing posts
             # a PurchaseSettlement for this application's amount, and the
             # purchase only flips to "paid" once that brings its own balance
@@ -282,6 +288,63 @@ def _apply_clearing(db: Session, pdc: models.PostDatedCheque, clear_dt, user) ->
 
     pdc.status = "cleared"
     pdc.resolved_at = clear_dt or func.now()
+
+
+def _cleared_without_settlements(db: Session, pdc: models.PostDatedCheque) -> bool:
+    """An issued cheque for deliveries that were already paid when received
+    clears without posting anything (see _apply_clearing), so un-clearing it
+    has nothing to reverse. Told apart from a legacy trail-less clearing by
+    its deliveries having no payment rows at all."""
+    if pdc.direction != "issued":
+        return False
+    ids = [a.purchase_id for a in pdc.applications if a.purchase_id] or ([pdc.purchase_id] if pdc.purchase_id else [])
+    if not ids:
+        return False
+    return not db.query(models.PurchaseSettlement).filter(models.PurchaseSettlement.purchase_id.in_(ids)).first()         and all((db.get(models.Purchase, i) is not None and db.get(models.Purchase, i).status == "paid") for i in ids)
+
+
+AUTO_CLEAR_LOCK = 725_001   # pg advisory lock id: one auto-clear run at a time
+
+
+def auto_clear_issued_cheques(db: Session) -> int:
+    """Clear every issued cheque whose date has come, dated on the cheque
+    date itself — our own cheques are taken as honored on their date. Run at
+    startup and hourly (see main.py). Received cheques stay manual: a
+    customer's cheque can still bounce. A cheque someone un-cleared by hand
+    is never re-cleared automatically."""
+    if not db.execute(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": AUTO_CLEAR_LOCK}).scalar():
+        return 0
+    due = (db.query(models.PostDatedCheque)
+           .filter(models.PostDatedCheque.direction == "issued",
+                   models.PostDatedCheque.status.in_(("pending", "deposited")),
+                   models.PostDatedCheque.cheque_date <= _today(),
+                   # Un-cleared by hand (e.g. to mark it bounced): leave it to them.
+                   ~models.PostDatedCheque.id.in_(
+                       db.query(models.AuditLog.entity_id).filter(
+                           models.AuditLog.entity_type == "post_dated_cheque",
+                           models.AuditLog.action == "unclear",
+                           models.AuditLog.entity_id.isnot(None))))
+           .order_by(models.PostDatedCheque.cheque_date, models.PostDatedCheque.id)
+           .with_for_update(skip_locked=True).all())
+    if not due:
+        db.rollback()
+        return 0
+    system_user = (db.query(models.User).filter(models.User.role == "admin", models.User.is_active.is_(True))
+                   .order_by(models.User.id).first())
+    if system_user is None:
+        db.rollback()
+        return 0
+    now = datetime.now(MANILA)
+    for pdc in due:
+        clear_dt = now.replace(year=pdc.cheque_date.year, month=pdc.cheque_date.month, day=pdc.cheque_date.day)
+        _apply_clearing(db, pdc, clear_dt, system_user)
+        audit.record(
+            db, user=system_user, action="clear", entity_type="post_dated_cheque",
+            entity_id=pdc.id, entity_label=pdc.cheque_no or f"PDC-{pdc.id}",
+            summary=f"Cleared cheque {pdc.cheque_no or pdc.id} — {pdc.amount} (automatic, on its cheque date {pdc.cheque_date})",
+        )
+    db.commit()
+    return len(due)
 
 
 @router.post("/pdc/{pdc_id:int}/clear")
@@ -627,7 +690,7 @@ def unclear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), us
         rows = db.query(models.PurchaseSettlement).filter(
             models.PurchaseSettlement.pdc_id == pdc.id).all()
 
-    if not rows:
+    if not rows and not _cleared_without_settlements(db, pdc):
         # Legacy clearing with no trail — see the docstring.
         return RedirectResponse(f"/pdc/{pdc_id}?unclear_error=1", status_code=status.HTTP_302_FOUND)
 
