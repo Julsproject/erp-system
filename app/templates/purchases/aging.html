@@ -13,6 +13,9 @@
   <a class="tab" href="/suppliers">Suppliers</a>
 </div>
 
+{% set pp_url = "/purchases/payables/aging" %}{% set pp_mode = "as_of" %}{% set pp_keep = {} %}
+<div style="margin-bottom:12px;">{% include "_period_picker.html" %}</div>
+
 <p class="muted" style="margin:-6px 0 16px;">
   Every outstanding payable as of {{ today.strftime('%b %d, %Y') }}, grouped by supplier and how overdue it is.
 </p>

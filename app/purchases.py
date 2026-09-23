@@ -442,23 +442,55 @@ def list_payables(
 
 
 @router.get("/purchases/payables/aging", response_class=HTMLResponse)
-def payables_aging(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def payables_aging(request: Request, date_from: str = "", date_to: str = "",
+                   db: Session = Depends(get_db), user=Depends(get_current_user)):
     """AP aging schedule: every outstanding payable bucketed by how overdue
     it is, grouped by supplier — the report Payables itself doesn't give you
-    (that's just a flat due-date-ordered list)."""
+    (that's just a flat due-date-ordered list).
+
+    Can be run as of a past date: only deliveries dated on or before it, less
+    the payments dated on or before it (a settlement's journal date, since
+    payments are backdated), aged against that date."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
 
     today = date.today()
-    purchases = (
-        db.query(models.Purchase)
-        .filter(models.Purchase.txn_type == "receive", models.Purchase.status == "confirmed")
-        .order_by(models.Purchase.supplier_id, models.Purchase.due_date)
-        .all()
-    )
-    settled = _settled_for_purchases(db, [p.id for p in purchases])
+    as_of = _parse_date(date_to)
+    if as_of and as_of > today:
+        as_of = None
+    past = as_of is not None and as_of < today
+    if not past:
+        as_of = today
+
+    q = (db.query(models.Purchase)
+         .filter(models.Purchase.txn_type == "receive"))
+    if past:
+        q = q.filter(models.Purchase.status.in_(("confirmed", "paid")),
+                     _local_date(models.Purchase.created_at) <= as_of)
+    else:
+        q = q.filter(models.Purchase.status == "confirmed")
+    purchases = q.order_by(models.Purchase.supplier_id, models.Purchase.due_date).all()
+
+    if past:
+        ids = [p.id for p in purchases]
+        pay_date = func.coalesce(models.JournalEntry.txn_date, _local_date(models.PurchaseSettlement.created_at))
+        settled = {pid: Decimal(amt) for pid, amt in (
+            db.query(models.PurchaseSettlement.purchase_id, func.coalesce(func.sum(models.PurchaseSettlement.amount), 0))
+            .outerjoin(models.JournalEntry, models.JournalEntry.id == models.PurchaseSettlement.journal_entry_id)
+            .filter(models.PurchaseSettlement.purchase_id.in_(ids or [0]), pay_date <= as_of)
+            .group_by(models.PurchaseSettlement.purchase_id))}
+        # Older deliveries were marked paid in full without settlement rows —
+        # their paid_at is the payment date.
+        with_rows = {pid for (pid,) in db.query(models.PurchaseSettlement.purchase_id)
+                     .filter(models.PurchaseSettlement.purchase_id.in_(ids or [0])).distinct()}
+        for p in purchases:
+            if p.status == "paid" and p.id not in with_rows and p.paid_at                     and p.paid_at.astimezone(MANILA).date() <= as_of:
+                settled[p.id] = p.total or Decimal("0")
+    else:
+        settled = _settled_for_purchases(db, [p.id for p in purchases])
+    today = as_of
 
     BUCKETS = ["current", "1_30", "31_60", "61_90", "over_90"]
     BUCKET_LABELS = {
@@ -504,6 +536,8 @@ def payables_aging(request: Request, db: Session = Depends(get_db), user=Depends
             "buckets": BUCKETS, "bucket_labels": BUCKET_LABELS,
             "supplier_rows": supplier_rows, "grand_totals": grand_totals, "grand_total": grand_total,
             "today": today,
+            "date_from": as_of.isoformat() if past else "", "date_to": as_of.isoformat() if past else "",
+            "custom": past, "days": 0,
         },
     )
 
