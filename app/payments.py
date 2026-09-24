@@ -17,7 +17,6 @@ Cash and the other methods settle immediately, on the date actually paid.
 """
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, Request, status
@@ -143,7 +142,14 @@ def new_payment(
     supplier = db.get(models.Supplier, supplier_id) if supplier_id else None
     if not supplier:
         return RedirectResponse("/payments", status_code=302)
+    return _payment_form(request, db, user, supplier, error=error)
 
+
+def _payment_form(request: Request, db: Session, user, supplier, *, error: str = "", posted: dict = None,
+                  status_code: int = 200):
+    """The payment screen. `posted` is what was just submitted, when it was
+    turned back — so the ticks, amounts and cheque details come back as they
+    were typed instead of a blank form."""
     owed = _outstanding_purchases(db, supplier.id)
     total = sum((o for _, o in owed), ZERO)
     return templates.TemplateResponse(
@@ -151,7 +157,8 @@ def new_payment(
         {"request": request, "app_name": request.app.title, "user": user,
          "supplier": supplier, "owed": owed, "total": total,
          "methods": PAYMENT_METHODS, "accounts": _cheque_context(db),
-         "today": _today().isoformat(), "error": error},
+         "today": _today().isoformat(), "error": error, "posted": posted},
+        status_code=status_code,
     )
 
 
@@ -178,11 +185,18 @@ def create_payment(
     if not supplier:
         return RedirectResponse("/payments", status_code=302)
 
+    posted = {
+        "method": method, "payment_date": payment_date, "bank_account_id": bank_account_id,
+        "cheque_book_id": cheque_book_id, "cheque_no": cheque_no, "cheque_date": cheque_date,
+        "bank": bank, "notes": notes,
+        # Only ticked rows are submitted (unticked ones are disabled), so
+        # this is exactly the refs that were ticked, with their amounts.
+        "applied": {str(i).strip(): str(a).strip() for i, a in zip(apply_id, apply_amount)},
+    }
+
     def fail(msg):
-        return RedirectResponse(
-            "/payments/new?supplier_id={}&error={}".format(supplier.id, quote(msg)),
-            status_code=status.HTTP_302_FOUND,
-        )
+        # Re-render rather than redirect, so nothing that was ticked or typed is lost.
+        return _payment_form(request, db, user, supplier, error=msg, posted=posted, status_code=400)
 
     method = (method or "cheque").strip().lower()
     if method not in dict(PAYMENT_METHODS):

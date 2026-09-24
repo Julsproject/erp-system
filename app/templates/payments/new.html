@@ -10,6 +10,8 @@
 </div>
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+{% set pv = posted or {} %}
+{% set applied = pv.applied if posted else none %}
 
 <form class="card form" method="post" action="/payments/new" id="payForm">
   <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
@@ -17,7 +19,7 @@
   <label>Payment method
     <select name="method" id="methodSel">
       {% for value, label in methods %}
-      <option value="{{ value }}" {{ 'selected' if value == 'cheque' }}>{{ label }}</option>
+      <option value="{{ value }}" {{ 'selected' if value == (pv.method or 'cheque') }}>{{ label }}</option>
       {% endfor %}
     </select>
   </label>
@@ -26,11 +28,11 @@
   <label class="chq-field">Drawn on
     <select name="bank_account_id" id="acctSel">
       <option value="">{{ '— none, just type the bank —' if not accounts else '— choose account —' }}</option>
-      {% for a in accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
+      {% for a in accounts %}<option value="{{ a.id }}" {{ 'selected' if (pv.bank_account_id or '')|string == a.id|string }}>{{ a.name }}</option>{% endfor %}
     </select>
   </label>
   <label class="chq-field" id="bankNameField">Bank
-    <input name="bank" id="bankName" placeholder="e.g. BDO, Metrobank" autocomplete="off">
+    <input name="bank" id="bankName" value="{{ pv.bank or '' }}" placeholder="e.g. BDO, Metrobank" autocomplete="off">
     <small class="muted">No bank account is set up in Cash &amp; Banking, so the bank is recorded as typed.</small>
   </label>
   <label class="chq-field">Cheque booklet
@@ -39,21 +41,21 @@
     </select>
   </label>
   <label class="chq-field">Cheque #
-    <input name="cheque_no" id="chequeNo" placeholder="e.g. 0012345" autocomplete="off">
+    <input name="cheque_no" id="chequeNo" value="{{ pv.cheque_no or '' }}" placeholder="e.g. 0012345" autocomplete="off">
     <small class="muted" id="chequeHint"></small>
   </label>
   <label class="chq-field">Cheque date
-    <input type="date" name="cheque_date" id="chequeDate" value="{{ today }}">
+    <input type="date" name="cheque_date" id="chequeDate" value="{{ pv.cheque_date if posted else today }}">
   </label>
 
   {# --- non-cheque fields ------------------------------------------------- #}
   <label class="cash-field">Date paid
-    <input type="date" name="payment_date" value="{{ today }}">
+    <input type="date" name="payment_date" value="{{ pv.payment_date if posted else today }}">
     <small class="muted">The day the money actually left — not the day you're encoding it.</small>
   </label>
 
   <label class="full">Notes
-    <input name="notes" placeholder="Optional">
+    <input name="notes" value="{{ pv.notes or '' }}" placeholder="Optional">
   </label>
 
   <div class="full">
@@ -77,15 +79,17 @@
         <tbody>
           {% for p, outstanding in owed %}
           <tr class="ref-row" data-search="{{ (p.ref_no ~ ' ' ~ (p.invoice_no or ''))|lower }}">
-            <td><input type="checkbox" class="apply-check" onchange="toggleRow(this)" checked></td>
+            {% set ticked = applied is none or (p.id|string) in applied %}
+            <td><input type="checkbox" class="apply-check" onchange="toggleRow(this)" {{ 'checked' if ticked }}></td>
             <td class="strong">{{ p.ref_no }}</td>
             <td>{{ p.invoice_no or '—' }}{% if p.delivery_date %} <span class="muted">· {{ p.delivery_date }}</span>{% endif %}</td>
             <td>{{ p.due_date.strftime('%b %d, %Y') if p.due_date else '—' }}</td>
             <td class="num outstanding-cell" data-v="{{ outstanding }}">{{ outstanding|peso }}</td>
             <td>
-              <input type="hidden" name="apply_id" value="{{ p.id }}" class="apply-id">
+              <input type="hidden" name="apply_id" value="{{ p.id }}" class="apply-id" {{ 'disabled' if not ticked }}>
               <input type="number" name="apply_amount" step="0.01" min="0" max="{{ outstanding }}"
-                     value="{{ outstanding }}" class="apply-amount" oninput="recalc()">
+                     value="{{ applied[p.id|string] if (applied is not none and (p.id|string) in applied) else outstanding }}"
+                     class="apply-amount" oninput="recalc()" {{ 'disabled' if not ticked }}>
             </td>
           </tr>
           {% else %}
@@ -172,6 +176,7 @@
     document.querySelectorAll('.cash-field').forEach(el => el.style.display = isCheque ? 'none' : '');
     document.getElementById('chequeNote').style.display = isCheque ? '' : 'none';
     document.getElementById('chequeDate').required = isCheque;
+    document.getElementById('chequeNo').required = isCheque;
   }
 
   // Without an account picked, the bank's name is typed instead.
@@ -221,11 +226,24 @@
     }
   }
 
+  // Nothing ticked: say so here instead of sending the form off to be turned back.
+  document.getElementById('payForm').addEventListener('submit', e => {
+    const any = [...document.querySelectorAll('.apply-amount')].some(i => !i.disabled && parseFloat(i.value) > 0);
+    if (!any) { e.preventDefault(); alert('Tick at least one invoice and put an amount on it.'); }
+  });
+
   document.getElementById('methodSel').addEventListener('change', syncMethod);
   document.getElementById('acctSel').addEventListener('change', syncBooks);
   document.getElementById('bookSel').addEventListener('change', syncNumber);
   syncMethod();
   syncBooks();
+  // Turned back by the server: put the booklet and cheque # back as they were
+  // typed (syncBooks just refilled them with the booklet's next number).
+  const POSTED = {{ {'book': pv.cheque_book_id or '', 'no': pv.cheque_no or ''}|tojson if posted else 'null' }};
+  if (POSTED) {
+    if (POSTED.book) document.getElementById('bookSel').value = POSTED.book;
+    document.getElementById('chequeNo').value = POSTED.no;
+  }
   recalc();
 </script>
 {% endblock %}
