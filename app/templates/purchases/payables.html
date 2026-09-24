@@ -9,6 +9,7 @@
   <a class="tab" href="/purchases/new">New Purchase</a>
   <a class="tab" href="/purchases">Purchase History</a>
   <a class="tab active" href="/purchases/payables">Payables</a>
+  <a class="tab" href="/payments">Pay Suppliers</a>
   <a class="tab" href="/purchases/payables/aging">AP Aging</a>
   <a class="tab" href="/suppliers">Suppliers</a>
 </div>
@@ -40,6 +41,7 @@
   </select>
   <button class="btn-secondary" type="submit">Search</button>
   {% if q or supplier_id or date_from %}<a class="btn-link" href="/purchases/payables">Clear</a>{% endif %}
+  {% if supplier_id and rows %}<a class="btn" style="margin-left:auto;" href="/payments/new?supplier_id={{ supplier_id }}">Pay this supplier →</a>{% endif %}
 </form>
 
 <div class="table-wrap">

@@ -161,7 +161,7 @@ def create_payment(
     supplier_id: str = Form("0"), method: str = Form("cheque"),
     payment_date: str = Form(""),
     bank_account_id: str = Form(""), cheque_book_id: str = Form(""),
-    cheque_no: str = Form(""), cheque_date: str = Form(""),
+    cheque_no: str = Form(""), cheque_date: str = Form(""), bank: str = Form(""),
     notes: str = Form(""),
     apply_id: list[str] = Form([]), apply_amount: list[str] = Form([]),
     db: Session = Depends(get_db), user=Depends(get_current_user),
@@ -218,8 +218,12 @@ def create_payment(
             account = db.get(models.BankAccount, int(bank_account_id or 0))
         except ValueError:
             account = None
-        if not account:
-            return fail("Choose which bank account the cheque is drawn on.")
+        # No account set up in Cash & Banking yet: the cheque is still
+        # recorded, with the bank as typed — the same way a delivery's own
+        # cheque is — it just doesn't move a tracked bank balance when it clears.
+        bank_name = (bank or "").strip()
+        if not account and not bank_name:
+            return fail("Choose the bank account the cheque is drawn on, or type the bank's name.")
 
         try:
             cheque_date_val = date.fromisoformat((cheque_date or "").strip())
@@ -229,7 +233,7 @@ def create_payment(
         book = None
         seq = None
         raw_book_id = (cheque_book_id or "").strip()
-        if raw_book_id:
+        if raw_book_id and account:
             book = db.get(models.ChequeBook, int(raw_book_id))
             if not book or book.bank_account_id != account.id:
                 return fail("That cheque booklet isn't on the account you picked.")
@@ -255,9 +259,9 @@ def create_payment(
 
         pdc = models.PostDatedCheque(
             direction="issued", status="pending", amount=total,
-            bank=account.bank_name or account.name,
+            bank=(account.bank_name or account.name) if account else bank_name,
             cheque_no=number_text, cheque_date=cheque_date_val,
-            bank_account_id=account.id,
+            bank_account_id=account.id if account else None,
             cheque_book_id=book.id if book else None, cheque_seq=seq,
             supplier_id=supplier.id,
             notes=(notes or "").strip() or None,

@@ -25,9 +25,13 @@
   {# --- cheque fields ---------------------------------------------------- #}
   <label class="chq-field">Drawn on
     <select name="bank_account_id" id="acctSel">
-      <option value="">— choose account —</option>
+      <option value="">{{ '— none, just type the bank —' if not accounts else '— choose account —' }}</option>
       {% for a in accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
     </select>
+  </label>
+  <label class="chq-field" id="bankNameField">Bank
+    <input name="bank" id="bankName" placeholder="e.g. BDO, Metrobank" autocomplete="off">
+    <small class="muted">No bank account is set up in Cash &amp; Banking, so the bank is recorded as typed.</small>
   </label>
   <label class="chq-field">Cheque booklet
     <select name="cheque_book_id" id="bookSel">
@@ -132,14 +136,24 @@
   function syncMethod() {
     const isCheque = document.getElementById('methodSel').value === 'cheque';
     document.querySelectorAll('.chq-field').forEach(el => el.style.display = isCheque ? '' : 'none');
+    syncBankName();
     document.querySelectorAll('.cash-field').forEach(el => el.style.display = isCheque ? 'none' : '');
     document.getElementById('chequeNote').style.display = isCheque ? '' : 'none';
     document.getElementById('chequeDate').required = isCheque;
   }
 
+  // Without an account picked, the bank's name is typed instead.
+  function syncBankName() {
+    const isCheque = document.getElementById('methodSel').value === 'cheque';
+    const noAcct = !document.getElementById('acctSel').value;
+    document.getElementById('bankNameField').style.display = (isCheque && noAcct) ? '' : 'none';
+    document.getElementById('bankName').required = isCheque && noAcct;
+  }
+
   // Booklets belong to an account, so the booklet list follows the account
   // and the number follows the booklet.
   function syncBooks() {
+    syncBankName();
     const acctId = document.getElementById('acctSel').value;
     const bookSel = document.getElementById('bookSel');
     const acct = ACCOUNTS.find(a => String(a.id) === String(acctId));
