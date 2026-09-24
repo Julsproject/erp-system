@@ -26,6 +26,15 @@
       <tr><td colspan="2" class="empty">No customer with an outstanding balance matches “{{ q }}”.</td></tr>
       {% endfor %}
     </tbody>
+    {% if matches %}
+    <tfoot>
+      <tr style="background:var(--surface-2);">
+        <td class="strong">Total{{ ' (' ~ matches|length ~ ' customers)' if matches|length > 1 }}
+          {% if matches|length >= 20 %}<div class="muted" style="font-weight:400;font-size:12px;">Only the first 20 matches are listed — type more of the name to narrow it.</div>{% endif %}</td>
+        <td class="num strong owed">{{ match_totals.values()|sum|peso }}</td>
+      </tr>
+    </tfoot>
+    {% endif %}
   </table>
 </div>
 {% endif %}
@@ -89,6 +98,11 @@
       </tr>
     </tbody>
     <tfoot>
+      <tr>
+        <td colspan="3" class="strong" id="owedLabel">Total outstanding</td>
+        <td class="num strong owed" id="owedTotal">{{ total|peso }}</td>
+        {% if si_eligible_ids %}<td></td>{% endif %}
+      </tr>
       <tr>
         <td colspan="3" class="strong">Total selected</td><td class="num strong owed" id="selTotal">{{ total|peso }}</td>
         {% if si_eligible_ids %}<td class="num strong" id="siVatTotal">₱0.00</td>{% endif %}
@@ -253,6 +267,16 @@
     });
     const noMatch = document.getElementById('noInvoiceMatch');
     if (noMatch) noMatch.style.display = visible === 0 ? '' : 'none';
+    // What the invoices on screen still owe; the full balance while searching.
+    let shownOwed = 0, allOwed = 0;
+    rows.forEach(row => {
+      const v = parseFloat(row.querySelector('.payChk').dataset.outstanding) || 0;
+      allOwed += v;
+      if (row.style.display !== 'none') shownOwed += v;
+    });
+    document.getElementById('owedLabel').textContent = q
+      ? 'Outstanding, ' + visible + ' shown (of ' + peso(allOwed) + ')' : 'Total outstanding';
+    document.getElementById('owedTotal').textContent = peso(shownOwed);
   }
 
   function toggleAllChk(master) {
