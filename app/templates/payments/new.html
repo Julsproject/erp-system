@@ -59,6 +59,8 @@
   <div class="full">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
       <strong>Invoices outstanding</strong>
+      <input class="search" type="search" id="refSearch" placeholder="Search ref # or invoice / DR #…" autocomplete="off"
+             oninput="filterRefs()" onkeydown="if (event.key === 'Enter') event.preventDefault();" style="max-width:280px;margin:0 12px;">
       <span>
         <button type="button" class="btn-link" onclick="setAll(true)">Select all</button> ·
         <button type="button" class="btn-link" onclick="setAll(false)">None</button>
@@ -74,12 +76,12 @@
         </thead>
         <tbody>
           {% for p, outstanding in owed %}
-          <tr>
+          <tr class="ref-row" data-search="{{ (p.ref_no ~ ' ' ~ (p.invoice_no or ''))|lower }}">
             <td><input type="checkbox" class="apply-check" onchange="toggleRow(this)" checked></td>
             <td class="strong">{{ p.ref_no }}</td>
             <td>{{ p.invoice_no or '—' }}{% if p.delivery_date %} <span class="muted">· {{ p.delivery_date }}</span>{% endif %}</td>
             <td>{{ p.due_date.strftime('%b %d, %Y') if p.due_date else '—' }}</td>
-            <td class="num">{{ outstanding|peso }}</td>
+            <td class="num outstanding-cell" data-v="{{ outstanding }}">{{ outstanding|peso }}</td>
             <td>
               <input type="hidden" name="apply_id" value="{{ p.id }}" class="apply-id">
               <input type="number" name="apply_amount" step="0.01" min="0" max="{{ outstanding }}"
@@ -89,8 +91,14 @@
           {% else %}
           <tr><td colspan="6" class="empty">Nothing outstanding for this supplier.</td></tr>
           {% endfor %}
+          <tr id="noRefMatch" style="display:none;"><td colspan="6" class="empty">No ref matches that search.</td></tr>
         </tbody>
         <tfoot>
+          <tr>
+            <td colspan="4" class="strong" style="text-align:right;" id="owedLabel">Total outstanding</td>
+            <td class="num strong owed" id="owedCell">{{ total|peso }}</td>
+            <td></td>
+          </tr>
           <tr>
             <td colspan="5" class="strong" style="text-align:right;">Payment total</td>
             <td class="num strong" id="totalCell">₱0.00</td>
@@ -119,8 +127,32 @@
     row.querySelector('.apply-amount').disabled = !cb.checked;
     recalc();
   }
+  // Select all / None act on the refs the search is showing.
   function setAll(on) {
-    document.querySelectorAll('.apply-check').forEach(cb => { cb.checked = on; toggleRow(cb); });
+    document.querySelectorAll('.ref-row').forEach(row => {
+      if (row.style.display === 'none') return;
+      const cb = row.querySelector('.apply-check');
+      cb.checked = on; toggleRow(cb);
+    });
+  }
+  // Search only hides rows — a ticked ref stays in the payment while hidden.
+  function filterRefs() {
+    const words = document.getElementById('refSearch').value.toLowerCase().split(/\s+/).filter(Boolean);
+    let shown = 0, owed = 0, all = 0;
+    document.querySelectorAll('.ref-row').forEach(row => {
+      const v = parseFloat(row.querySelector('.outstanding-cell').dataset.v) || 0;
+      all += v;
+      const hit = words.every(w => row.dataset.search.includes(w));
+      row.style.display = hit ? '' : 'none';
+      if (hit) { shown++; owed += v; }
+    });
+    document.getElementById('noRefMatch').style.display = (words.length && !shown) ? '' : 'none';
+    document.getElementById('owedLabel').textContent = words.length
+      ? 'Outstanding, ' + shown + ' shown (of ' + peso(all) + ')' : 'Total outstanding';
+    document.getElementById('owedCell').textContent = peso(owed);
+  }
+  function peso(n) {
+    return '₱' + n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
   function recalc() {
     let total = 0;

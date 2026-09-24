@@ -23,13 +23,10 @@
   <div class="mini-stat owed"><span class="mini-num">{{ total_owed|peso }}</span><span>Total Payable</span></div>
 </div>
 
-<form class="card form" method="get" action="/payments" style="margin-bottom:14px;">
-  <label class="full">Find supplier
-    <input type="search" name="q" id="qSearch" value="{{ q }}" placeholder="Type a name…">
-  </label>
-  <div class="form-actions full"><button class="btn" type="submit">Search</button>
-    {% if q %}<a class="btn-secondary" href="/payments">Clear</a>{% endif %}
-  </div>
+<form class="toolbar" method="get" action="/payments">
+  <input class="search" type="search" name="q" id="qSearch" value="{{ q }}" placeholder="Search supplier…">
+  <button class="btn-secondary" type="submit">Search</button>
+  {% if q %}<a class="btn-link" href="/payments">Clear</a>{% endif %}
 </form>
 
 <div class="table-wrap">
@@ -60,6 +57,17 @@
       <tr><td colspan="5" class="empty">Nothing outstanding{{ ' matching that name' if q else '' }}.</td></tr>
       {% endfor %}
     </tbody>
+    {% if rows %}
+    <tfoot>
+      <tr style="background:var(--surface-2);">
+        <td class="strong">Total{{ ' (this search)' if q }}</td>
+        <td class="num strong">{{ rows|sum(attribute='invoices') }}</td>
+        <td></td>
+        <td class="num strong owed">{{ total_owed|peso }}</td>
+        <td></td>
+      </tr>
+    </tfoot>
+    {% endif %}
   </table>
 </div>
 
