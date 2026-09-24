@@ -379,8 +379,15 @@ def collect_payment(
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
-    q = (q or "").strip()
     customer = db.get(models.Customer, customer_id) if customer_id else None
+    return _render_collect(request, db, user, q=q, customer=customer, si_error=si_error)
+
+
+def _render_collect(request: Request, db: Session, user, *, q: str = "", customer=None, si_error: str = "",
+                    error: str = "", posted: dict = None, status_code: int = 200):
+    """The Collect Payment page. `posted` is a payment that was just turned
+    back — its ticks, method and cheque details are put back as typed."""
+    q = (q or "").strip()
     matches = []
     match_totals = {}
     owed = []
@@ -420,8 +427,9 @@ def collect_payment(
             "owed": owed, "total": total, "methods": SETTLE_METHODS,
             "si_eligible_ids": si_eligible_ids, "si_error": si_error,
             "today_iso": datetime.now(MANILA).date().isoformat(),
-            "is_admin": is_admin(user),
+            "is_admin": is_admin(user), "error": error, "posted": posted,
         },
+        status_code=status_code,
     )
 
 
@@ -674,6 +682,7 @@ def pay_selected_submit(
     sale_ids: list[str] = Form([]),
     method: str = Form("cash"), ref_no: str = Form(""), payment_date: str = Form(""),
     cheque_date: str = Form(""), bank: str = Form(""), cheque_no: str = Form(""),
+    from_collect: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -695,6 +704,13 @@ def pay_selected_submit(
     form = {"cheque_date": cheque_date, "payment_date": payment_date, "bank": bank, "cheque_no": cheque_no}
 
     error = _apply_batch_payment(db, user, customer, owed, method, ref_no, form)
+    if error and from_collect:
+        # Back to Collect Payment itself, as it was — not the bare Pay
+        # Selected screen, which would drop the method and cheque details.
+        return _render_collect(request, db, user, customer=customer, error=error, status_code=400, posted={
+            "sale_ids": sorted(ids), "method": method, "ref_no": ref_no or "",
+            "payment_date": payment_date, "bank": bank, "cheque_no": cheque_no, "cheque_date": cheque_date,
+        })
     if error:
         return templates.TemplateResponse(
             "credits/pay_selected.html",
