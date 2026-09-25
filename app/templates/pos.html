@@ -725,7 +725,7 @@ function renderResults(products) {
       '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span>' +
       (p.is_vat ? '<span class="pill">VAT</span>' : '') + '</div>' +
       '<div class="pos-item-sub">' + peso(p.units[0].price) + ' / ' + escapeHtml(p.base_unit) +
-      ' · <span class="' + (p.on_hand <= 0 ? 'oos' : '') + '">' + fmtQty(p.on_hand) + ' on hand</span>' +
+      ' · <span class="' + (p.on_hand <= 0 ? 'oos' : '') + '">' + fmtStockQty(p, p.on_hand) + ' on hand</span>' +
       (p.container ? '<span class="open-bag">📦 ' + p.container.sealed + ' ' + escapeHtml(p.container.pack_name) +
         ' + <b>' + fmtQty(p.container.open) + ' ' + escapeHtml(p.container.loose_name) +
         '</b> in open bag</span>' : '') +
@@ -831,7 +831,8 @@ function renderCart() {
       '<td class="strong">' + escapeHtml(line.product.name) +
         (over ? ' <span class="warn-tag" title="Selling beyond stock (allowed)">⚠ over stock</span>' : '') + '</td>' +
       '<td>' + (line.customPrice ? escapeHtml(unit.name) : '<select class="cart-unit" onchange="setUnit(' + i + ', this.value)">' + opts + '</select>') + '</td>' +
-      '<td class="num"><input class="cart-qty' + (over ? ' over' : '') + '" type="number" step="0.001" min="0" value="' + fmtQty(line.qty) + '" oninput="setQty(' + i + ', this.value)"></td>' +
+      '<td class="num"><input class="cart-qty' + (over ? ' over' : '') + '" type="number" step="0.001" min="0" value="' + fmtQty(line.qty) + '" oninput="setQty(' + i + ', this.value)">' +
+        quarterNote(line) + '</td>' +
       '<td class="num"><input class="cart-price" type="number" step="0.01" min="0" value="' + unit.price.toFixed(2) + '" oninput="setCustomPrice(' + i + ', this.value)">' +
         (canSetPrice(line) ? '<button type="button" class="btn-link set-price-btn" style="display:' + (priceChanged(line) ? 'block' : 'none') +
           ';font-size:11.5px;margin:3px 0 0 auto;white-space:nowrap;" onclick="saveAsSellingPrice(' + i + ')" title="Use this price from now on">★ Set as new price</button>' : '') +
@@ -863,8 +864,16 @@ function refreshCartComputed() {
     tr.children[5].textContent = peso(lineTotalOf(line));
     const qi = tr.querySelector('.cart-qty');
     if (qi) qi.classList.toggle('over', over);
+    const qn = tr.querySelector('.qty-quarter');
+    if (qn) qn.outerHTML = quarterNote(line);
   });
   computeTotals();
+}
+// Under a loose-kilo line's qty box: the amount as the shop says it ("1 1/2 kg").
+function quarterNote(line) {
+  const unit = line.product.units[line.unitIndex];
+  if (!line.product.loose_kg || !unit || unit.factor !== 1) return '';
+  return '<div class="qty-quarter muted" style="font-size:11.5px;margin-top:2px;">' + fmtQuarter(line.qty) + ' kg</div>';
 }
 /* ---- create a product that isn't in inventory yet (popup, no pricing) ---- */
 function showNewProduct() {
@@ -1683,6 +1692,15 @@ async function checkout() {
 
 function showError(msg) { const e = document.getElementById('posError'); e.textContent = msg; e.style.display = 'block'; }
 function fmtQty(n) { return (Math.round((Number(n) || 0) * 1000) / 1000).toString(); }
+// Loose kilos to the nearest quarter, as the shop says it: 6.75 -> "6 3/4"
+// (same as the quarter_qty template filter). Display only.
+function fmtQuarter(n) {
+  const v = Number(n) || 0, q = Math.round(Math.abs(v) * 4);
+  if (!q) return '0';
+  const whole = Math.floor(q / 4), part = ['', '1/4', '1/2', '3/4'][q % 4];
+  return (v < 0 ? '-' : '') + (whole && part ? whole.toLocaleString() + ' ' + part : (whole ? whole.toLocaleString() : part));
+}
+function fmtStockQty(p, n) { return p && p.loose_kg ? fmtQuarter(n) : fmtQty(n); }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function tick() { document.getElementById('clock').textContent = new Date().toLocaleString('en-PH', {dateStyle:'medium', timeStyle:'short'}); }
 

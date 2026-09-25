@@ -608,6 +608,8 @@ def _product_payload_for_pos(db: Session, p: models.Product) -> dict:
         "is_vat": bool(p.is_vat),
         "base_unit": base_unit,
         "on_hand": float((p.beginning_stock or 0) + (p.stock_qty or 0)),
+        # Open/Retail sold by the kilo: shown in quarter kilos (6 3/4) on screen.
+        "loose_kg": bool(p.replenish_from_id and p.unit_type and p.unit_type.name.strip().lower() == "kg"),
         "units": units,
         "container": container,
         "cost_price": float(p.cost_price or 0),  # per base unit — for the "below cost" check when saving a new price

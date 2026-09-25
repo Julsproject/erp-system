@@ -276,6 +276,11 @@ def _open_levels_below(db: Session, product_id: int, _seen=None) -> int:
     return 1 + max((_open_levels_below(db, k, seen | {k}) for k in kids), default=0) if kids else 0
 
 
+def _is_loose_kg(p: models.Product) -> bool:
+    """An Open/Retail item sold by the kilo — shown in quarter kilos (6 3/4)."""
+    return bool(p.replenish_from_id and p.unit_type and p.unit_type.name.strip().lower() == "kg")
+
+
 def _get_or_create_unit_type(db: Session, name: str):
     name = (name or "").strip()
     if not name:
@@ -2733,6 +2738,7 @@ def stock_card(
             "date_to": range_to.isoformat() if range_to else "",
             "back": safe_back_url(back, "/products"),
             "view_unit_id": unit, "view_unit_name": view_unit_name, "pack_only": pack_only,
+            "loose_kg": _is_loose_kg(product),
             "view_mode": view_mode,
             "self_url": self_url,
             "base_unit_name": base_unit_name,
