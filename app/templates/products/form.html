@@ -205,7 +205,7 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
   {# The counterpart button POSTs to /products/<id>/create-open-counterpart, so it
      needs a saved product — on the Add form there's no id yet. The picker above
      works either way: _save_from_form reads replenish_from_id on create too. #}
-  {% if product and not product.replenish_from_id %}
+  {% if can_add_open_level %}
   <div class="full">
     <button type="button" class="btn-secondary" onclick="createOpenCounterpart()">+ Create Open/Retail counterpart</button>
     <small class="hint" style="display:block;margin-top:4px;">Spins up a new, separate product (e.g. "{{ product.name }} (Open/Retail)") for loose/retail sales, already linked to auto-open a pack from this one whenever it runs low.</small>

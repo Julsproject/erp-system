@@ -171,6 +171,10 @@ def _add_stock(product: models.Product, base_qty: Decimal):
     product.stock_qty = (product.stock_qty or Decimal("0")) + base_qty
 
 
+# Whole → Open/Retail → its own Open/Retail (box → kg → rods) at most.
+MAX_OPEN_LEVELS = 2
+
+
 def _replenish_from_source(db: Session, product: models.Product, needed_base_qty: Decimal, *, ref: str, note: str, created_at=None):
     """If `product` is an open/retail counterpart (replenish_from_id set) and
     its own stock can't cover needed_base_qty, pull whole packs from its
@@ -185,8 +189,17 @@ def _replenish_from_source(db: Session, product: models.Product, needed_base_qty
     triggering sale's own date (e.g. `movement_stamp` in _finalize_sale, or
     `sale.created_at` in edit_sale_items) — otherwise a backdated sale's
     "sale" movement would carry the right date while its repack-in/repack-out
-    pair silently landed on today via the column's own server default."""
-    if not product.replenish_from_id:
+    pair silently landed on today via the column's own server default.
+
+    The source can itself be an Open/Retail item (6013 Nihon: box → kg →
+    rods). Then it's topped up from ITS source first, one level up, before
+    each pack is taken from it — so a rod sale opens a kilo, and a kilo that
+    isn't there opens a box. `_depth` stops a mislinked loop."""
+    return _replenish_chain(db, product, needed_base_qty, ref=ref, note=note, created_at=created_at, _depth=0)
+
+
+def _replenish_chain(db: Session, product: models.Product, needed_base_qty: Decimal, *, ref, note, created_at, _depth):
+    if not product.replenish_from_id or _depth >= MAX_OPEN_LEVELS:
         return
     available = (product.beginning_stock or Decimal("0")) + (product.stock_qty or Decimal("0"))
     if available >= needed_base_qty:
@@ -206,12 +219,16 @@ def _replenish_from_source(db: Session, product: models.Product, needed_base_qty
         take = give = max((Decimal(str(u.factor_to_base or 0)) for u in source.units), default=Decimal("0"))
     if give <= 0:
         return
-    pack_cost = take * Decimal(str(source.cost_price or 0))
-    per_unit_cost = (pack_cost / give).quantize(Decimal("0.01"))
     extra = {"created_at": created_at} if created_at is not None else {}
     value_before = available * Decimal(str(product.cost_price or 0))
+    value_added = Decimal("0")
     guard = 0
     while available < needed_base_qty and guard < 10000:
+        # Source short too, and itself opened from something? Open that first.
+        # Its cost can reset when it does, so the pack is priced after.
+        _replenish_chain(db, source, take, ref=ref, note=note, created_at=created_at, _depth=_depth + 1)
+        pack_cost = take * Decimal(str(source.cost_price or 0))
+        per_unit_cost = (pack_cost / give).quantize(Decimal("0.01"))
         _deduct_stock(source, take)
         _add_stock(product, give)
         db.add(models.StockMovement(
@@ -226,12 +243,13 @@ def _replenish_from_source(db: Session, product: models.Product, needed_base_qty
         ))
         product.cost_price = per_unit_cost  # keep the open item's cost in step with its source
         available += give
+        value_added += pack_cost
         guard += 1
     if guard:
         # Taking on the pack's cost re-values whatever loose stock (or
         # oversold negative stock) was already there — see stock_books.
         stock_books.book_cost_variance(
-            db, product, value_before=value_before, value_added=pack_cost * guard,
+            db, product, value_before=value_before, value_added=value_added,
             ref=ref, note="Cost reset by opening a pack", stamp=created_at,
         )
 

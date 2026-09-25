@@ -255,6 +255,27 @@ def _get_or_create_subcategory(db: Session, name: str, category: models.Category
     return sub
 
 
+MAX_OPEN_LEVELS = 2  # same as pos.MAX_OPEN_LEVELS: box → kg → piece
+
+
+def _open_levels_above(db: Session, product: models.Product) -> int:
+    """How many items this one opens from, up the chain (0 for a whole item)."""
+    n, node, seen = 0, product, {product.id}
+    while node and node.replenish_from_id and node.replenish_from_id not in seen:
+        seen.add(node.replenish_from_id)
+        node = db.get(models.Product, node.replenish_from_id)
+        n += 1
+    return n
+
+
+def _open_levels_below(db: Session, product_id: int, _seen=None) -> int:
+    """How many levels of Open/Retail items open from this one, down the chain."""
+    seen = _seen or {product_id}
+    kids = [pid for (pid,) in db.query(models.Product.id).filter(models.Product.replenish_from_id == product_id).all()
+            if pid not in seen]
+    return 1 + max((_open_levels_below(db, k, seen | {k}) for k in kids), default=0) if kids else 0
+
+
 def _get_or_create_unit_type(db: Session, name: str):
     name = (name or "").strip()
     if not name:
@@ -824,6 +845,8 @@ def _render_form(request, db, user, product=None, error=None, back=""):
             "unit_types": unit_types,
             "shelves": shelves,
             "adjustment_reasons": ADJUSTMENT_REASONS,
+            # Room for another Open/Retail level under this one (box → kg → piece)?
+            "can_add_open_level": bool(product and product.id and _open_levels_above(db, product) < MAX_OPEN_LEVELS),
             "error": error,
             # Where Back/Cancel/after-save should land — the filtered list the
             # user came from, so a search isn't lost just because they edited
@@ -1209,13 +1232,21 @@ def _save_from_form(product: models.Product, db: Session, form):
             product.replenish_factor = replenish_factor
         else:
             product.replenish_factor = None  # same unit: pack size comes from the source's units ladder
-        if source.replenish_from_id:
-            raise ValueError("That product is itself an open/retail counterpart — pick its sealed source instead.")
-        # Same flat-2-tier rule from the other direction: this product can't
-        # become a counterpart of something else if it's already serving as
-        # the sealed source for one of its own — that would chain 3 deep.
-        if product.id and db.query(models.Product.id).filter(models.Product.replenish_from_id == product.id).first():
-            raise ValueError("This product is already a replenish source for another product — unlink that one first.")
+        # Up to 3 levels (box → kg → rods, pos.MAX_OPEN_LEVELS openings):
+        # count the levels above the source and below this product.
+        up, node, seen = 1, source, {source.id}
+        while node.replenish_from_id:
+            if node.replenish_from_id == product.id or node.replenish_from_id in seen:
+                raise ValueError("That link would loop back to this product.")
+            seen.add(node.replenish_from_id)
+            node = db.get(models.Product, node.replenish_from_id)
+            up += 1
+        down = _open_levels_below(db, product.id) if product.id else 0
+        if up + 1 + down > MAX_OPEN_LEVELS + 1:
+            raise ValueError(
+                f"That would chain {up + 1 + down} items deep — at most {MAX_OPEN_LEVELS + 1} "
+                f"(e.g. box → kg → piece)."
+            )
         product.replenish_from_id = source.id
     else:
         product.replenish_from_id = None
@@ -1386,11 +1417,10 @@ def create_open_counterpart(product_id: int, request: Request, name: str = Form(
     source = db.get(models.Product, product_id)
     if not source:
         return RedirectResponse("/products", status_code=302)
-    if source.replenish_from_id:
-        # An open/retail counterpart spawning its own counterpart would break
-        # the flat 2-tier relationship _save_from_form enforces — the "+
-        # Create" button is hidden in this case, so reaching here at all
-        # means the request was forged or stale; just bounce back quietly.
+    if _open_levels_above(db, source) >= MAX_OPEN_LEVELS:
+        # Already the bottom of a box → kg → piece chain — the "+ Create"
+        # button is hidden in this case, so reaching here at all means the
+        # request was forged or stale; just bounce back quietly.
         return RedirectResponse(f"/products/{product_id}/edit", status_code=status.HTTP_302_FOUND)
 
     new_name = (name or "").strip() or f"{source.name} (Open/Retail)"
