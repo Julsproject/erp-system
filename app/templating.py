@@ -83,6 +83,25 @@ def whole_qty(value) -> str:
     return str(d.to_integral_value(rounding=ROUND_FLOOR))
 
 
+_QUARTERS = {1: "1/4", 2: "1/2", 3: "3/4"}
+
+
+def quarter_qty(value) -> str:
+    """A loose-kilo quantity to the nearest quarter, as the shop says it:
+    6.75 -> "6 3/4", 0.5 -> "1/2", 6.997 -> "7". Display only — the stored
+    quantity stays exact."""
+    try:
+        d = _to_decimal(value)
+    except (InvalidOperation, TypeError, ValueError):
+        return "0"
+    quarters = int((abs(d) * 4).to_integral_value(rounding=ROUND_HALF_UP))
+    whole, part = divmod(quarters, 4)
+    if not quarters:
+        return "0"
+    text = f"{whole:,} {_QUARTERS[part]}" if whole and part else (f"{whole:,}" if whole else _QUARTERS[part])
+    return ("-" if d < 0 else "") + text
+
+
 def price_alert_count() -> int:
     """How many active products need a pricing review — same three triggers
     as the Selling Price tab's own count (see pricing.needs_review_expr),
@@ -215,6 +234,7 @@ templates.env.filters["peso"] = peso
 templates.env.filters["qty"] = qty
 templates.env.filters["qty_input"] = qty_input
 templates.env.filters["whole_qty"] = whole_qty
+templates.env.filters["quarter_qty"] = quarter_qty
 templates.env.globals["price_alert_count"] = price_alert_count
 templates.env.globals["pdc_due_count"] = pdc_due_count
 templates.env.globals["check_month_end_rollover"] = check_month_end_rollover

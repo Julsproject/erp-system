@@ -293,10 +293,13 @@
           {% if p.selling_price and p.selling_price > 0 %}{{ p.selling_price|peso }}
           {% else %}<span class="muted">not set</span>{% endif %}
         </td>
-        <td class="num">{{ p.beginning_stock|whole_qty }}</td>
-        <td class="num">{{ p.stock_qty|whole_qty }}</td>
+        {# An Open/Retail item sold by the kilo reads in quarter kilos (6 3/4), not a floored 6. #}
+        {% set loose_kg = p.replenish_from_id and p.unit_type and p.unit_type.name|lower == 'kg' %}
+        <td class="num">{{ p.beginning_stock|quarter_qty if loose_kg else p.beginning_stock|whole_qty }}</td>
+        <td class="num">{{ p.stock_qty|quarter_qty if loose_kg else p.stock_qty|whole_qty }}</td>
         <td class="num strong">
-          {% if p.unit_breakdown %}
+          {% if loose_kg %}{{ p.total_qty|quarter_qty }}
+          {% elif p.unit_breakdown %}
             {% set nonzero = p.unit_breakdown | rejectattr('qty', 'equalto', 0) | list %}
             {% set tiers_shown = nonzero if nonzero else [p.unit_breakdown[-1]] %}
             {%- for tier in tiers_shown -%}{{ tier.qty|qty }} {{ tier.name }}{{ ' ' if not loop.last }}{%- endfor -%}
