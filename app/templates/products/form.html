@@ -266,6 +266,35 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
   </div>
 </form>
 
+{% if product %}
+<script>
+  // A cost 10x off what's on file is usually a box price typed into the
+  // per-piece box. Ask the server (same wording as the Selling Price tab)
+  // before submitting, so a "no" keeps everything typed here.
+  (function () {
+    var form = document.querySelector('form.card.form');
+    form.addEventListener('submit', async function (e) {
+      if (form.dataset.costChecked) return;
+      e.preventDefault();
+      var cost = document.querySelector('input[name="cost_price"]').value;
+      var warning = null;
+      try {
+        var res = await fetch('/products/{{ product.id }}/cost-check?cost=' + encodeURIComponent(cost));
+        warning = (await res.json()).warning;
+      } catch (err) {}  // server still refuses an unconfirmed jump
+      if (warning) {
+        if (!confirm(warning)) return;
+        var flag = document.createElement('input');
+        flag.type = 'hidden'; flag.name = 'confirm_cost_jump'; flag.value = '1';
+        form.appendChild(flag);
+      }
+      form.dataset.costChecked = '1';
+      form.requestSubmit ? form.requestSubmit() : form.submit();
+    });
+  })();
+</script>
+{% endif %}
+
 <script>
   function calcTotal() {
     var beginningEl = document.getElementById('beginning');

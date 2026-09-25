@@ -1454,6 +1454,14 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
             return _render_form(request, db, user, product=product, back=back,
                                  error="Select a reason for the stock quantity change before saving.")
 
+        # The form asks first (see cost_check); this only catches a save
+        # that skipped the question, e.g. a page loaded before it existed.
+        if not form.get("confirm_cost_jump"):
+            warning = _cost_jump_warning(product, old_cost, _to_decimal(form.get("cost_price")))
+            if warning:
+                return _render_form(request, db, user, product=product, back=back, error=warning.replace(
+                    "\n\nSave this cost anyway?", " Nothing was saved — re-enter it and confirm if it's right."))
+
         before = _product_snapshot(product)
         try:
             _save_from_form(product, db, form)
@@ -1626,6 +1634,18 @@ def _cost_jump_warning(product: models.Product, old_cost: Decimal, new_cost: Dec
         msg += "\n\nIf ₱{:,.2f} is a pack price, the per-{} cost is: ".format(new_cost, base) + ", ".join(
             f"₱{new_cost / Decimal(str(u.factor_to_base)):,.2f} (1 {u.name} = {qty(u.factor_to_base)} {base})" for u in packs)
     return msg + "\n\nSave this cost anyway?"
+
+
+@router.get("/products/{product_id:int}/cost-check")
+def cost_check(product_id: int, cost: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Product Edit asks this before submitting, so the warning is worded in
+    one place and a declined save keeps everything typed on the form."""
+    if not user or not is_staff(user):
+        return JSONResponse({"warning": None}, status_code=403)
+    product = db.get(models.Product, product_id)
+    if not product:
+        return {"warning": None}
+    return {"warning": _cost_jump_warning(product, Decimal(str(product.cost_price or 0)), _to_decimal(cost))}
 
 
 @router.post("/products/{product_id:int}/pricing")
