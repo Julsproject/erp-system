@@ -396,10 +396,25 @@ async function peSave() {
     margin_pct: document.getElementById('peMarginPct').value,
   };
   try {
-    const res = await fetch('/products/' + peSelectedId + '/pricing', {
+    let res = await fetch('/products/' + peSelectedId + '/pricing', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
     });
-    const data = await res.json();
+    let data = await res.json();
+    if (data.needs_confirm) {
+      // A cost 10x off what's on file is usually a pack price typed into
+      // the per-piece box — the server says what it would do; ask first.
+      if (!confirm(data.warning)) {
+        msg.style.background = ''; msg.style.borderColor = ''; msg.style.color = '';
+        msg.textContent = 'Not saved — check the Cost is per ' + (((peProducts.find(x => x.id === peSelectedId) || {}).base_unit) || 'unit') + ', not per pack.';
+        msg.style.display = 'block';
+        return;
+      }
+      payload.confirm_cost_jump = true;
+      res = await fetch('/products/' + peSelectedId + '/pricing', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+      });
+      data = await res.json();
+    }
     if (data.ok) {
       const savedName = (peProducts.find(x => x.id === peSelectedId) || {}).name || 'item';
       // Re-fetch so the list, the review badge and this item's flag all

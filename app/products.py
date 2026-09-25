@@ -1601,6 +1601,33 @@ def _pricing_packs(db: Session, p: models.Product) -> dict:
     return {"base_unit": base, "packs": packs}
 
 
+COST_JUMP_RATIO = Decimal("10")
+
+
+def _cost_jump_warning(product: models.Product, old_cost: Decimal, new_cost: Decimal):
+    """A message to confirm before saving, or None. A cost 10x up or down
+    from what's on file is almost always a pack price typed into the
+    per-base-unit box — six rivet items took a box cost as their per-piece
+    cost (2026-09-25) and re-valued stock by ~₱5.8M. Also names the
+    per-base cost for each pack, in case that's what was meant."""
+    if old_cost <= 0 or new_cost <= 0:
+        return None
+    ratio = new_cost / old_cost
+    if COST_JUMP_RATIO > ratio > 1 / COST_JUMP_RATIO:
+        return None
+    base = product.unit_type.name if product.unit_type else "unit"
+    on_hand = Decimal(str(product.total_qty or 0))
+    times = f"{ratio:,.0f}× higher" if ratio > 1 else f"{1 / ratio:,.0f}× lower"
+    change = on_hand * (new_cost - old_cost)
+    msg = (f"Cost goes from ₱{old_cost:,.2f} to ₱{new_cost:,.2f} per {base} ({times}). "
+           f"That re-values {qty(on_hand)} {base} on hand by {'−' if change < 0 else '+'}₱{abs(change):,.2f}.")
+    packs = sorted((u for u in product.units if (u.factor_to_base or 0) > 1), key=lambda u: u.factor_to_base)
+    if ratio > 1 and packs:
+        msg += "\n\nIf ₱{:,.2f} is a pack price, the per-{} cost is: ".format(new_cost, base) + ", ".join(
+            f"₱{new_cost / Decimal(str(u.factor_to_base)):,.2f} (1 {u.name} = {qty(u.factor_to_base)} {base})" for u in packs)
+    return msg + "\n\nSave this cost anyway?"
+
+
 @router.post("/products/{product_id:int}/pricing")
 def update_pricing(product_id: int, data: dict, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
@@ -1618,6 +1645,10 @@ def update_pricing(product_id: int, data: dict, request: Request, db: Session = 
         )
     before = _product_snapshot(product)
     old_cost = Decimal(str(product.cost_price or 0))
+    if "cost_price" in data and not data.get("confirm_cost_jump"):
+        warning = _cost_jump_warning(product, old_cost, _to_decimal(data.get("cost_price")))
+        if warning:
+            return JSONResponse({"ok": False, "needs_confirm": True, "warning": warning}, status_code=409)
     if "cost_price" in data:
         product.cost_price = _to_decimal(data.get("cost_price"))
     product.selling_price = new_selling_price
