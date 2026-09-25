@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from . import models, pricing, settings_store
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_admin, is_staff
 from .products import low_stock_expr
 from .search_utils import multi_word_ilike
 from .templating import templates
@@ -542,6 +542,110 @@ def price_overrides(
             "total_under": total_under, "total_over": total_over,
         },
     )
+
+
+POS_PRICE_SUMMARY = "% from POS:%"   # pos.pos_set_price writes "... from POS: ₱old → ₱new per unit"
+
+
+def _pos_price_change_rows(db: Session, period_start: date, period_end: date) -> list:
+    """Every "★ Set as new price" saved from a POS cart, newest first, with
+    who did it, the price now, and whether it was already undone. Read from
+    the Activity Log, so changes made before this page existed show too."""
+    entries = (
+        db.query(models.AuditLog)
+        .filter(models.AuditLog.entity_type == "product", models.AuditLog.action == "update",
+                models.AuditLog.summary.like(POS_PRICE_SUMMARY),
+                _local_date(models.AuditLog.created_at).between(period_start, period_end))
+        .order_by(models.AuditLog.created_at.desc())
+        .all()
+    )
+    undone = {}
+    for u in db.query(models.AuditLog).filter(models.AuditLog.summary.like("Undid POS price change #%")).all():
+        try:
+            undone[int(json.loads(u.changes or "{}").get("undo_of"))] = u
+        except (TypeError, ValueError):
+            pass
+    users = {u.id: u for u in db.query(models.User).all()}
+    rows = []
+    for e in entries:
+        try:
+            changes = json.loads(e.changes or "{}")
+        except ValueError:
+            continue
+        key = next((k for k in changes if k == "selling_price" or k.startswith("unit_price:")), None)
+        if not key:
+            continue
+        old, new = (Decimal(str(v)) for v in changes[key])
+        product = db.get(models.Product, e.entity_id)
+        unit_name = key.split(":", 1)[1] if key.startswith("unit_price:") else (
+            product.unit_type.name if product and product.unit_type else "unit")
+        unit = next((u for u in product.units if u.name == unit_name), None) if product and key != "selling_price" else None
+        current = (Decimal(str(unit.price)) if unit else Decimal(str(product.selling_price or 0))) if product else None
+        factor = Decimal(str(unit.factor_to_base)) if unit else Decimal("1")
+        cost = Decimal(str(product.cost_price or 0)) * factor if product else ZERO
+        who = users.get(e.user_id)
+        rows.append({
+            "entry": e, "product": product, "unit": unit_name, "old": old, "new": new, "current": current, "cost": cost,
+            "below_cost": bool(cost > 0 and new <= cost), "user": who,
+            "undone_by": undone.get(e.id),
+            "can_undo": bool(product and current == new and e.id not in undone),
+        })
+    return rows
+
+
+@router.get("/reports/pos-price-changes", response_class=HTMLResponse)
+def pos_price_changes(request: Request, days: int = 30, date_from: str = "", date_to: str = "", msg: str = "",
+                      db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    period_start, period_end, custom = _resolve_period(days, date_from, date_to)
+    rows = _pos_price_change_rows(db, period_start, period_end)
+    return templates.TemplateResponse(
+        "reports/pos_price_changes.html",
+        {"request": request, "app_name": request.app.title, "user": user, "rows": rows, "msg": msg,
+         "days": days, "date_from": date_from, "date_to": date_to,
+         "period_start": period_start, "period_end": period_end, "custom": custom,
+         "can_undo": is_admin(user)},
+    )
+
+
+@router.post("/reports/pos-price-changes/{entry_id:int}/undo")
+def pos_price_change_undo(entry_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Put back the price a POS "Set as new price" replaced — admin only, and
+    only while the price is still the one the POS set (a later change on the
+    Selling Price tab isn't silently thrown away)."""
+    from urllib.parse import quote
+    from . import audit
+    back = "/reports/pos-price-changes"
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse(f"{back}?msg={quote('Only an admin can undo a price change.')}", status_code=302)
+    e = db.get(models.AuditLog, entry_id)
+    if not e or not (e.summary or "").count("from POS:"):
+        return RedirectResponse(f"{back}?msg={quote('That price change was not found.')}", status_code=302)
+    rows = [r for r in _pos_price_change_rows(db, date(2000, 1, 1), _today()) if r["entry"].id == entry_id]
+    if not rows or not rows[0]["can_undo"]:
+        return RedirectResponse(f"{back}?msg={quote('The price has changed since (or it was already undone) — edit it on the Selling Price tab instead.')}", status_code=302)
+    r = rows[0]
+    product = db.get(models.Product, r["product"].id)
+    unit = next((u for u in product.units if u.name == r["unit"]), None)
+    if unit is not None:
+        unit.price = r["old"]
+    else:
+        product.selling_price = r["old"]
+        pricing.apply_to(product, product.cost_price, product.markup_pct, product.margin_pct)
+    who = (r["user"].full_name or r["user"].username) if r["user"] else (e.username or "someone")
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="product", entity_id=product.id, entity_label=product.name,
+        changes={"undo_of": e.id, ("selling_price" if unit is None else f"unit_price:{unit.name}"): [str(r["new"]), str(r["old"])]},
+        summary=f"Undid POS price change #{e.id} on “{product.name}”: ₱{r['new']:,.2f} → ₱{r['old']:,.2f} per {r['unit']} (set by {who})",
+    )
+    db.commit()
+    done = f"{product.name}: price back to ₱{r['old']:,.2f} per {r['unit']}."
+    return RedirectResponse(f"{back}?msg={quote(done)}", status_code=302)
 
 
 @router.get("/reports/price-overrides/export")

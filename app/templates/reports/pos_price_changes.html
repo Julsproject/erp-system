@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}POS Price Changes · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">POS Price Changes</h1>
+    <p class="muted">{{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }} · every “★ Set as new price” saved from a POS cart — who did it, and the price it replaced</p>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;">
+    {% set pp_url = "/reports/pos-price-changes" %}{% set pp_keep = {} %}{% include "_period_picker.html" %}
+  </div>
+</div>
+
+{% if msg %}<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;">{{ msg }}</div>{% endif %}
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ rows|length }}</span><span>Price change{{ 's' if rows|length != 1 }} from the POS</span></div>
+  <div class="mini-stat"><span class="mini-num neg">{{ rows|selectattr('below_cost')|list|length }}</span><span>Set at or below cost</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ rows|selectattr('undone_by')|list|length }}</span><span>Undone</span></div>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr>
+        <th>When</th><th>Changed by</th><th>Product</th><th>Unit</th>
+        <th class="num">Was</th><th class="num">Set to</th><th class="num">Price now</th><th class="num">Cost</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.entry.created_at.strftime('%b %d, %Y %I:%M %p') if r.entry.created_at else '' }}</td>
+        <td>
+          {{ (r.user.full_name or r.user.username) if r.user else (r.entry.username or '—') }}
+          {% if r.user %}<span class="muted" style="font-size:11.5px;"> · {{ r.user.role }}</span>{% endif %}
+        </td>
+        <td class="strong">{{ r.product.name if r.product else r.entry.entity_label }}</td>
+        <td>{{ r.unit }}</td>
+        <td class="num muted">{{ r.old|peso }}</td>
+        <td class="num strong" {% if r.below_cost %}style="color:var(--danger);"{% endif %}>
+          {{ r.new|peso }}{% if r.below_cost %} <span class="warn-tag">at/below cost</span>{% endif %}
+        </td>
+        <td class="num">{{ r.current|peso if r.current is not none else '—' }}</td>
+        <td class="num muted">{{ r.cost|peso if r.cost else '—' }}</td>
+        <td class="row-actions" style="white-space:nowrap;">
+          {% if r.undone_by %}
+            <span class="muted" style="font-size:12px;">↩ undone by {{ r.undone_by.username }} · {{ r.undone_by.created_at.strftime('%b %d') }}</span>
+          {% else %}
+            {% if can_undo and r.can_undo %}
+            <form method="post" action="/reports/pos-price-changes/{{ r.entry.id }}/undo" style="display:inline;"
+                  onsubmit="return confirm('Put {{ (r.product.name if r.product else '')|e }} back to {{ r.old|peso }} per {{ r.unit|e }}?');">
+              <button type="submit" class="btn-link">↩ Undo</button>
+            </form>
+            {% elif r.product and r.current != r.new %}
+            <span class="muted" style="font-size:12px;" title="The price was changed again after this">changed since</span>
+            {% endif %}
+            {% if r.product %}<a class="btn-link" href="/products/pricing?product_id={{ r.product.id }}">Edit</a>{% endif %}
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="9" class="empty">No prices were changed from the POS in this period.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if not can_undo %}<p class="muted" style="font-size:12.5px;margin-top:10px;">Only an admin can undo a change. Edit opens the item on the Selling Price tab.</p>{% endif %}
+{% endblock %}
