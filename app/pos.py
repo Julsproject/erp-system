@@ -117,6 +117,33 @@ def _resolve_unit_factor(product, unit_name, claimed) -> Decimal:
     return claimed
 
 
+# Units that are measured, so a fraction is a real quantity (2.5 kg, 0.25
+# ELF, 1.5 m). Anything else is counted — a piece, box, pack, roll, bag —
+# and has to be a whole number: 29.994 pieces is a typo, and it leaves a
+# .006 on the Stock Card forever.
+MEASURED_UNITS = {"kg", "kgs", "kilo", "kilos", "g", "gram", "grams", "meter", "meters", "mtr", "mtrs", "m", "cm",
+                  "ft", "feet", "foot", "in", "inch", "elf", "liter", "liters", "ltr", "l", "ml", "gal", "gallon",
+                  "cu.m", "cubic meter", "sq.m", "sq.ft"}
+
+
+def _whole_qty_error(db: Session, lines, *, qty_key: str = "qty"):
+    """A message for the first line selling a counted unit in a fraction,
+    or None. Checked before anything is saved."""
+    for ln in lines or []:
+        qty = _dec(ln.get(qty_key))
+        if qty == qty.to_integral_value():
+            continue
+        product = db.get(models.Product, int(ln["product_id"])) if ln.get("product_id") else None
+        if not product:
+            continue
+        unit = (ln.get("unit_name") or (product.unit_type.name if product.unit_type else "")).strip()
+        if unit.lower() in MEASURED_UNITS:
+            continue
+        return (f"“{product.name}” is sold by the {unit or 'piece'} — the quantity has to be a whole number "
+                f"(got {qty.normalize():f}).")
+    return None
+
+
 def _stock_taken_by_sale(db: Session, sale: models.Sale) -> dict:
     """{product_id: base qty this sale actually took off the shelf} — its
     own sale / item-correction / re-date movements, not what the lines say.
@@ -776,6 +803,9 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
     invoice_no = (invoice_no or "").strip()
     if not invoice_no:
         return False, "Invoice number is required."
+    qty_err = _whole_qty_error(db, lines)
+    if qty_err:
+        return False, qty_err
     if _invoice_taken(db, invoice_no, receipt_type):
         booklet = (receipt_type or "").strip()
         return False, (
@@ -1613,6 +1643,9 @@ def pos_exchange(data: dict, db: Session = Depends(get_db), user=Depends(get_cur
     new_lines = data.get("new_lines") or []
     if not returned and not new_lines:
         return JSONResponse({"ok": False, "error": "Nothing to exchange."}, status_code=400)
+    qty_err = _whole_qty_error(db, new_lines)
+    if qty_err:
+        return JSONResponse({"ok": False, "error": qty_err}, status_code=400)
 
     typed_invoice = (data.get("invoice_no") or "").strip()
     typed_receipt_type = (data.get("receipt_type") or "").strip() or None
@@ -2780,6 +2813,9 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
     new_lines = data.get("lines") or []
     if not new_lines:
         return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS["empty"]}, status_code=400)
+    qty_err = _whole_qty_error(db, new_lines)
+    if qty_err:
+        return JSONResponse({"ok": False, "error": qty_err}, status_code=400)
     vat_applied = bool(data.get("vat_applied"))
     discount_total = _dec(data.get("discount_total"))
 
