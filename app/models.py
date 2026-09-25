@@ -227,7 +227,7 @@ class Product(Base):
     subcategory = relationship("SubCategory")
     unit_type = relationship("UnitType")
     shelf = relationship("Shelf")
-    replenish_from = relationship("Product", remote_side=[id])
+    replenish_from = relationship("Product", remote_side=[id], backref="open_items")
     units = relationship(
         "ProductUnit",
         back_populates="product",
@@ -238,6 +238,19 @@ class Product(Base):
     @property
     def total_qty(self):
         return (self.beginning_stock or 0) + (self.stock_qty or 0)
+
+    @property
+    def open_split(self):
+        """(pack name, loose name, loose per pack) for a whole item whose
+        Open/Retail item is counted in another unit (forward → ELF, roll →
+        meter), so a part-pack reads "3 forward 4 ELF" instead of 3.8.
+        The closest loose unit wins (ELF over sack). None otherwise."""
+        cands = [c for c in (self.open_items or [])
+                 if c.is_active and c.unit_type_id != self.unit_type_id and (c.replenish_factor or 0) > 1]
+        if not cands or not self.unit_type:
+            return None
+        c = min(cands, key=lambda c: c.replenish_factor)
+        return (self.unit_type.name, c.unit_type.name if c.unit_type else "unit", Decimal(str(c.replenish_factor)))
 
     @property
     def container(self):

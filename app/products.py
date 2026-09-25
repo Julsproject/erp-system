@@ -2739,6 +2739,8 @@ def stock_card(
             "back": safe_back_url(back, "/products"),
             "view_unit_id": unit, "view_unit_name": view_unit_name, "pack_only": pack_only,
             "loose_kg": _is_loose_kg(product),
+            # Whole item opened into another unit: part-packs read "3 forward 4 ELF".
+            "open_split": product.open_split,
             "view_mode": view_mode,
             "self_url": self_url,
             "base_unit_name": base_unit_name,

@@ -2,7 +2,7 @@
 {% block title %}Stock Card · {{ product.name }} · {{ app_name }}{% endblock %}
 {% block content %}
 {# Loose kilos on an Open/Retail item read in quarters (6 3/4), the way they sell. #}
-{% macro q(v) %}{{ v|quarter_qty if loose_kg else v|qty }}{% endmacro %}
+{% macro q(v) %}{{ v|quarter_qty if loose_kg else (v|split_qty(open_split) if open_split else v|qty) }}{% endmacro %}
 {% set qs_tail = ('&date_from=' ~ date_from if date_from else '') ~ ('&date_to=' ~ date_to if date_to else '') %}
 <div class="page-head">
   <div>

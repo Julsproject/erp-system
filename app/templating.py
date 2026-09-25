@@ -102,6 +102,25 @@ def quarter_qty(value) -> str:
     return ("-" if d < 0 else "") + text
 
 
+def split_qty(value, split) -> str:
+    """A whole item's quantity as full packs + the rest in its Open/Retail
+    item's unit, in quarters: 3.8 forward (5 ELF each) -> "3 forward 4 ELF",
+    0.55 -> "2 3/4 ELF". `split` is Product.open_split; plain qty without it."""
+    if not split:
+        return qty(value)
+    pack, loose, per = split
+    try:
+        d = _to_decimal(value)
+    except (InvalidOperation, TypeError, ValueError):
+        return "0"
+    whole = int(abs(d))
+    rest = quarter_qty((abs(d) - whole) * per)
+    if rest == str(int(per)):  # 4.999 forward rounds up to a full one
+        whole, rest = whole + 1, "0"
+    parts = ([f"{whole:,} {pack}"] if whole else []) + ([f"{rest} {loose}"] if rest != "0" else [])
+    return ("-" if d < 0 and parts else "") + (" ".join(parts) or f"0 {pack}")
+
+
 def price_alert_count() -> int:
     """How many active products need a pricing review — same three triggers
     as the Selling Price tab's own count (see pricing.needs_review_expr),
@@ -235,6 +254,7 @@ templates.env.filters["qty"] = qty
 templates.env.filters["qty_input"] = qty_input
 templates.env.filters["whole_qty"] = whole_qty
 templates.env.filters["quarter_qty"] = quarter_qty
+templates.env.filters["split_qty"] = split_qty
 templates.env.globals["price_alert_count"] = price_alert_count
 templates.env.globals["pdc_due_count"] = pdc_due_count
 templates.env.globals["check_month_end_rollover"] = check_month_end_rollover

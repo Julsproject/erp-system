@@ -299,6 +299,7 @@
         <td class="num">{{ p.stock_qty|quarter_qty if loose_kg else p.stock_qty|whole_qty }}</td>
         <td class="num strong">
           {% if loose_kg %}{{ p.total_qty|quarter_qty }}
+          {% elif p.open_split %}{{ p.total_qty|split_qty(p.open_split) }}
           {% elif p.unit_breakdown %}
             {% set nonzero = p.unit_breakdown | rejectattr('qty', 'equalto', 0) | list %}
             {% set tiers_shown = nonzero if nonzero else [p.unit_breakdown[-1]] %}
