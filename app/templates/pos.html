@@ -450,6 +450,8 @@
 
 <script>
 const IS_STAFF_USER = {{ 'true' if (user.role or '')|lower in ('admin', 'manager') else 'false' }};
+// Cashiers can save a new selling price too — every one is listed, with undo, on Reports → POS Price Changes.
+const CAN_SET_PRICE = {{ 'true' if (user.role or '')|lower in ('admin', 'manager', 'cashier') else 'false' }};
 const peso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const VAT_DIV = 1.12, VAT_RATE = 0.12;
 const METHODS = [['cash','Cash'],['bank_transfer','Bank Transfer'],['receivable','Credits'],['gcash','GCash'],['maya','Maya'],['other_ewallet','Other E-Wallet'],['cheque','Cheque']];
@@ -782,7 +784,7 @@ function setCustomPrice(i, v) {
 // a real product line (not a quick-created one).
 function canSetPrice(line) {
   const u = line.product.units[line.unitIndex];
-  return IS_STAFF_USER && !line.customPrice && (u.tier || 'fixed') === 'fixed';
+  return CAN_SET_PRICE && !line.customPrice && (u.tier || 'fixed') === 'fixed';
 }
 function priceChanged(line) {
   const u = line.product.units[line.unitIndex];

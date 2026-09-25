@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from . import accounting, audit, models, settings_store, stock_books, stock_dates
 from .customers import get_or_create_customer
 from .database import get_db
-from .deps import get_current_user, is_staff, safe_back_url
+from .deps import get_current_user, is_floor_staff, is_staff, safe_back_url
 from .products import _get_or_create_category, _get_or_create_subcategory, _get_or_create_unit_type
 from .templating import templates
 
@@ -649,13 +649,14 @@ def pos_set_price(data: dict, request: Request, db: Session = Depends(get_db), u
     now on — for when a supplier's price went up and the shelf price has to
     follow. Only the Fixed price of the unit on that line changes (the base
     unit's selling price, or that ladder unit's own price); markup/margin
-    percentages are left as set. Admin/manager only, same as the Selling
-    Price tab — a cashier can still charge a different price on one sale."""
+    percentages are left as set. Any counter role (cashier, manager, admin)
+    may do it; each one is listed with who did it, and can be undone by an
+    admin, on Reports → POS Price Changes."""
     from . import pricing
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-    if not is_staff(user):
-        return JSONResponse({"ok": False, "error": "Only a manager or admin can change a selling price."}, status_code=403)
+    if not is_floor_staff(user):
+        return JSONResponse({"ok": False, "error": "Only counter staff can change a selling price."}, status_code=403)
     product = db.get(models.Product, int(data.get("product_id") or 0))
     if not product:
         return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
