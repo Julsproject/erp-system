@@ -2399,7 +2399,22 @@ def stock_card(
     # is asked for, open in the largest unit on its ladder: the pack the shop
     # actually counts. `base=1` is how the base pill asks for base explicitly,
     # since "no unit given" no longer means base.
-    if not unit and not base and product.units:
+    # A whole item whose Open/Retail item shares its base unit (rivets: Piece
+    # on both, the box is the pack) is only ever counted by the pack — loose
+    # pieces live on the Open/Retail item — so it has no base lens at all:
+    # the pill is hidden and base=1 ignored. When the base units differ (J38
+    # counted in Box, sold loose by the Kg), the base already IS the pack.
+    container_counterpart = (
+        db.query(models.Product)
+        .filter(models.Product.replenish_from_id == product.id, models.Product.is_active.is_(True))
+        .first()
+    )
+    pack_only = bool(container_counterpart and product.units
+                     and container_counterpart.unit_type_id == product.unit_type_id)
+    base_is_pack = bool(container_counterpart and not pack_only)
+    if pack_only:
+        base = 0
+    if not unit and not base and product.units and not base_is_pack:
         default_unit = max(product.units, key=lambda u: Decimal(str(u.factor_to_base or 0)))
         if Decimal(str(default_unit.factor_to_base or 0)) > 1:
             unit = default_unit.id
@@ -2454,11 +2469,6 @@ def stock_card(
     # moved over there with the "Move to open container" action below, so
     # this product's own on-hand always reads as a clean pack count — the
     # number the user actually checks before reordering.
-    container_counterpart = (
-        db.query(models.Product)
-        .filter(models.Product.replenish_from_id == product.id, models.Product.is_active.is_(True))
-        .first()
-    )
     container_pack_factor = (
         max((Decimal(str(u.factor_to_base or 0)) for u in product.units), default=Decimal("0"))
         if container_counterpart else Decimal("0")
@@ -2692,7 +2702,7 @@ def stock_card(
             "date_from": range_from.isoformat() if range_from else "",
             "date_to": range_to.isoformat() if range_to else "",
             "back": safe_back_url(back, "/products"),
-            "view_unit_id": unit, "view_unit_name": view_unit_name,
+            "view_unit_id": unit, "view_unit_name": view_unit_name, "pack_only": pack_only,
             "view_mode": view_mode,
             "self_url": self_url,
             "base_unit_name": base_unit_name,
