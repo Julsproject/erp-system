@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from . import accounting, audit, models, pricing, settings_store, stock_books, stock_dates
 from .database import get_db
 from .deps import get_current_user, is_floor_staff, is_staff
-from .pos import MANILA, VAT_DIVISOR, VAT_RATE, _find_backdated_stock_conflicts, _resolve_txn_datetime, _vat_of
+from .pos import MANILA, VAT_DIVISOR, VAT_RATE, _find_backdated_stock_conflicts, _resolve_txn_datetime, _resolve_unit_factor, _vat_of
 from .sales import _resolve_settlement_datetime
 from .products import _get_or_create_category, _get_or_create_unit_type
 from .search_utils import multi_word_ilike
@@ -828,7 +828,10 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
         qty = _dec(ln.get("qty"))
         if qty <= 0:
             continue
-        factor = _dec(ln.get("factor"), "1")
+        # The unit name picks the factor from the product's own ladder, same
+        # as a POS line — a "Box" row that arrived with factor 1 had 2 boxes
+        # of rivets land as 2 pieces (see pos._resolve_unit_factor).
+        factor = _resolve_unit_factor(product, ln.get("unit_name"), _dec(ln.get("factor"), "1"))
         if factor <= 0:
             factor = Decimal("1")
         unit_cost = _dec(ln.get("unit_cost"))
@@ -1547,7 +1550,10 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
         qty = _dec(ln.get("qty"))
         if qty <= 0:
             continue
-        factor = _dec(ln.get("factor"), "1")
+        # The unit name picks the factor from the product's own ladder, same
+        # as a POS line — a "Box" row that arrived with factor 1 had 2 boxes
+        # of rivets land as 2 pieces (see pos._resolve_unit_factor).
+        factor = _resolve_unit_factor(product, ln.get("unit_name"), _dec(ln.get("factor"), "1"))
         if factor <= 0:
             factor = Decimal("1")
         unit_cost = _dec(ln.get("unit_cost"))
