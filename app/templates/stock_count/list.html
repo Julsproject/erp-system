@@ -7,11 +7,14 @@
     <h1 class="page-title">Stock Count</h1>
     <p class="muted">Physical inventory counts — scan what's on the shelf, reconcile against the system.</p>
   </div>
-  {% if not open_count %}
-  <form method="post" action="/stock-count/start">
-    <button class="btn" type="submit">+ Start new count</button>
-  </form>
-  {% endif %}
+  <div class="head-actions">
+    <a class="btn-secondary" href="/stock-count/items">📋 Counted Items</a>
+    {% if not open_count %}
+    <form method="post" action="/stock-count/start">
+      <button class="btn" type="submit">+ Start new count</button>
+    </form>
+    {% endif %}
+  </div>
 </div>
 
 {% if open_count %}

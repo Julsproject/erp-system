@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Counted Items · Stock Count · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Counted Items</h1>
+    <p class="muted">Every item that went into a stock count, and whether it goes into the <strong>Actual Beginning</strong>
+      its count sets on the Effective Date. Untick an item to leave it out — the count's stock correction still stands;
+      only its Actual Beginning is left to the regular month-end rollover. Switchable until the effective date is applied.</p>
+  </div>
+  <div class="head-actions"><a class="btn-link" href="/stock-count">← Back to Stock Count</a></div>
+</div>
+
+{% if msg %}<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;">{{ msg }}.</div>{% endif %}
+
+<form method="get" action="/stock-count/items" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
+  <label style="margin:0;font-size:12.5px;color:var(--muted);">Counts
+    <select name="scope" style="display:block;margin-top:4px;">
+      {% for k, v in scopes.items() %}<option value="{{ k }}" {{ 'selected' if k == scope }}>{{ v }}</option>{% endfor %}
+    </select>
+  </label>
+  <label style="margin:0;font-size:12.5px;color:var(--muted);">Count
+    <select name="count_id" style="display:block;margin-top:4px;">
+      <option value="0">Any count</option>
+      {% for c in counts %}<option value="{{ c.id }}" {{ 'selected' if c.id == count_id }}>{{ c.ref_no }} · {{ c.count_date.strftime('%b %d') if c.count_date else '' }}</option>{% endfor %}
+    </select>
+  </label>
+  <label style="margin:0;font-size:12.5px;color:var(--muted);">Show
+    <select name="only" style="display:block;margin-top:4px;">
+      <option value="" {{ 'selected' if not only }}>All items</option>
+      <option value="variance" {{ 'selected' if only == 'variance' }}>With a variance</option>
+      <option value="excluded" {{ 'selected' if only == 'excluded' }}>Excluded only ({{ excluded_total }})</option>
+    </select>
+  </label>
+  <label style="margin:0;font-size:12.5px;color:var(--muted);">Product
+    <input type="search" name="q" value="{{ q }}" placeholder="Search name…" style="display:block;margin-top:4px;">
+  </label>
+  <button class="btn-secondary" type="submit">Filter</button>
+</form>
+
+<p class="muted" style="font-size:12.5px;margin:0 0 8px;">{{ total }} item{{ '' if total == 1 else 's' }}{% if excluded_total %} · <strong>{{ excluded_total }}</strong> excluded{% endif %}
+  {% if not can_edit %} · Only an admin or manager can change Include.{% endif %}</p>
+
+<form id="bulkForm" method="post" action="/stock-count/items/bulk-include">
+  <input type="hidden" name="back" value="{{ request.url.path }}{{ '?' ~ request.url.query if request.url.query }}">
+  <input type="hidden" name="include" id="bulkInclude" value="1">
+  {% if can_edit %}
+  <div id="bulkBar" style="display:none;gap:8px;align-items:center;margin-bottom:8px;">
+    <span id="bulkCount" class="muted" style="font-size:12.5px;"></span>
+    <button type="button" class="btn-secondary" onclick="bulkSet(1)">✓ Include selected</button>
+    <button type="button" class="btn-secondary" onclick="bulkSet(0)">✕ Exclude selected</button>
+  </div>
+  {% endif %}
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr>
+        {% if can_edit %}<th><input type="checkbox" onchange="document.querySelectorAll('.rowChk').forEach(c => c.checked = this.checked); updateBulk()"></th>{% endif %}
+        <th>Product</th><th>Count</th><th>Count Date</th><th>Effective Date</th>
+        <th class="num">System</th><th class="num">Counted</th><th class="num">Variance</th>
+        <th>Include in beginning</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for i in items %}
+      <tr {% if not i.include %}style="opacity:.6;"{% endif %} id="row{{ i.id }}">
+        {% if can_edit %}<td>{% if i.editable %}<input type="checkbox" class="rowChk" name="line_ids" value="{{ i.id }}" onchange="updateBulk()">{% endif %}</td>{% endif %}
+        <td class="strong"><a href="/products/{{ i.product_id }}/stock-card">{{ i.name }}</a>{% if i.unit %} <span class="muted" style="font-weight:400;font-size:12px;">{{ i.unit }}</span>{% endif %}</td>
+        <td><a class="btn-link" href="/stock-count/{{ i.count.id }}">{{ i.count.ref_no }}</a>
+          {% if i.count.status == 'open' %}<span class="txn" style="background:#eff6ff;color:#1d4ed8;">open</span>{% endif %}</td>
+        <td>{{ i.count.count_date.strftime('%b %d, %Y') if i.count.count_date else '—' }}</td>
+        <td>{{ i.count.effective_date.strftime('%b %d, %Y') if i.count.effective_date else '—' }}
+          {% if i.count.effective_applied_at %}<span class="warn-tag" style="background:#f0fdf4;color:#15803d;">✓ applied</span>{% endif %}</td>
+        <td class="num">{{ i.system|qty }}</td>
+        <td class="num">{{ i.counted|qty }}</td>
+        <td class="num {{ 'owed' if i.variance != 0 }}">{{ '+' if i.variance > 0 }}{{ i.variance|qty }}</td>
+        <td>
+          {% if can_edit and i.editable %}
+          <label style="margin:0;display:inline-flex;gap:6px;align-items:center;font-size:13px;">
+            <input type="checkbox" {{ 'checked' if i.include }} onchange="setInclude({{ i.id }}, this)">
+            <span class="incText">{{ 'Included' if i.include else 'Excluded' }}</span>
+          </label>
+          {% else %}
+          <span style="font-size:13px;">{{ 'Included' if i.include else 'Excluded' }}</span>
+          {% endif %}
+          <div class="muted incWho" style="font-size:11px;">{% if i.changed_at %}{{ i.changed_by or '—' }} · {{ i.changed_at.strftime('%b %d, %Y %I:%M %p') }}{% endif %}</div>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="{{ 9 if can_edit else 8 }}" class="empty">No counted items match.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+</form>
+
+{% if pages > 1 %}
+<div class="pager" style="display:flex;gap:10px;align-items:center;margin-top:12px;">
+  {% set qs = 'scope=' ~ scope ~ '&count_id=' ~ count_id ~ '&only=' ~ only ~ '&q=' ~ (q|urlencode) %}
+  {% if page > 1 %}<a class="btn-link" href="/stock-count/items?{{ qs }}&page={{ page - 1 }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-link" href="/stock-count/items?{{ qs }}&page={{ page + 1 }}">Next →</a>{% endif %}
+</div>
+{% endif %}
+
+<script>
+function updateBulk() {
+  const n = document.querySelectorAll('.rowChk:checked').length;
+  const bar = document.getElementById('bulkBar');
+  if (!bar) return;
+  bar.style.display = n ? 'flex' : 'none';
+  document.getElementById('bulkCount').textContent = n + ' selected';
+}
+function bulkSet(v) {
+  document.getElementById('bulkInclude').value = v;
+  document.getElementById('bulkForm').submit();
+}
+async function setInclude(id, box) {
+  const want = box.checked;
+  const row = document.getElementById('row' + id);
+  try {
+    const r = await fetch('/stock-count/line/' + id + '/include', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({include: want})});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'Could not save.');
+    row.querySelector('.incText').textContent = d.include ? 'Included' : 'Excluded';
+    row.querySelector('.incWho').textContent = d.changed_by + ' · ' + d.changed_at;
+    row.style.opacity = d.include ? '' : '.6';
+  } catch (e) {
+    box.checked = !want;
+    alert(e.message);
+  }
+}
+</script>
+{% endblock %}

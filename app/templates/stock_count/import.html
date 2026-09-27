@@ -33,9 +33,39 @@
       </tbody>
     </table>
     {% endif %}
+    {% if result['items'] %}
+    <h3 style="margin:20px 0 4px;">What this sheet put into {{ count.ref_no }}</h3>
+    <p class="muted" style="font-size:12.5px;margin:0 0 8px;">
+      {{ result['items']|length }} item{{ '' if result['items']|length == 1 else 's' }} —
+      {{ result.new_count }} newly added to the count, {{ result['items']|length - result.new_count }} already in it (count replaced),
+      {{ result.variance_count }} with a variance. Variances are listed first.
+      Nothing touches stock until the count is completed.
+    </p>
+    <div class="table-wrap">
+      <table class="grid">
+        <thead><tr><th>Product</th><th></th><th class="num">System Qty</th><th class="num">Counted</th><th class="num">Variance</th></tr></thead>
+        <tbody>
+          {% for i in result['items'] %}
+          <tr>
+            <td class="strong">{{ i.name }}{% if i.unit %} <span class="muted" style="font-weight:400;font-size:12px;">{{ i.unit }}</span>{% endif %}</td>
+            <td>
+              {% if i.status == 'new' %}<span class="warn-tag" style="background:#eff6ff;color:#1d4ed8;">added</span>
+              {% elif i.unchanged %}<span class="muted" style="font-size:12px;">already in count · same qty</span>
+              {% else %}<span class="warn-tag">was {{ i.previous|qty }}</span>{% endif %}
+            </td>
+            <td class="num">{{ i.system|qty }}</td>
+            <td class="num">{{ i.counted|qty }}</td>
+            <td class="num {{ 'owed' if i.variance != 0 }}">{{ '+' if i.variance > 0 }}{{ i.variance|qty }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
     <div class="form-actions" style="margin-top:18px;">
       <a class="btn" href="/stock-count/{{ count.id }}">View count</a>
       <a class="btn-secondary" href="/stock-count/{{ count.id }}/import">Import another file</a>
+      <a class="btn-secondary" href="/stock-count/items?scope=all&count_id={{ count.id }}">📋 Include / exclude items</a>
     </div>
   </div>
 {% else %}

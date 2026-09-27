@@ -725,7 +725,7 @@ function renderResults(products) {
     el.type = 'button'; el.className = 'pos-item'; el.onclick = () => addFoundProduct(p);
     el.innerHTML =
       '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span>' +
-      (p.is_vat ? '<span class="pill">VAT</span>' : '') + '</div>' +
+      (p.is_vat ? '<span class="pill">VAT</span>' : '') + perPieceTag(p) + '</div>' +
       '<div class="pos-item-sub">' + peso(p.units[0].price) + ' / ' + escapeHtml(p.base_unit) +
       ' · <span class="' + (p.on_hand <= 0 ? 'oos' : '') + '">' + fmtStockQty(p, p.on_hand) + ' on hand</span>' +
       (p.container ? '<span class="open-bag">📦 ' + p.container.sealed + ' ' + escapeHtml(p.container.pack_name) +
@@ -830,7 +830,7 @@ function renderCart() {
       escapeHtml(u.label || u.name) + ' (' + peso(u.price) + ')</option>').join('');
     const tr = document.createElement('tr');
     tr.innerHTML =
-      '<td class="strong">' + escapeHtml(line.product.name) +
+      '<td class="strong">' + escapeHtml(line.product.name) + perPieceTag(line.product) +
         (over ? ' <span class="warn-tag" title="Selling beyond stock (allowed)">⚠ over stock</span>' : '') + '</td>' +
       '<td>' + (line.customPrice ? escapeHtml(unit.name) : '<select class="cart-unit" onchange="setUnit(' + i + ', this.value)">' + opts + '</select>') + '</td>' +
       '<td class="num"><input class="cart-qty' + (over || fractionalCountedLine(line) ? ' over' : '') + '" type="text" inputmode="decimal" autocomplete="off" value="' + fmtQtyInput(line) + '" oninput="setQty(' + i + ', this.value)" onblur="normalizeQty(' + i + ', this)">' +
@@ -861,7 +861,7 @@ function refreshCartComputed() {
     const tr = rows[i];
     if (!tr) return;
     const over = needed[line.product.id] > line.product.on_hand + 1e-9;
-    tr.children[0].innerHTML = escapeHtml(line.product.name) +
+    tr.children[0].innerHTML = escapeHtml(line.product.name) + perPieceTag(line.product) +
       (over ? ' <span class="warn-tag" title="Selling beyond stock (allowed)">⚠ over stock</span>' : '');
     tr.children[5].textContent = peso(lineTotalOf(line));
     const qi = tr.querySelector('.cart-qty');
@@ -870,6 +870,13 @@ function refreshCartComputed() {
     if (qn) qn.outerHTML = quarterNote(line);
   });
   computeTotals();
+}
+// Tekscrew and cutting disks are sold by the piece, never by the box — a
+// cashier keying the box count or box price is the usual slip.
+const PER_PIECE_RE = /\bTEKSCREW\b(?!.*ADAPTOR)|CUTTING (DISK|WHEEL)/i;
+function perPieceTag(product) {
+  return PER_PIECE_RE.test(product.name || '')
+    ? ' <span class="warn-tag" title="Enter the number of pieces and the price per piece">per piece only</span>' : '';
 }
 // Same list as pos.MEASURED_UNITS: only these may be sold in fractions (2.5 kg,
 // 1/4 ELF). A piece, box, pack or roll has to be a whole number.

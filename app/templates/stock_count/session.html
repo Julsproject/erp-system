@@ -45,6 +45,7 @@
     {% if count.status == 'open' %}
     <a class="btn-secondary" href="/stock-count/{{ count.id }}/import">⬆ Import count sheet</a>
     {% endif %}
+    <a class="btn-secondary" href="/stock-count/items?scope=all&count_id={{ count.id }}">📋 Include / exclude items</a>
     <a class="btn-link" href="/stock-count">← Back to Stock Count</a>
   </div>
 </div>
@@ -135,6 +136,7 @@
       <tr data-line-id="{{ l.id }}" data-shelf="{{ l.shelf or '' }}">
         <td class="strong">
           {{ l.name }}
+          {% if not l.include %}<span class="warn-tag" title="Left out of the Actual Beginning this count sets — see Counted Items">excluded from beginning</span>{% endif %}
           {% if l.units %}
           <button type="button" class="btn-link" style="font-size:11.5px;" onclick="toggleUnitRow({{ l.id }})">per-unit count ▾</button>
           {% endif %}

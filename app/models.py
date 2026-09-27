@@ -1083,9 +1083,16 @@ class StockCountLine(Base):
     # variance/completion logic reads — this is purely for redisplay.
     unit_breakdown = Column(Text, nullable=True)
     first_scanned_at = Column(DateTime(timezone=True), server_default=func.now())
+    # Whether this item goes into the Actual Beginning the count sets on its
+    # Effective Date (see stock_count._apply_effective_date_rebase). Unticked
+    # on the Counted Items list; the count's stock correction still stands.
+    include_in_beginning = Column(Boolean, nullable=False, server_default="true", default=True)
+    include_changed_at = Column(DateTime(timezone=True), nullable=True)
+    include_changed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
 
     stock_count = relationship("StockCount", back_populates="lines")
     product = relationship("Product")
+    include_changer = relationship("User", foreign_keys=[include_changed_by])
 
 
 class ExpenseCategory(Base):

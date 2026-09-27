@@ -93,8 +93,12 @@ def _apply_effective_date_rebase(db: Session, count: models.StockCount) -> int:
     boundary (see products._run_month_end_rollover), just scoped to this
     count's products and triggered on the date Accounting chose for it
     instead. This is what makes Actual Beginning move at all — nothing else
-    (not a sale, not the count's own completion) ever touches it directly."""
-    product_ids = {l.product_id for l in count.lines}
+    (not a sale, not the count's own completion) ever touches it directly.
+
+    Lines unticked on the Counted Items list (include_in_beginning False)
+    are skipped — that product's Actual Beginning is left for the regular
+    month-end rollover instead."""
+    product_ids = {l.product_id for l in count.lines if l.include_in_beginning}
     rolled = 0
     for pid in product_ids:
         product = db.get(models.Product, pid, with_for_update=True)
@@ -237,6 +241,7 @@ def _line_dict(line: models.StockCountLine) -> dict:
         "variance": float(variance),
         "units": units if len(units) > 1 else [],  # only worth showing when there's an actual ladder
         "shelf": (product.shelf.name if product and product.shelf else None),
+        "include": line.include_in_beginning is not False,
     }
 
 
@@ -367,6 +372,9 @@ def _run_count_import(db: Session, count: models.StockCount, classified, assign_
     applied = skipped = shelved = renamed = 0
     errors = []
     lines_by_product = {}
+    # What the sheet actually put into the count, per product — shown back
+    # after the upload so nothing goes in unnoticed.
+    summary_by_product = {}
     for item in classified:
         line_no, name, action = item["line_no"], item["name"], item["action"]
         if action == "blank":
@@ -388,6 +396,11 @@ def _run_count_import(db: Session, count: models.StockCount, classified, assign_
             )
             renamed += 1
         line = lines_by_product.get(product.id) or item["line"]
+        if product.id not in summary_by_product:
+            summary_by_product[product.id] = {
+                "status": "updated" if line else "new",
+                "previous": Decimal(str(line.counted_qty or 0)) if line else None,
+            }
         if not line:
             line = models.StockCountLine(
                 stock_count_id=count.id, product_id=product.id, product_name=product.name,
@@ -404,10 +417,25 @@ def _run_count_import(db: Session, count: models.StockCount, classified, assign_
             shelved += 1
         applied += 1
     db.commit()
+    items = []
+    for pid, line in lines_by_product.items():
+        s = summary_by_product[pid]
+        system = Decimal(str(line.system_qty or 0))
+        counted = Decimal(str(line.counted_qty or 0))
+        items.append({
+            "name": line.product_name, "status": s["status"], "previous": s["previous"],
+            "unchanged": s["previous"] is not None and s["previous"] == counted,
+            "system": system, "counted": counted, "variance": counted - system,
+            "unit": line.product.unit_type.name if line.product and line.product.unit_type else "",
+        })
+    # Variances first (biggest first), then the rest by name.
+    items.sort(key=lambda i: (i["variance"] == 0, -abs(i["variance"]), i["name"].lower()))
     return {
         "applied": applied, "skipped": skipped, "errors": errors, "shelved": shelved, "renamed": renamed,
         "assign_shelf_name": assign_shelf.name if assign_shelf else None,
-        "total": len(classified),
+        "total": len(classified), "items": items,
+        "new_count": sum(1 for i in items if i["status"] == "new"),
+        "variance_count": sum(1 for i in items if i["variance"] != 0),
     }
 
 
@@ -1127,3 +1155,132 @@ def stock_count_cancel(count_id: int, db: Session = Depends(get_db), user=Depend
         count.completed_at = func.now()
         db.commit()
     return RedirectResponse("/stock-count", status_code=302)
+
+
+# --- Counted Items: every item across counts, and whether each one goes into
+# the Actual Beginning its count sets on the Effective Date. Switchable until
+# that date has been applied; each flip is stamped on the line and logged.
+ITEMS_PAGE_SIZE = 100
+ITEMS_SCOPES = {
+    "pending": "Not applied yet",
+    "applied": "Already applied",
+    "all": "All counts",
+}
+
+
+def _include_editable(count: models.StockCount) -> bool:
+    return count.status in ("open", "completed") and not count.effective_applied_at
+
+
+@router.get("/stock-count/items", response_class=HTMLResponse)
+def stock_count_items(
+    request: Request, scope: str = "pending", count_id: int = 0, q: str = "", only: str = "",
+    page: int = 1, msg: str = "",
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_floor_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    scope = scope if scope in ITEMS_SCOPES else "pending"
+    SC, SCL = models.StockCount, models.StockCountLine
+    base = db.query(SCL).join(SC, SC.id == SCL.stock_count_id).filter(SC.status != "cancelled")
+    if scope == "pending":
+        base = base.filter(SC.effective_applied_at.is_(None))
+    elif scope == "applied":
+        base = base.filter(SC.effective_applied_at.isnot(None))
+    if count_id:
+        base = base.filter(SC.id == count_id)
+    if q.strip():
+        base = base.filter(multi_word_ilike(SCL.product_name, q))
+    excluded_total = base.filter(SCL.include_in_beginning.is_(False)).count()
+    rows_q = base
+    if only == "variance":
+        rows_q = rows_q.filter(SCL.counted_qty != SCL.system_qty)
+    elif only == "excluded":
+        rows_q = rows_q.filter(SCL.include_in_beginning.is_(False))
+    total = rows_q.count()
+    pages = max((total + ITEMS_PAGE_SIZE - 1) // ITEMS_PAGE_SIZE, 1)
+    page = min(max(page, 1), pages)
+    rows = (
+        rows_q.order_by(SC.id.desc(), SCL.product_name)
+        .offset((page - 1) * ITEMS_PAGE_SIZE).limit(ITEMS_PAGE_SIZE).all()
+    )
+    items = []
+    for l in rows:
+        c = l.stock_count
+        system, counted = Decimal(str(l.system_qty or 0)), Decimal(str(l.counted_qty or 0))
+        items.append({
+            "id": l.id, "name": l.product_name, "product_id": l.product_id, "count": c,
+            "unit": l.product.unit_type.name if l.product and l.product.unit_type else "",
+            "system": system, "counted": counted, "variance": counted - system,
+            "include": l.include_in_beginning, "editable": _include_editable(c),
+            "changed_at": l.include_changed_at,
+            "changed_by": l.include_changer.username if l.include_changer else None,
+        })
+    counts = db.query(SC).filter(SC.status != "cancelled").order_by(SC.id.desc()).limit(60).all()
+    return templates.TemplateResponse(
+        "stock_count/items.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "items": items, "counts": counts, "scopes": ITEMS_SCOPES, "scope": scope,
+         "count_id": count_id, "q": q, "only": only, "page": page, "pages": pages, "total": total,
+         "excluded_total": excluded_total, "can_edit": is_staff(user), "msg": msg},
+    )
+
+
+def _set_include(db: Session, line: models.StockCountLine, include: bool, user, request) -> bool:
+    if line.include_in_beginning == include:
+        return False
+    line.include_in_beginning = include
+    line.include_changed_at = func.now()
+    line.include_changed_by = user.id
+    c = line.stock_count
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="stock_count",
+        entity_id=c.id, entity_label=c.ref_no,
+        summary=(f"{c.ref_no}: {'included' if include else 'excluded'} “{line.product_name}” "
+                 f"{'in' if include else 'from'} the Actual Beginning set on its effective date"
+                 f" ({c.effective_date or 'no date yet'})"),
+        changes={"line_id": line.id, "product_id": line.product_id, "include_in_beginning": [not include, include]},
+    )
+    return True
+
+
+@router.post("/stock-count/line/{line_id:int}/include")
+def stock_count_line_include(line_id: int, request: Request, data: dict,
+                             db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Admin/manager only, same as the Effective Date it feeds into."""
+    if not user or not is_staff(user):
+        return JSONResponse({"ok": False, "error": "Only an admin or manager can change this."}, status_code=403)
+    line = db.get(models.StockCountLine, line_id)
+    if not line:
+        return JSONResponse({"ok": False, "error": "Line not found."}, status_code=404)
+    if not _include_editable(line.stock_count):
+        return JSONResponse({"ok": False, "error": "This count's effective date has already been applied."}, status_code=400)
+    _set_include(db, line, bool(data.get("include")), user, request)
+    db.commit()
+    db.refresh(line)
+    stamp = line.include_changed_at.astimezone(MANILA).strftime("%b %d, %Y %I:%M %p") if line.include_changed_at else ""
+    return {"ok": True, "include": line.include_in_beginning, "changed_by": user.username, "changed_at": stamp}
+
+
+@router.post("/stock-count/items/bulk-include")
+def stock_count_items_bulk_include(
+    request: Request, line_ids: list[str] = Form([]), include: int = Form(1), back: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    back = back if back.startswith("/stock-count/items") else "/stock-count/items"
+    if not is_staff(user):
+        return RedirectResponse(back, status_code=302)
+    changed = 0
+    for lid in {int(i) for i in line_ids if i.isdigit()}:
+        line = db.get(models.StockCountLine, lid)
+        if line and _include_editable(line.stock_count) and _set_include(db, line, bool(include), user, request):
+            changed += 1
+    if changed:
+        db.commit()
+    sep = "&" if "?" in back else "?"
+    word = "included" if include else "excluded"
+    return RedirectResponse(f"{back}{sep}msg={changed}+item{'' if changed == 1 else 's'}+{word}", status_code=302)
