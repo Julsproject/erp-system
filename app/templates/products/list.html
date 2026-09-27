@@ -232,9 +232,7 @@
         <th>Product Name</th>
         <th>Barcode</th>
         <th>Category</th>
-        <th>Sub Category</th>
         <th>Unit Type</th>
-        <th>Shelf</th>
         <th class="num">Cost of Sales</th>
         <th class="num">Selling Price</th>
         {% set base_qs = 'q=' ~ q ~ '&category_id=' ~ category_id ~ '&subcategory_id=' ~ subcategory_id ~ '&shelf_id=' ~ shelf_id ~ '&alert=' ~ (1 if alert else 0) ~ ('&flag=' ~ flag if flag else '') %}
@@ -271,20 +269,21 @@
           {% endif %}
         </td>
         <td class="muted">{{ p.barcode or '—' }}</td>
-        <td id="catCell{{ p.id }}">
+        {# Sub Category and Shelf columns are left off so the table fits without
+           side-scrolling; the sub category shows on hover and is still set here. #}
+        <td id="catCell{{ p.id }}" data-subcat="{{ p.subcategory.name if p.subcategory else '' }}"
+            {% if p.subcategory %}title="Sub category: {{ p.subcategory.name }}"{% endif %}>
           <span id="catText{{ p.id }}">{{ p.category.name if p.category else '—' }}</span>
           {% if is_admin_user %}
           <button type="button" class="btn-link rename-btn" onclick="startCategoryEdit({{ p.id }})" title="Set category">✎</button>
           {% endif %}
         </td>
-        <td id="subcatCell{{ p.id }}"><span id="subcatText{{ p.id }}">{{ p.subcategory.name if p.subcategory else '—' }}</span></td>
         <td id="unitCell{{ p.id }}">
           <span id="unitText{{ p.id }}">{{ p.unit_type.name if p.unit_type else '—' }}</span>
           {% if is_admin_user %}
           <button type="button" class="btn-link rename-btn" onclick="startUnitTypeEdit({{ p.id }})" title="Set unit type">✎</button>
           {% endif %}
         </td>
-        <td>{{ p.shelf.name if p.shelf else '—' }}</td>
         <td class="num">
           {% if p.cost_price and p.cost_price > 0 %}{{ p.cost_price|peso }}
           {% else %}<span class="muted">not set</span>{% endif %}
@@ -316,7 +315,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="{{ 13 if is_admin_user else 12 }}" class="empty">No products yet. Click <strong>Add product</strong> to start encoding inventory.</td></tr>
+      <tr><td colspan="{{ 11 if is_admin_user else 10 }}" class="empty">No products yet. Click <strong>Add product</strong> to start encoding inventory.</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -327,7 +326,7 @@
 <div class="bulk-bar" id="bulkBar" style="display:none;">
   <span><strong id="bulkCount">0</strong> selected</span>
   <button type="submit" form="bulkForm" formaction="/products/bulk-price" class="btn-secondary">💲 Bulk price update</button>
-  <button type="submit" form="bulkForm" formaction="/products/bulk-shelf" class="btn-secondary">📦 Assign to shelf</button>
+  <button type="submit" form="bulkForm" formaction="/products/bulk-edit" class="btn-secondary">✎ Bulk edit (shelf, unit, category)</button>
   <button type="submit" form="bulkForm" formaction="/products/labels" class="btn-secondary">🏷 Print barcode labels</button>
   <button type="button" class="btn-link" onclick="clearAllChk()">Clear selection</button>
 </div>
@@ -460,11 +459,9 @@ function startRename(id) {
 // product that has no category at all yet without a full Edit round trip.
 function startCategoryEdit(id) {
   const catCell = document.getElementById('catCell' + id);
-  const subcatCell = document.getElementById('subcatCell' + id);
   const origCatHtml = catCell.innerHTML;
-  const origSubcatHtml = subcatCell.innerHTML;
   const origCatText = document.getElementById('catText' + id).textContent;
-  const origSubcatText = document.getElementById('subcatText' + id).textContent;
+  const origSubcatText = catCell.dataset.subcat || '';
 
   const catInput = document.createElement('input');
   catInput.type = 'text'; catInput.setAttribute('list', 'invCategoryList');
@@ -474,7 +471,7 @@ function startCategoryEdit(id) {
 
   const subInput = document.createElement('input');
   subInput.type = 'text'; subInput.setAttribute('list', 'invSubcategoryList');
-  subInput.value = origSubcatText === '—' ? '' : origSubcatText;
+  subInput.value = origSubcatText;
   subInput.placeholder = 'Sub category';
   subInput.style.cssText = 'font-size:13px;padding:3px 6px;border:1px solid var(--brand);border-radius:6px;width:110px;';
 
@@ -486,14 +483,11 @@ function startCategoryEdit(id) {
   cancelBtn.className = 'btn-link danger rename-btn';
 
   catCell.innerHTML = '';
-  catCell.append(catInput, okBtn, cancelBtn);
-  subcatCell.innerHTML = '';
-  subcatCell.appendChild(subInput);
+  catCell.append(catInput, ' ', subInput, okBtn, cancelBtn);
   catInput.focus();
 
   function cancel() {
     catCell.innerHTML = origCatHtml;
-    subcatCell.innerHTML = origSubcatHtml;
   }
 
   function renderResult(catName, subcatName) {
@@ -506,12 +500,8 @@ function startCategoryEdit(id) {
     editBtn.title = 'Set category'; editBtn.textContent = '✎';
     editBtn.onclick = () => startCategoryEdit(id);
     catCell.append(catSpan, ' ', editBtn);
-
-    subcatCell.innerHTML = '';
-    const subSpan = document.createElement('span');
-    subSpan.id = 'subcatText' + id;
-    subSpan.textContent = subcatName || '—';
-    subcatCell.appendChild(subSpan);
+    catCell.dataset.subcat = subcatName || '';
+    catCell.title = subcatName ? 'Sub category: ' + subcatName : '';
   }
 
   async function save() {

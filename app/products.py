@@ -2272,12 +2272,11 @@ def print_labels(request: Request, ids: list[str] = Form([]), db: Session = Depe
     )
 
 
-@router.post("/products/bulk-shelf", response_class=HTMLResponse)
-def bulk_shelf_start(request: Request, ids: list[str] = Form([]), db: Session = Depends(get_db), user=Depends(get_current_user)):
-    """Step 1: confirm which shelf, for the products selected in Inventory —
-    same two-step shape as Bulk Price Update. Same idea Stock Count already
-    has (assign a shelf to whatever's being counted), just reachable from
-    Inventory directly instead of only while a count is open."""
+@router.post("/products/bulk-edit", response_class=HTMLResponse)
+def bulk_edit_start(request: Request, ids: list[str] = Form([]), db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Step 1: pick which fields to change (shelf, unit type, category, sub
+    category) for the products ticked in Inventory — same two-step shape as
+    Bulk Price Update. Fields left unticked are not touched."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -2291,23 +2290,42 @@ def bulk_shelf_start(request: Request, ids: list[str] = Form([]), db: Session = 
         .order_by(models.Product.name)
         .all()
     )
-    shelves = db.query(models.Shelf).order_by(models.Shelf.name).all()
     return templates.TemplateResponse(
-        "products/bulk_shelf.html",
-        {"request": request, "app_name": request.app.title, "user": user, "products": products, "shelves": shelves},
+        "products/bulk_edit.html",
+        {"request": request, "app_name": request.app.title, "user": user, "products": products,
+         "shelves": db.query(models.Shelf).order_by(models.Shelf.name).all(),
+         "categories": db.query(models.Category).order_by(models.Category.name).all(),
+         "subcategories": db.query(models.SubCategory).order_by(models.SubCategory.name).all(),
+         "unit_types": db.query(models.UnitType).order_by(models.UnitType.name).all()},
     )
 
 
-@router.post("/products/bulk-shelf/apply")
-def bulk_shelf_apply(
-    request: Request, ids: list[str] = Form([]), shelf_id: str = Form("0"),
+def _unit_link_problem(db: Session, p: models.Product, new_unit_type_id) -> str:
+    """Same replenish-link check the one-by-one unit editor makes: a pack and
+    its Open/Retail item with no per-pack factor must share a base unit."""
+    if p.replenish_from_id and not p.replenish_factor:
+        source = db.get(models.Product, p.replenish_from_id)
+        if source and source.unit_type_id != new_unit_type_id:
+            return f"opens from “{source.name}”, which is in a different unit"
+    counterpart = db.query(models.Product).filter(models.Product.replenish_from_id == p.id).first()
+    if counterpart and not counterpart.replenish_factor and counterpart.unit_type_id != new_unit_type_id:
+        return f"“{counterpart.name}” opens from it and needs the same unit"
+    return ""
+
+
+@router.post("/products/bulk-edit/apply")
+def bulk_edit_apply(
+    request: Request, ids: list[str] = Form([]),
+    set_shelf: str = Form(""), shelf_id: str = Form("0"),
+    set_unit: str = Form(""), unit_type: str = Form(""),
+    set_category: str = Form(""), category: str = Form(""),
+    set_subcategory: str = Form(""), subcategory: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
-    """Step 2: move every selected product onto the picked shelf — this
-    REPLACES whatever shelf a product already had (unlike Stock Count's own
-    bulk-assign, which only fills products that have none yet; here the
-    point is a deliberate re-shelve of a chosen batch, so overwriting is the
-    correct default)."""
+    """Step 2: apply each ticked field to every selected product. Shelf
+    replaces whatever shelf a product had. Unit type is a relabel only (3 Box
+    stays 3, now Piece) — converting quantities is the product's Change unit
+    page. A blank Category / Sub Category clears it."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -2315,37 +2333,63 @@ def bulk_shelf_apply(
     ids = sorted({int(i) for i in ids if i.isdigit()})
     if not ids:
         return RedirectResponse("/products", status_code=302)
-    try:
-        shelf_id = int(shelf_id or 0)
-    except ValueError:
-        shelf_id = 0
-    shelf = db.get(models.Shelf, shelf_id) if shelf_id else None
-    if not shelf:
-        return RedirectResponse("/products?bulk_msg=Pick+a+shelf+first.", status_code=status.HTTP_302_FOUND)
+    if not (set_shelf or set_unit or set_category or set_subcategory):
+        return RedirectResponse("/products?bulk_msg=Nothing+was+ticked+to+change.", status_code=status.HTTP_302_FOUND)
+
+    shelf = None
+    if set_shelf:
+        try:
+            shelf = db.get(models.Shelf, int(shelf_id or 0))
+        except ValueError:
+            shelf = None
+        if not shelf:
+            return RedirectResponse("/products?bulk_msg=Pick+a+shelf+first.", status_code=status.HTTP_302_FOUND)
+    new_unit = _get_or_create_unit_type(db, unit_type) if set_unit else None
+    if set_unit and not new_unit:
+        return RedirectResponse("/products?bulk_msg=Enter+a+unit+type+first.", status_code=status.HTTP_302_FOUND)
+    new_category = _get_or_create_category(db, category) if set_category else None
 
     products = (
         db.query(models.Product)
         .filter(models.Product.id.in_(ids), models.Product.is_active.is_(True))
+        .order_by(models.Product.name)
         .all()
     )
-    moved = 0
+    changed, skipped = 0, []
     for p in products:
-        if p.shelf_id == shelf.id:
-            continue
-        old_shelf_name = p.shelf.name if p.shelf else "no shelf"
-        p.shelf = shelf
-        audit.record(
-            db, user=user, request=request, action="update", entity_type="product",
-            entity_id=p.id, entity_label=p.name,
-            summary=f"Bulk-assigned “{p.name}” to shelf {shelf.name}",
-            changes={"shelf": [old_shelf_name, shelf.name]},
-        )
-        moved += 1
+        changes = {}
+        if set_unit and p.unit_type_id != new_unit.id:
+            problem = _unit_link_problem(db, p, new_unit.id)
+            if problem:
+                skipped.append(f"{p.name} (unit not changed: {problem})")
+            else:
+                changes["unit_type"] = [p.unit_type.name if p.unit_type else None, new_unit.name]
+                p.unit_type = new_unit
+        if set_shelf and p.shelf_id != shelf.id:
+            changes["shelf"] = [p.shelf.name if p.shelf else None, shelf.name]
+            p.shelf = shelf
+        if set_category and p.category_id != (new_category.id if new_category else None):
+            changes["category"] = [p.category.name if p.category else None, new_category.name if new_category else None]
+            p.category = new_category
+        if set_subcategory:
+            new_sub = _get_or_create_subcategory(db, subcategory, p.category)
+            if p.subcategory_id != (new_sub.id if new_sub else None):
+                changes["subcategory"] = [p.subcategory.name if p.subcategory else None, new_sub.name if new_sub else None]
+                p.subcategory = new_sub
+        if changes:
+            audit.record(
+                db, user=user, request=request, action="update", entity_type="product",
+                entity_id=p.id, entity_label=p.name,
+                summary=f"Bulk edit “{p.name}”: " + "; ".join(
+                    f"{k.replace('_', ' ')} {v[0] or '—'} → {v[1] or '—'}" for k, v in changes.items()),
+                changes=changes,
+            )
+            changed += 1
     db.commit()
-    msg = f"Moved {moved} product{'s' if moved != 1 else ''} to {shelf.name}"
-    if moved < len(products):
-        msg += f" ({len(products) - moved} already there)"
-    return RedirectResponse(f"/products?bulk_msg={msg}", status_code=status.HTTP_302_FOUND)
+    msg = f"Updated {changed} of {len(products)} product{'s' if len(products) != 1 else ''}"
+    if skipped:
+        msg += ". Skipped: " + "; ".join(skipped[:5]) + (f" and {len(skipped) - 5} more" if len(skipped) > 5 else "")
+    return RedirectResponse(f"/products?bulk_msg={quote(msg)}", status_code=status.HTTP_302_FOUND)
 
 
 # Human labels + in/out direction for the stock-movement reasons written across

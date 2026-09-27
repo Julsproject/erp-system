@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Bulk Edit · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Bulk Edit</h1>
+    <p class="muted">{{ products|length }} product{{ '' if products|length == 1 else 's' }} selected. Tick what to change — anything left unticked stays as it is.</p>
+  </div>
+  <a class="btn-link" href="/products">← Back to inventory</a>
+</div>
+
+<form method="post" action="/products/bulk-edit/apply" onsubmit="return confirmBulk();">
+  {% for p in products %}<input type="hidden" name="ids" value="{{ p.id }}">{% endfor %}
+
+  <div class="card" style="max-width:520px;margin-bottom:18px;display:grid;gap:14px;">
+    <div>
+      <label style="display:flex;gap:8px;align-items:center;margin:0;"><input type="checkbox" name="set_shelf" value="1" data-field="shelf" onchange="toggleField(this)"> Change <strong>shelf</strong></label>
+      <select name="shelf_id" id="f_shelf" disabled style="margin-top:6px;">
+        <option value="">— choose shelf —</option>
+        {% for s in shelves %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label style="display:flex;gap:8px;align-items:center;margin:0;"><input type="checkbox" name="set_unit" value="1" data-field="unit" onchange="toggleField(this)"> Change <strong>unit type</strong></label>
+      <input name="unit_type" id="f_unit" list="be-units" placeholder="Type or pick, e.g. Piece" disabled autocomplete="off" style="margin-top:6px;">
+      <p class="hint" style="margin:4px 0 0;">Changes the label only — 3 Box stays 3, now read as 3 Piece. To convert quantities (1 box = 250 pcs) use <strong>Change unit</strong> on the product instead.</p>
+    </div>
+    <div>
+      <label style="display:flex;gap:8px;align-items:center;margin:0;"><input type="checkbox" name="set_category" value="1" data-field="category" onchange="toggleField(this)"> Change <strong>category</strong></label>
+      <input name="category" id="f_category" list="be-cats" placeholder="Type or pick — blank clears it" disabled autocomplete="off" style="margin-top:6px;">
+    </div>
+    <div>
+      <label style="display:flex;gap:8px;align-items:center;margin:0;"><input type="checkbox" name="set_subcategory" value="1" data-field="subcategory" onchange="toggleField(this)"> Change <strong>sub category</strong></label>
+      <input name="subcategory" id="f_subcategory" list="be-subcats" placeholder="Type or pick — blank clears it" disabled autocomplete="off" style="margin-top:6px;">
+    </div>
+    <div class="form-actions" style="margin:0;">
+      <button class="btn" type="submit">Apply to {{ products|length }} product{{ '' if products|length == 1 else 's' }}</button>
+    </div>
+  </div>
+  <datalist id="be-units">{% for u in unit_types %}<option value="{{ u.name }}">{% endfor %}</datalist>
+  <datalist id="be-cats">{% for c in categories %}<option value="{{ c.name }}">{% endfor %}</datalist>
+  <datalist id="be-subcats">{% for c in subcategories %}<option value="{{ c.name }}">{% endfor %}</datalist>
+</form>
+
+<div class="table-wrap" style="max-width:900px;">
+  <table class="grid">
+    <thead><tr><th>Product</th><th>Shelf</th><th>Unit Type</th><th>Category</th><th>Sub Category</th></tr></thead>
+    <tbody>
+      {% for p in products %}
+      <tr>
+        <td class="strong">{{ p.name }}</td>
+        <td>{{ p.shelf.name if p.shelf else '—' }}</td>
+        <td>{{ p.unit_type.name if p.unit_type else '—' }}</td>
+        <td>{{ p.category.name if p.category else '—' }}</td>
+        <td>{{ p.subcategory.name if p.subcategory else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+function toggleField(box) {
+  const f = document.getElementById('f_' + box.dataset.field);
+  f.disabled = !box.checked;
+  if (box.checked) f.focus();
+}
+function confirmBulk() {
+  const picked = [...document.querySelectorAll('input[data-field]:checked')].map(b => {
+    const f = document.getElementById('f_' + b.dataset.field);
+    const v = f.tagName === 'SELECT' ? (f.selectedOptions[0] || {}).text : f.value.trim();
+    return '• ' + b.dataset.field.replace('subcategory', 'sub category') + ' → ' + (v || '(blank — clears it)');
+  });
+  if (!picked.length) { alert('Tick at least one thing to change.'); return false; }
+  return confirm('Change these on all {{ products|length }} selected product(s)?\n\n' + picked.join('\n'));
+}
+</script>
+{% endblock %}
