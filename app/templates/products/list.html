@@ -236,10 +236,6 @@
         <th class="num">Cost of Sales</th>
         <th class="num">Selling Price</th>
         {% set base_qs = 'q=' ~ q ~ '&category_id=' ~ category_id ~ '&subcategory_id=' ~ subcategory_id ~ '&shelf_id=' ~ shelf_id ~ '&alert=' ~ (1 if alert else 0) ~ ('&flag=' ~ flag if flag else '') %}
-        {% set beg_next = 'desc' if (sort == 'beginning_stock' and sort_dir == 'asc') else 'asc' %}
-        <th class="num"><a class="sort-th{{ ' sort-active' if sort == 'beginning_stock' }}" href="/products?{{ base_qs }}&sort=beginning_stock&sort_dir={{ beg_next }}">Actual Beginning{% if sort == 'beginning_stock' %}<span class="sort-arrow">{{ '▲' if sort_dir == 'asc' else '▼' }}</span>{% endif %}</a></th>
-        {% set stk_next = 'desc' if (sort == 'stock_qty' and sort_dir == 'asc') else 'asc' %}
-        <th class="num"><a class="sort-th{{ ' sort-active' if sort == 'stock_qty' }}" href="/products?{{ base_qs }}&sort=stock_qty&sort_dir={{ stk_next }}">Stocks Qty{% if sort == 'stock_qty' %}<span class="sort-arrow">{{ '▲' if sort_dir == 'asc' else '▼' }}</span>{% endif %}</a></th>
         {% set tot_next = 'desc' if (sort == 'total_qty' and sort_dir == 'asc') else 'asc' %}
         <th class="num"><a class="sort-th{{ ' sort-active' if sort == 'total_qty' }}" href="/products?{{ base_qs }}&sort=total_qty&sort_dir={{ tot_next }}">Total Qty{% if sort == 'total_qty' %}<span class="sort-arrow">{{ '▲' if sort_dir == 'asc' else '▼' }}</span>{% endif %}</a></th>
         <th></th>
@@ -294,8 +290,6 @@
         </td>
         {# An Open/Retail item sold by the kilo reads in quarter kilos (6 3/4), not a floored 6. #}
         {% set loose_kg = p.replenish_from_id and p.unit_type and p.unit_type.name|lower == 'kg' %}
-        <td class="num">{{ p.beginning_stock|quarter_qty if loose_kg else p.beginning_stock|whole_qty }}</td>
-        <td class="num">{{ p.stock_qty|quarter_qty if loose_kg else p.stock_qty|whole_qty }}</td>
         <td class="num strong">
           {% if loose_kg %}{{ p.total_qty|quarter_qty }}
           {% elif p.open_split %}{{ p.total_qty|split_qty(p.open_split) }}
@@ -315,7 +309,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="{{ 11 if is_admin_user else 10 }}" class="empty">No products yet. Click <strong>Add product</strong> to start encoding inventory.</td></tr>
+      <tr><td colspan="{{ 9 if is_admin_user else 8 }}" class="empty">No products yet. Click <strong>Add product</strong> to start encoding inventory.</td></tr>
       {% endfor %}
     </tbody>
   </table>
