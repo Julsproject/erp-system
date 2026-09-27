@@ -1648,3 +1648,131 @@ def weekly_summary(
             "today": today, **data,
         },
     )
+
+
+# --- Supplier Costs: what each supplier charged for each item, side by side,
+# so the cheaper source stands out. Compared per base unit (a box line is
+# divided by its pack size) and net of VAT — the shop claims input VAT back,
+# so a VAT supplier's ₱112 costs the same as a non-VAT supplier's ₱100.
+SUPPLIER_COST_PAGE_SIZE = 40
+
+
+def _supplier_cost_groups(db: Session, q: str = "", supplier_id: int = 0, multi_only: bool = True):
+    P, PL = models.Purchase, models.PurchaseLine
+    query = (
+        db.query(PL, P)
+        .join(P, P.id == PL.purchase_id)
+        .filter(P.txn_type == "receive", P.status != "cancelled", PL.product_id.isnot(None),
+                PL.unit_cost > 0, PL.unit_factor > 0)
+    )
+    if q:
+        query = query.filter(multi_word_ilike(PL.product_name, q))
+    lines = query.all()
+
+    by_product = {}
+    for line, pur in lines:
+        base_cost = Decimal(str(line.unit_cost)) / Decimal(str(line.unit_factor))
+        total = Decimal(str(pur.total or 0))
+        vat = Decimal(str(pur.vat_amount or 0))
+        net_cost = base_cost * (Decimal(str(pur.net_amount)) / total) if vat > 0 and total > 0 else base_cost
+        when = _parse_date((pur.delivery_date or "")[:10]) or (pur.created_at.astimezone(MANILA).date() if pur.created_at else None)
+        sup = by_product.setdefault(line.product_id, {}).setdefault(pur.supplier_id, {
+            "supplier_id": pur.supplier_id, "buys": 0, "lowest": None, "last": None,
+        })
+        sup["buys"] += 1
+        sup["lowest"] = net_cost if sup["lowest"] is None else min(sup["lowest"], net_cost)
+        entry = {"date": when, "net": net_cost, "invoiced": base_cost, "vat": vat > 0, "ref": pur.ref_no,
+                 "purchase_id": pur.id, "unit_name": line.unit_name, "unit_factor": Decimal(str(line.unit_factor))}
+        if sup["last"] is None or (when or date.min, pur.id) > (sup["last"]["date"] or date.min, sup["last"]["purchase_id"]):
+            sup["last"] = entry
+
+    product_ids = [pid for pid, sups in by_product.items()
+                   if (not multi_only or len(sups) > 1) and (not supplier_id or supplier_id in sups)]
+    products = {p.id: p for p in db.query(models.Product).filter(models.Product.id.in_(product_ids or [0])).all()}
+    supplier_ids = {sid for pid in product_ids for sid in by_product[pid]}
+    suppliers = {s.id: s for s in db.query(models.Supplier).filter(models.Supplier.id.in_(supplier_ids or {0})).all()}
+
+    groups = []
+    for pid in product_ids:
+        p = products.get(pid)
+        if not p:
+            continue
+        rows = sorted(by_product[pid].values(), key=lambda s: s["last"]["net"])
+        cheapest = rows[0]["last"]["net"]
+        for s in rows:
+            s["name"] = suppliers[s["supplier_id"]].name if s["supplier_id"] in suppliers else "—"
+            s["diff"] = s["last"]["net"] - cheapest
+            s["diff_pct"] = (s["diff"] / cheapest * 100) if cheapest > 0 else ZERO
+            s["cheapest"] = s["diff"] == 0
+        groups.append({
+            "product": p, "unit": p.unit_type.name if p.unit_type else "unit", "suppliers": rows,
+            "spread": rows[-1]["last"]["net"] - cheapest,
+        })
+    # Biggest price gap between suppliers first — that's where switching saves most.
+    groups.sort(key=lambda g: (-g["spread"], g["product"].name.lower()))
+    return groups
+
+
+@router.get("/reports/supplier-costs", response_class=HTMLResponse)
+def supplier_costs(
+    request: Request, q: str = "", supplier_id: int = 0, multi: int = 1, page: int = 1,
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    groups = _supplier_cost_groups(db, q, supplier_id, bool(multi))
+    total = len(groups)
+    pages = max((total + SUPPLIER_COST_PAGE_SIZE - 1) // SUPPLIER_COST_PAGE_SIZE, 1)
+    page = min(max(page, 1), pages)
+    shown = groups[(page - 1) * SUPPLIER_COST_PAGE_SIZE: page * SUPPLIER_COST_PAGE_SIZE]
+    return templates.TemplateResponse(
+        "reports/supplier_costs.html",
+        {"request": request, "app_name": request.app.title, "user": user,
+         "groups": shown, "total": total, "page": page, "pages": pages,
+         "q": q, "supplier_id": supplier_id, "multi": multi,
+         "suppliers": db.query(models.Supplier).order_by(models.Supplier.name).all()},
+    )
+
+
+@router.get("/reports/supplier-costs/export")
+def export_supplier_costs(
+    q: str = "", supplier_id: int = 0, multi: int = 1,
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    groups = _supplier_cost_groups(db, q, supplier_id, bool(multi))
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Supplier Costs"
+    ws.append(["Product", "Unit", "Supplier", "Last cost (net of VAT)", "Invoiced cost", "VAT?", "Last bought",
+               "Last ref", "Lowest ever", "Times bought", "Above cheapest ₱", "Above cheapest %", "Cheapest"])
+    header_fill = PatternFill("solid", fgColor="1F6FEB")
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+    for g in groups:
+        for s in g["suppliers"]:
+            last = s["last"]
+            ws.append([
+                g["product"].name, g["unit"], s["name"], round(float(last["net"]), 2), round(float(last["invoiced"]), 2),
+                "VAT" if last["vat"] else "", last["date"].isoformat() if last["date"] else "", last["ref"] or "",
+                round(float(s["lowest"]), 2), s["buys"], round(float(s["diff"]), 2), round(float(s["diff_pct"]), 1),
+                "✓" if s["cheapest"] else "",
+            ])
+    for i, width in enumerate([34, 10, 28, 20, 14, 7, 13, 14, 13, 13, 16, 16, 10], start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+    ws.freeze_panes = "A2"
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="supplier_costs_{_today().isoformat()}.xlsx"'},
+    )

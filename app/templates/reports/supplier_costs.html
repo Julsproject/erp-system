@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Supplier Costs · {{ app_name }}{% endblock %}
+{% block content %}
+{% set qs = 'q=' ~ (q|urlencode) ~ '&supplier_id=' ~ supplier_id ~ '&multi=' ~ multi %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Supplier Costs</h1>
+    <p class="muted">What each supplier charged for the same item, cheapest first. Costs are per base unit (a box line is
+      divided by its pack size) and <strong>net of VAT</strong>, since the shop claims input VAT back — so a VAT and a
+      non-VAT supplier compare fairly. Items with the biggest gap between suppliers come first.</p>
+  </div>
+  <a class="btn-secondary" href="/reports/supplier-costs/export?{{ qs }}">⬇ Download Excel</a>
+</div>
+
+<form method="get" action="/reports/supplier-costs" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px;">
+  <label style="margin:0;font-size:12.5px;color:var(--muted);">Product
+    <input type="search" name="q" value="{{ q }}" placeholder="Search name…" style="display:block;margin-top:4px;">
+  </label>
+  <label style="margin:0;font-size:12.5px;color:var(--muted);">Supplier
+    <select name="supplier_id" style="display:block;margin-top:4px;">
+      <option value="0">Any supplier</option>
+      {% for s in suppliers %}<option value="{{ s.id }}" {{ 'selected' if s.id == supplier_id }}>{{ s.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label style="margin:0;font-size:12.5px;color:var(--muted);">Show
+    <select name="multi" style="display:block;margin-top:4px;">
+      <option value="1" {{ 'selected' if multi }}>Items from 2+ suppliers</option>
+      <option value="0" {{ 'selected' if not multi }}>All purchased items</option>
+    </select>
+  </label>
+  <button class="btn-secondary" type="submit">Filter</button>
+</form>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>Item{{ '' if total == 1 else 's' }}</span></div>
+</div>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead>
+      <tr><th>Product / Supplier</th><th class="num">Last cost</th><th class="num">vs cheapest</th><th class="num">Invoiced</th>
+        <th>Last bought</th><th class="num">Lowest ever</th><th class="num">Times</th></tr>
+    </thead>
+    <tbody>
+      {% for g in groups %}
+      <tr style="background:var(--surface-2);">
+        <td class="strong" colspan="7">
+          <a href="/products/{{ g.product.id }}/stock-card">{{ g.product.name }}</a>
+          <span class="muted" style="font-weight:400;font-size:12px;">per {{ g.unit }}</span>
+          {% if g.suppliers|length > 1 and g.spread > 0 %}<span class="warn-tag" title="Most expensive minus cheapest supplier">gap {{ g.spread|peso }}</span>{% endif %}
+        </td>
+      </tr>
+      {% for s in g.suppliers %}
+      <tr>
+        <td style="padding-left:24px;">{{ s.name }}
+          {% if s.cheapest and g.suppliers|length > 1 %}<span class="warn-tag" style="background:#f0fdf4;color:#15803d;">✓ cheapest</span>{% endif %}</td>
+        <td class="num strong">{{ s.last.net|peso }}</td>
+        <td class="num {{ 'owed' if s.diff > 0 }}">{% if s.diff > 0 %}+{{ s.diff|peso }} <span class="muted" style="font-size:12px;">({{ '%.1f'|format(s.diff_pct) }}%)</span>{% else %}—{% endif %}</td>
+        <td class="num muted">{{ s.last.invoiced|peso }}{% if s.last.vat %} <span style="font-size:11px;">VAT</span>{% endif %}
+          {% if s.last.unit_factor != 1 %}<div style="font-size:11px;">{{ s.last.unit_name }} ÷ {{ s.last.unit_factor|qty }}</div>{% endif %}</td>
+        <td>{{ s.last.date.strftime('%b %d, %Y') if s.last.date else '—' }}
+          {% if s.last.ref %}<a class="btn-link" style="font-size:12px;" href="/purchases/{{ s.last.purchase_id }}">{{ s.last.ref }}</a>{% endif %}</td>
+        <td class="num">{{ s.lowest|peso }}</td>
+        <td class="num">{{ s.buys }}</td>
+      </tr>
+      {% endfor %}
+      {% else %}
+      <tr><td colspan="7" class="empty">No purchases match.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if pages > 1 %}
+<div class="pager" style="display:flex;gap:10px;align-items:center;margin-top:12px;">
+  {% if page > 1 %}<a class="btn-link" href="/reports/supplier-costs?{{ qs }}&page={{ page - 1 }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-link" href="/reports/supplier-costs?{{ qs }}&page={{ page + 1 }}">Next →</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}
