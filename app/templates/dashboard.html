@@ -61,12 +61,12 @@
   <a class="btn-secondary" href="/expenses/new?back={{ cur_url|urlencode }}">+ Log Expense</a>
   <a class="btn-secondary" href="/credits/collect">₱ Collect Payment</a>
   <a class="btn-secondary" href="/purchases/new">+ Receive Delivery</a>
-  <a class="btn-secondary" href="/products/pricing" style="font-weight:700;">💲 Selling Price{% if price_alert_count() %} <span class="warn-tag">{{ price_alert_count() }}</span>{% endif %}</a>
+  <a class="btn-secondary" href="/products/pricing" style="font-weight:700;">₱ Selling Price{% if price_alert_count() %} <span class="warn-tag">{{ price_alert_count() }}</span>{% endif %}</a>
 </div>
 
 <!-- ============ SELLING PRICE LOOKUP (same search as the Selling Price page) ============ -->
 <section class="card no-print" style="margin-bottom:18px;">
-  <h3 class="card-title" style="margin-bottom:10px;">💲 Selling Price lookup</h3>
+  <h3 class="card-title" style="margin-bottom:10px;">₱ Selling Price lookup</h3>
   <input id="dpSearch" class="search" type="search" placeholder="Type a product name or scan a barcode…" autocomplete="off" style="width:100%;max-width:none;">
   <div class="table-wrap" id="dpWrap" style="display:none;margin-top:10px;">
     <table class="grid">
