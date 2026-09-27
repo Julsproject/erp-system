@@ -86,7 +86,7 @@
 <div class="tabs">
   <a class="tab {{ 'active' if not flag }}" href="/products">All Products</a>
   {% if is_admin_user %}
-  <a class="tab" href="/products/pricing">Selling Price{% if price_alert_count() %} <span class="warn-tag">{{ price_alert_count() }}</span>{% endif %}</a>
+  <a class="tab tab-big" href="/products/pricing">Selling Price{% if price_alert_count() %} <span class="warn-tag">{{ price_alert_count() }}</span>{% endif %}</a>
   {% if void_count %}
   <a class="tab {{ 'active' if flag == 'void' }}" href="/products?flag=void">Void <span class="warn-tag">{{ void_count }}</span></a>
   {% endif %}

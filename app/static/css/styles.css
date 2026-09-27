@@ -823,6 +823,9 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
 .tab { padding: 10px 16px; text-decoration: none; color: var(--muted); font-weight: 600; font-size: 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: color .15s, border-color .15s; }
 .tab:hover { color: var(--ink); }
 .tab.active { color: var(--brand-600); border-bottom-color: var(--brand); }
+/* The tab people go looking for most (Inventory → Selling Price) reads bigger. */
+.tab.tab-big { font-size: 18px; font-weight: 700; color: var(--ink); }
+.tab.tab-big.active { color: var(--brand-600); }
 
 /* ---------- Mini stats row ---------- */
 .stat-row { display: flex; gap: 14px; margin-bottom: 20px; flex-wrap: wrap; }
