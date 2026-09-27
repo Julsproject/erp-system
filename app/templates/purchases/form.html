@@ -14,7 +14,7 @@
 
 {% if not return_against_po %}
 <div class="tabs">
-  <a class="tab active" href="/purchases/new">New Purchase</a>
+  <a class="tab tab-big active" href="/purchases/new">New Purchase</a>
   {# A cashier can raise a delivery but not browse history, payables or
      suppliers — showing those tabs would just bounce them to POS. #}
   {% if (user.role or '')|lower in ('admin', 'manager') %}
