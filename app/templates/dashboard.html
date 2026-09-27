@@ -55,7 +55,8 @@
 
 <!-- ============ QUICK ACTIONS ============ -->
 <div class="head-actions no-print" style="margin-bottom:18px;">
-  <a class="btn" href="/pos">+ New Sale</a>
+  <a class="btn" href="/pos?mode=quotation" style="font-size:17px;font-weight:700;">📝 New Quotation</a>
+  <a class="btn-secondary" href="/quotations" style="font-size:16px;font-weight:700;">Quotation List</a>
   {# Come back to this same period/range after saving the expense. #}
   {% set cur_url = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') %}
   <a class="btn-secondary" href="/expenses/new?back={{ cur_url|urlencode }}">+ Log Expense</a>

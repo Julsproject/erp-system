@@ -2186,6 +2186,12 @@ renderPayments();
 renderCart();
 quoRenderCart();
 onFullMethodChange();
+// /pos?mode=quotation (the Dashboard's "New Quotation" button) opens straight
+// on the Quotation tab, ready to search.
+if (new URLSearchParams(location.search).get('mode') === 'quotation') {
+  setMode('quotation');
+  document.getElementById('quoSearch').focus();
+}
 
 // Last step, on purpose: if nothing above already picked a booklet, fall
 // back to the last one used on this browser — and either way, if a booklet
