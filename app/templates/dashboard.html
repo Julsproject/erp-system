@@ -61,7 +61,53 @@
   <a class="btn-secondary" href="/expenses/new?back={{ cur_url|urlencode }}">+ Log Expense</a>
   <a class="btn-secondary" href="/credits/collect">₱ Collect Payment</a>
   <a class="btn-secondary" href="/purchases/new">+ Receive Delivery</a>
+  <a class="btn-secondary" href="/products/pricing" style="font-weight:700;">💲 Selling Price{% if price_alert_count() %} <span class="warn-tag">{{ price_alert_count() }}</span>{% endif %}</a>
 </div>
+
+<!-- ============ SELLING PRICE LOOKUP (same search as the Selling Price page) ============ -->
+<section class="card no-print" style="margin-bottom:18px;">
+  <h3 class="card-title" style="margin-bottom:10px;">💲 Selling Price lookup</h3>
+  <input id="dpSearch" class="search" type="search" placeholder="Type a product name or scan a barcode…" autocomplete="off" style="width:100%;max-width:none;">
+  <div class="table-wrap" id="dpWrap" style="display:none;margin-top:10px;">
+    <table class="grid">
+      <thead><tr><th>Product</th><th class="num">Selling Price</th><th class="num">Cost</th><th class="num">Profit</th><th></th></tr></thead>
+      <tbody id="dpBody"></tbody>
+    </table>
+  </div>
+  <p class="muted" id="dpMsg" style="font-size:12.5px;margin:8px 0 0;"></p>
+</section>
+<script>
+(function () {
+  const box = document.getElementById('dpSearch');
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const money = v => '₱' + (Number(v) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  let timer = null, seq = 0;
+  async function load() {
+    const q = box.value.trim(), mine = ++seq;
+    const wrap = document.getElementById('dpWrap'), msg = document.getElementById('dpMsg');
+    if (!q) { wrap.style.display = 'none'; msg.textContent = ''; return; }
+    const res = await fetch('/products/price-search?q=' + encodeURIComponent(q));
+    const data = await res.json();
+    if (mine !== seq) return;               // a newer search already went out
+    const rows = (data.products || []).slice(0, 10);
+    if (!rows.length) { wrap.style.display = 'none'; msg.textContent = 'No products found.'; return; }
+    document.getElementById('dpBody').innerHTML = rows.map(p => {
+      const cost = p.cost_price, price = p.selling_price;
+      const profit = cost > 0 && price > 0 ? money(price - cost) : '—';
+      return '<tr><td class="strong">' + esc(p.name) +
+        (p.needs_review ? ' <span class="warn-tag" title="' + esc(p.review_reason || '') + '">⚠ review</span>' : '') + '</td>' +
+        '<td class="num strong" style="font-size:16px;">' + (price > 0 ? money(price) : '<span class="muted">not set</span>') + '</td>' +
+        '<td class="num">' + (cost > 0 ? money(cost) : '<span class="muted">not set</span>') + '</td>' +
+        '<td class="num">' + profit + '</td>' +
+        '<td class="row-actions"><a class="btn-link" href="/products/pricing?product_id=' + p.id + '">Edit price</a></td></tr>';
+    }).join('');
+    wrap.style.display = '';
+    msg.textContent = (data.products || []).length > 10 ? 'Showing the first 10 — type more of the name to narrow it down.' : '';
+  }
+  box.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 200); });
+  box.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(timer); load(); } });
+})();
+</script>
 
 <!-- ============ PRICE CALCULATOR (what-if, not tied to any product) ============ -->
 <details class="card no-print" style="margin-bottom:18px;">
