@@ -43,6 +43,26 @@ def _weighted_avg_cost(product: models.Product, base_qty: Decimal, unit_cost_per
     blended = ((old_qty * old_cost) + (base_qty * unit_cost_per_base)) / (old_qty + base_qty)
     return blended.quantize(CENTS, rounding=ROUND_HALF_UP)
 
+
+def _restore_cost_before(product: models.Product, lines) -> Decimal | None:
+    """Undoing a delivery (Edit Items or Cancel) also puts back the cost this
+    purchase blended in — e.g. 4 gal at ₱1,058 keyed onto the wrong item left
+    it costing ₱1,058 instead of its ₱440. `lines` are this purchase's lines
+    for the product. Only when nothing has moved the cost since (it still
+    equals what the purchase left it at) and there was a real cost before;
+    a later delivery that already re-averaged on top is left alone. Returns
+    the restored cost, or None."""
+    lines = sorted((l for l in lines if l.new_cost is not None and l.old_cost is not None), key=lambda l: l.id or 0)
+    if not lines:
+        return None
+    before = Decimal(str(lines[0].old_cost)).quantize(CENTS, rounding=ROUND_HALF_UP)
+    left_at = Decimal(str(lines[-1].new_cost)).quantize(CENTS, rounding=ROUND_HALF_UP)
+    current = Decimal(str(product.cost_price or 0)).quantize(CENTS, rounding=ROUND_HALF_UP)
+    if before <= 0 or before == current or current != left_at:
+        return None
+    product.cost_price = before
+    return before
+
 PAYMENT_METHODS = [
     ("cash", "Cash"), ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque"),
     ("gcash", "GCash"), ("maya", "Maya"), ("other_ewallet", "Other E-Wallet"), ("other", "Other"),
@@ -1072,10 +1092,10 @@ def settle_purchase_pay(
 @router.post("/purchases/{purchase_id:int}/cancel")
 def cancel_purchase(purchase_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Void a logged purchase. For a receive, this reverses the stock it
-    added (a matching negative movement) — the weighted-average cost blend
-    itself isn't unwound (later purchases may have already blended on top of
-    it), which is a known, accepted simplification. A return has nothing to
-    reverse beyond its own stock effect, same idea."""
+    added (a matching negative movement) and puts the item's cost back to what
+    it was before this delivery (see _restore_cost_before) — unless a later
+    purchase has already re-averaged on top of it, which is left alone. A
+    return has nothing to reverse beyond its own stock effect, same idea."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -1102,6 +1122,11 @@ def cancel_purchase(purchase_id: int, request: Request, db: Session = Depends(ge
         line_net = sum((Decimal(str(l.line_total or 0)) for l in purchase.lines if l.product_id == pid), Decimal("0")) * net_ratio
         value_before = Decimal(str(product.total_qty or 0)) * Decimal(str(product.cost_price or 0))
         product.stock_qty = (product.stock_qty or Decimal("0")) + delta
+        cancel_note = "Cancelled purchase"
+        if purchase.txn_type == "receive":
+            restored = _restore_cost_before(product, [l for l in purchase.lines if l.product_id == pid])
+            if restored is not None:
+                cancel_note += f" (cost back to ₱{restored:,.2f})"
         cancel_unit_cost = Decimal(str(product.cost_price or 0))
         db.add(models.StockMovement(
             product_id=product.id, qty_base=delta, reason="purchase-cancelled",
@@ -1114,7 +1139,7 @@ def cancel_purchase(purchase_id: int, request: Request, db: Session = Depends(ge
         sign = Decimal("-1") if purchase.txn_type == "receive" else Decimal("1")
         stock_books.book_cost_variance(
             db, product, value_before=value_before, value_added=sign * line_net * share,
-            ref=purchase.ref_no, note="Cancelled purchase", stamp=purchase.created_at, entered_by_id=user.id,
+            ref=purchase.ref_no, note=cancel_note, stamp=purchase.created_at, entered_by_id=user.id,
         )
 
     purchase.status = "cancelled"
@@ -1490,9 +1515,9 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
 
     # Reverse every existing line's stock/cost effect first — same mechanics
     # as Cancel — but keep the original StockMovement rows as history, only
-    # add compensating entries. The weighted-average cost blend itself isn't
-    # unwound (same accepted simplification as Cancel): later purchases may
-    # have already blended on top of it.
+    # add compensating entries. Each item's cost goes back to what it was
+    # before this delivery (see _restore_cost_before), so re-saving the same
+    # lines lands on the same cost instead of drifting a little every edit.
     # Remembered so a product that has since gained an open/retail counterpart
     # doesn't get permanently stuck uneditable just because its original line
     # (recorded before the counterpart existed) was in the base unit — the
@@ -1501,6 +1526,7 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
     old_unit_by_product = {}
     old_total = Decimal(str(purchase.total or 0))
     old_net_ratio = ((old_total - Decimal(str(purchase.vat_amount or 0))) / old_total) if old_total else Decimal("1")
+    cost_restored = set()
     for line in purchase.lines:
         if not line.product_id:
             continue
@@ -1511,11 +1537,17 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
         base_qty = Decimal(str(line.qty or 0)) * Decimal(str(line.unit_factor or 1))
         value_before = Decimal(str(product.total_qty or 0)) * Decimal(str(product.cost_price or 0))
         product.stock_qty = (product.stock_qty or Decimal("0")) - base_qty
+        note = "Item correction: reversing the old line"
+        if product.id not in cost_restored:
+            cost_restored.add(product.id)
+            restored = _restore_cost_before(product, [l for l in purchase.lines if l.product_id == product.id])
+            if restored is not None:
+                note += f" (cost back to ₱{restored:,.2f})"
         # The books take this line's net invoice value back out; the shelf
         # removes it at today's average — book the difference (see stock_books).
         stock_books.book_cost_variance(
             db, product, value_before=value_before, value_added=-Decimal(str(line.line_total or 0)) * old_net_ratio,
-            ref=purchase.ref_no, note="Item correction: reversing the old line", stamp=purchase.created_at,
+            ref=purchase.ref_no, note=note, stamp=purchase.created_at,
             entered_by_id=user.id,
         )
         unit_cost = Decimal(str(line.new_cost or product.cost_price or 0))
