@@ -1593,6 +1593,7 @@ def price_search(
                 "markup_pct": float(p.markup_pct or 0),
                 "margin_pct": float(p.margin_pct or 0),
                 "needs_review": flagged, "review_reason": reason,
+                "on_hand": float((p.beginning_stock or 0) + (p.stock_qty or 0)),
                 **_pricing_packs(db, p),
             })
         return {"products": flagged_rows, "review_count": review_count}
@@ -1618,6 +1619,7 @@ def price_search(
             "markup_pct": float(p.markup_pct or 0),
             "margin_pct": float(p.margin_pct or 0),
             "needs_review": flagged, "review_reason": reason,
+            "on_hand": float((p.beginning_stock or 0) + (p.stock_qty or 0)),
             **_pricing_packs(db, p),
         })
     return {"products": rows, "review_count": review_count}

@@ -114,6 +114,8 @@ document.getElementById('reviewToggle').checked = peReviewOnly;
 
 function peEsc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function peMoney(v) { return '₱' + (Number(v) || 0).toFixed(2); }
+// Stock count without trailing zeros: 120, 2.5, 0.25 — never 120.0000.
+function peQty(v) { return String(+(Number(v) || 0).toFixed(4)); }
 
 async function peLoadList() {
   // A specific product to land on (from a product's own edit page) wins
@@ -174,6 +176,7 @@ function peRenderList() {
       '<div class="price-item-name"><span>' + peEsc(p.name) + '</span>' +
       (p.needs_review ? '<span class="warn-tag">⚠</span>' : '') + '</div>' +
       '<div class="price-item-sub">Cost ' + peMoney(p.cost_price) + ' · Selling ' + peMoney(p.selling_price) +
+      '<span class="' + (p.on_hand > 0 ? 'on-hand' : 'on-hand oos') + '">On hand ' + peQty(p.on_hand) + ' ' + peEsc(p.base_unit || '') + '</span>' +
       (p.needs_review ? '<br><span style="color:var(--danger);">' + peEsc(p.review_reason || 'Needs review') + '</span>' : '') +
       '</div>';
     box.appendChild(el);
