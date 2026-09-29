@@ -801,6 +801,14 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
   .sale-head { grid-template-columns: 92px 1fr; }
   .sale-head .hf-cust, .sale-head .hf-date, .sale-head .hf-addr, .sale-head .hf-note, .sale-head .hf-enc { grid-column: 1 / -1; }
 }
+/* New Purchase reuses the sale header look: Supplier | Invoice / DR # |
+   Delivery date, then Payment method | Notes. */
+.buy-head { grid-template-columns: minmax(0,2fr) minmax(0,1fr) minmax(0,1fr); }
+.buy-head .hf-notes { grid-column: 2 / -1; }
+@media (max-width: 900px) {
+  .buy-head { grid-template-columns: 1fr 1fr; }
+  .buy-head > :first-child, .buy-head .hf-notes { grid-column: 1 / -1; }
+}
 
 /* Full/Split segmented control */
 .seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--line); border-radius: 9px; padding: 3px; }

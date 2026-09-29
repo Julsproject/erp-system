@@ -48,8 +48,11 @@
       </div>
     </div>
     {% endif %}
-    <div class="pos-head-fields">
-      <label class="pos-customer">Supplier
+    <!-- Same compact header as the POS: Supplier, Invoice / DR # and Delivery
+         date in one row in large bold type; Payment method and Notes in a
+         small row under them. -->
+    <div class="pos-head-fields sale-head buy-head">
+      <label class="pos-customer hf-key">Supplier
         <select id="supplierId" {{ 'disabled' if return_against_po }}>
           <option value="">— choose supplier —</option>
           {% for s in suppliers %}
@@ -57,12 +60,29 @@
           {% endfor %}
         </select>
         {% if not return_against_po %}
-        <button type="button" class="btn-link" style="margin-top:4px;font-size:12.5px;" onclick="showNewSupplier()">＋ New supplier</button>
+        <button type="button" class="btn-link hf-link" onclick="showNewSupplier()">＋ New supplier</button>
         {% endif %}
       </label>
-      <label class="pos-customer">Supplier Invoice / DR #
+      <label class="pos-customer hf-key">Invoice / DR #
         <input id="invoiceNo" type="text" placeholder="optional" autocomplete="off" oninput="savePurchaseDraft()"
                value="{{ return_against_po.ref_no if return_against_po else '' }}">
+      </label>
+      <label class="pos-customer hf-key">Delivery date
+        <input id="deliveryDate" type="date" oninput="savePurchaseDraft()" title="The date this delivery actually happened. Set it when encoding a past purchase so it lands on the right day in reports; leave blank for a delivery received today.">
+        <span class="muted hf-preview">blank = today</span>
+      </label>
+      {% if not return_against_po %}
+      <label class="pos-customer hf-minor">Payment method
+        <select id="paymentMethod" onchange="onPaymentMethodChange()">
+          {% for value, label in payment_methods %}
+          <option value="{{ value }}">{{ label }}</option>
+          {% endfor %}
+          <option value="payable" selected>Payable (Unpaid)</option>
+        </select>
+      </label>
+      {% endif %}
+      <label class="pos-customer hf-minor hf-notes">Notes
+        <input id="notes" type="text" placeholder="optional" autocomplete="off" oninput="savePurchaseDraft()">
       </label>
     </div>
 
@@ -91,26 +111,7 @@
       <div id="nsError" class="alert" style="display:none;margin:10px 0 0;"></div>
     </div>
 
-    <div class="pos-head-fields">
-      <label class="pos-customer">Delivery date <span class="muted">(blank = today)</span>
-        <input id="deliveryDate" type="date" oninput="savePurchaseDraft()" title="The date this delivery actually happened. Set it when encoding a past purchase so it lands on the right day in reports; leave blank for a delivery received today.">
-      </label>
-      <label class="pos-customer">Notes
-        <input id="notes" type="text" placeholder="optional" autocomplete="off" oninput="savePurchaseDraft()">
-      </label>
-    </div>
-
     {% if not return_against_po %}
-    <div class="pos-head-fields">
-      <label class="pos-customer">Payment method
-        <select id="paymentMethod" onchange="onPaymentMethodChange()">
-          {% for value, label in payment_methods %}
-          <option value="{{ value }}">{{ label }}</option>
-          {% endfor %}
-          <option value="payable" selected>Payable (Unpaid)</option>
-        </select>
-      </label>
-    </div>
     <div id="chequeFields" class="cheque-grid" style="display:none;">
       <label>Bank<input id="chequeBank" type="text" placeholder="e.g. BDO" oninput="savePurchaseDraft()"></label>
       <label>Cheque #<input id="chequeNo" type="text" placeholder="000123" oninput="savePurchaseDraft()"></label>
