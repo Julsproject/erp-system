@@ -174,41 +174,45 @@
       </div>
     </div>
 
-    <div class="pos-head-fields">
-      <label class="pos-customer">Receipt <span class="muted">(which booklet)</span>
-        <select id="receiptType" onchange="onReceiptTypeChange()">
-          <option value="">— select —</option>
+    <!-- Sale header: the three things you look for on a receipt (invoice #,
+         customer, date) sit in one row in large bold type; the optional
+         extras (address, note, encoder) sit in a compact row under them.
+         Help text lives in placeholders/tooltips so every label is one line. -->
+    <div class="pos-head-fields sale-head">
+      <label class="pos-customer hf-key hf-receipt">Receipt
+        <select id="receiptType" onchange="onReceiptTypeChange()" title="Which booklet this receipt is from">
+          <option value="">—</option>
           <option value="DRS">DRS</option>
           <option value="DRB">DRB</option>
           <option value="SI">SI</option>
         </select>
       </label>
-      <label class="pos-customer">Invoice # <span class="muted">(from your booklet)</span>
-        <input id="invoiceNo" type="text" placeholder="e.g. 000145" autocomplete="off">
+      <label class="pos-customer hf-key hf-inv">Invoice #
+        <input id="invoiceNo" type="text" placeholder="e.g. 000145" autocomplete="off" title="The number from your booklet">
       </label>
-      <label class="pos-customer cust-field">Customer <span class="muted">(optional)</span>
+      <label class="pos-customer hf-key hf-cust cust-field">Customer
         <input id="customerName" type="text" placeholder="Walk-in — type to find existing" autocomplete="off">
         <div id="custResults" class="cust-dropdown" style="display:none;"></div>
-        <button type="button" class="btn-link" style="margin-top:4px;font-size:12px;" onclick="showNewCustomer()">＋ New / edit customer details</button>
+        <button type="button" class="btn-link hf-link" onclick="showNewCustomer()">＋ New / edit customer details</button>
       </label>
-      <label class="pos-customer">Delivery address <span class="muted">(optional — for delivery items)</span>
-        <input id="deliveryAddress" type="text" placeholder="Auto-fills from the customer's saved address" autocomplete="off">
-        <small class="hint">Editing this doesn't change the customer's saved address — use "New / edit customer details" above for that.</small>
-      </label>
-      <label class="pos-customer">Note <span class="muted">(optional — additional instructions)</span>
-        <input id="saleNotes" type="text" placeholder="e.g. call before delivering, leave at guard house" autocomplete="off">
-      </label>
-      <label class="pos-customer">Transaction date <span class="muted">(MM/DD — year is automatic, blank = today)</span>
-        <input id="txnDate" type="text" placeholder="e.g. 8/8" autocomplete="off" oninput="updateTxnDatePreview()"
+      <label class="pos-customer hf-key hf-date">Date
+        <input id="txnDate" type="text" placeholder="MM/DD · blank = today" autocomplete="off" oninput="updateTxnDatePreview()"
                title="Set the real date this sale happened when encoding a past transaction. Type just month/day — the year fills in automatically (this year, or last year if that day hasn't happened yet this year). Leave blank for a live sale today.">
-        <span id="txnDatePreview" class="muted" style="font-size:12px;min-height:15px;display:block;"></span>
+        <span id="txnDatePreview" class="muted hf-preview"></span>
       </label>
-      <label class="pos-customer">Encoded by <span class="muted">(optional)</span>
+      <label class="pos-customer hf-minor hf-addr">Delivery address
+        <input id="deliveryAddress" type="text" placeholder="Optional — auto-fills from the customer's saved address" autocomplete="off"
+               title="Editing this doesn't change the customer's saved address — use &quot;New / edit customer details&quot; for that.">
+      </label>
+      <label class="pos-customer hf-minor hf-note">Note
+        <input id="saleNotes" type="text" placeholder="Optional — e.g. call before delivering" autocomplete="off">
+      </label>
+      <label class="pos-customer hf-minor hf-enc">Encoded by
         <select id="encodedBy" title="Optional — who actually wrote up this sale, in case several people share this login. Leave blank if not tracking that.">
           <option value="">— not tracked —</option>
           {% for e in encoders %}<option value="{{ e.id }}">{{ e.name }}</option>{% endfor %}
         </select>
-        {% if not encoders %}<a class="btn-link" style="font-size:11.5px;" href="/encoders">+ Add encoders to track this</a>{% endif %}
+        {% if not encoders %}<a class="btn-link hf-link" href="/encoders">+ Add encoders to track this</a>{% endif %}
       </label>
     </div>
 
@@ -216,7 +220,7 @@
       <div class="table-wrap">
         <table class="grid cart-table">
           <thead>
-            <tr><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Disc</th><th class="num">Total</th><th></th></tr>
+            <tr><th class="cart-item">Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Disc</th><th class="num">Total</th><th></th></tr>
           </thead>
           <tbody id="cartBody">
             <tr><td colspan="7" class="empty">Cart is empty — add products from the left.</td></tr>
@@ -413,7 +417,7 @@
 
       <div class="table-wrap">
         <table class="grid cart-table">
-          <thead><tr><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Disc</th><th class="num">Total</th><th></th></tr></thead>
+          <thead><tr><th class="cart-item">Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Disc</th><th class="num">Total</th><th></th></tr></thead>
           <tbody id="quoCartBody"><tr><td colspan="7" class="empty">No items yet — add products from the left.</td></tr></tbody>
         </table>
       </div>
@@ -830,7 +834,7 @@ function renderCart() {
       escapeHtml(u.label || u.name) + ' (' + peso(u.price) + ')</option>').join('');
     const tr = document.createElement('tr');
     tr.innerHTML =
-      '<td class="strong">' + escapeHtml(line.product.name) + perPieceTag(line.product) +
+      '<td class="strong cart-item">' + escapeHtml(line.product.name) + perPieceTag(line.product) +
         (over ? ' <span class="warn-tag" title="Selling beyond stock (allowed)">⚠ over stock</span>' : '') + '</td>' +
       '<td>' + (line.customPrice ? escapeHtml(unit.name) : '<select class="cart-unit" onchange="setUnit(' + i + ', this.value)">' + opts + '</select>') + '</td>' +
       '<td class="num"><input class="cart-qty' + (over || fractionalCountedLine(line) ? ' over' : '') + '" type="text" inputmode="decimal" autocomplete="off" value="' + fmtQtyInput(line) + '" oninput="setQty(' + i + ', this.value)" onblur="normalizeQty(' + i + ', this)">' +
@@ -2053,7 +2057,7 @@ function quoRenderCart() {
       escapeHtml(u.label || u.name) + ' (' + peso(u.price) + ')</option>').join('');
     const tr = document.createElement('tr');
     tr.innerHTML =
-      '<td class="strong">' + escapeHtml(line.product.name) + '</td>' +
+      '<td class="strong cart-item">' + escapeHtml(line.product.name) + '</td>' +
       '<td><select class="cart-unit" onchange="quoSetUnit(' + i + ', this.value)">' + opts + '</select></td>' +
       '<td class="num"><input class="cart-qty" type="number" step="any" min="0" value="' + fmtQty(line.qty) + '" oninput="quoSetQty(' + i + ', this.value)"></td>' +
       '<td class="num">' + peso(unit.price) + '</td>' +

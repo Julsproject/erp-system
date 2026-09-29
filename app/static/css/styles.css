@@ -418,7 +418,7 @@ table.grid tr:last-child td { border-bottom: none; }
 .ladder-example { margin-top: 10px; }
 
 /* ---------- POS ---------- */
-.pos-grid { display: grid; grid-template-columns: 0.8fr 1.6fr; gap: 20px; align-items: start; }
+.pos-grid { display: grid; grid-template-columns: 0.7fr 1.8fr; gap: 20px; align-items: start; }
 .pos-search-panel { padding: 18px; position: sticky; top: 20px; }
 .pos-search { width: 100%; max-width: none; margin-bottom: 14px; }
 .pos-results { display: flex; flex-direction: column; gap: 8px; max-height: 64vh; overflow-y: auto; }
@@ -755,6 +755,15 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
 /* overselling */
 .warn-tag { font-size: 10.5px; font-weight: 700; color: var(--warn); background: var(--warn-tint); padding: 2px 6px; border-radius: 6px; margin-left: 4px; }
 .cart-qty.over { border-color: var(--warn); background: var(--warn-tint); }
+/* POS cart: the Item column gets most of the row and long names wrap onto a
+   second line instead of being squeezed by the fixed-width inputs. Scoped to
+   the POS panels so Purchases / Edit Sale carts keep their sizing. */
+.pos-cart-panel .cart-table th, .pos-cart-panel .cart-table td { padding: 10px 8px; }
+.pos-cart-panel .cart-table th.cart-item { width: 40%; }
+.pos-cart-panel .cart-table td.cart-item { white-space: normal; font-size: 16px; font-weight: 700; line-height: 1.3; min-width: 180px; }
+.pos-cart-panel .cart-table td.cart-item .warn-tag { display: table; margin: 4px 0 0; }
+.pos-cart-panel .cart-qty, .pos-cart-panel .cart-price { width: 100px; padding: 12px 10px; }
+.pos-cart-panel .cart-unit { max-width: 120px; }
 
 /* Parked-sale picker rows ("Saved drafts") */
 .draft-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 9px; margin-bottom: 8px; }
@@ -778,6 +787,20 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
 
 .pos-head-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
 .pos-head-fields .pos-customer { margin-bottom: 0; }
+/* Sale header (POS): key row = Receipt | Invoice # | Customer | Date in big
+   bold type; minor row = Address | Note | Encoded by, small and tight. */
+.sale-head { grid-template-columns: 92px minmax(0,1fr) minmax(0,2fr) minmax(0,1fr); gap: 8px 10px; }
+.sale-head .pos-customer { gap: 3px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+.sale-head .hf-key input, .sale-head .hf-key select { font-size: 18px; font-weight: 700; padding: 9px 11px; color: var(--ink); }
+.sale-head .hf-key input::placeholder { font-size: 14px; font-weight: 400; }
+.sale-head .hf-minor input, .sale-head .hf-minor select { font-size: 13px; padding: 6px 9px; }
+.sale-head .hf-addr { grid-column: 1 / 3; }
+.sale-head .hf-link { align-self: flex-start; font-size: 11.5px; text-transform: none; letter-spacing: 0; margin-top: 1px; }
+.sale-head .hf-preview { font-size: 12px; min-height: 15px; text-transform: none; letter-spacing: 0; font-weight: 600; }
+@media (max-width: 900px) {
+  .sale-head { grid-template-columns: 92px 1fr; }
+  .sale-head .hf-cust, .sale-head .hf-date, .sale-head .hf-addr, .sale-head .hf-note, .sale-head .hf-enc { grid-column: 1 / -1; }
+}
 
 /* Full/Split segmented control */
 .seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--line); border-radius: 9px; padding: 3px; }
@@ -915,6 +938,8 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
   .cart-qty, .cart-price { width: 84px; font-size: 16px; padding: 10px; }
   .cart-unit, .cart-unit-txt { width: auto; max-width: 116px; }
   .cart-disc, .disc-input { width: 74px; }
+  .pos-cart-panel .cart-qty, .pos-cart-panel .cart-price { width: 84px; }
+  .pos-cart-panel .cart-table td.cart-item { min-width: 140px; }
   input.line-cost, input.line-total { width: 110px; }
   .refund-foot .pos-complete { min-width: 0; }
 }
