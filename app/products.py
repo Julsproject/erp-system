@@ -316,7 +316,10 @@ def low_stock_expr(default_pct):
     if it's set (>0); otherwise, if the shop has a default_pct configured
     (Settings), falls back to that % of the product's Actual Beginning
     Stocks. No fallback fires for a product whose beginning_stock is also
-    0/blank — there's nothing to take a percentage of. The single source of
+    0/blank — there's nothing to take a percentage of. Separately, when
+    Settings has "low_stock_days", an item that would sell out within that
+    many days at its recent rate is low too (_selling_out_expr), whatever
+    its own level says. The single source of
     truth for this, imported wherever a low-stock condition is checked, so
     the nav badge, Dashboard and Notifications can never drift apart."""
     from sqlalchemy import and_, or_
@@ -327,15 +330,80 @@ def low_stock_expr(default_pct):
         qty > 0,
         qty <= models.Product.reorder_level,
     )
-    if default_pct is None:
-        return own_threshold
-    fallback_threshold = and_(
-        models.Product.reorder_level <= 0,
-        models.Product.beginning_stock > 0,
-        qty > 0,
-        qty <= models.Product.beginning_stock * (Decimal(str(default_pct)) / Decimal("100")),
+    rules = [own_threshold]
+    if default_pct is not None:
+        rules.append(and_(
+            models.Product.reorder_level <= 0,
+            models.Product.beginning_stock > 0,
+            qty > 0,
+            qty <= models.Product.beginning_stock * (Decimal(str(default_pct)) / Decimal("100")),
+        ))
+    days = settings_store.low_stock_days()
+    if days:
+        rules.append(_selling_out_expr(days))
+    return or_(*rules)
+
+
+# Sales-based low stock looks at this many days of selling. Movement reasons
+# that are the item leaving the shelf through selling — a sale and its later
+# edits/voids/exchanges net against each other, and repack-out is a whole
+# pack opened to sell loose, so a pack only sold by the piece still shows
+# a rate.
+LOW_STOCK_LOOKBACK_DAYS = 30
+SELLING_REASONS = ("sale", "exchange-sale", "exchange-return", "sale-edit-reverse", "void", "unvoid", "repack-out")
+
+
+def _selling_cutoff():
+    return datetime.now(MANILA) - timedelta(days=LOW_STOCK_LOOKBACK_DAYS)
+
+
+def recent_sold(db, product_ids):
+    """{product_id: base qty sold in the last LOW_STOCK_LOOKBACK_DAYS days}.
+    Dated by the movement's own date (the sale date, backdated sales
+    included), not when it was encoded."""
+    if not product_ids:
+        return {}
+    M = models.StockMovement
+    rows = (
+        db.query(M.product_id, func.coalesce(-func.sum(M.qty_base), 0))
+        .filter(M.product_id.in_(list(product_ids)), M.reason.in_(SELLING_REASONS), M.created_at >= _selling_cutoff())
+        .group_by(M.product_id)
+        .all()
     )
-    return or_(own_threshold, fallback_threshold)
+    return {pid: Decimal(str(sold)) for pid, sold in rows if sold and sold > 0}
+
+
+def days_of_stock_left(on_hand, sold):
+    """How many days on_hand lasts at the rate `sold` per lookback window,
+    or None when nothing sold (no rate to go by)."""
+    if not sold or sold <= 0:
+        return None
+    return float(Decimal(str(on_hand or 0)) * LOW_STOCK_LOOKBACK_DAYS / sold)
+
+
+def _selling_out_expr(days):
+    """True for a product still in stock that would run out within `days`
+    at its selling rate over the last LOW_STOCK_LOOKBACK_DAYS days. One
+    grouped pass over recent movements (an IN list), not a per-product
+    subquery, so the nav badge stays cheap."""
+    from sqlalchemy import and_, select
+    from sqlalchemy.orm import aliased
+
+    M = models.StockMovement
+    P2 = aliased(models.Product)
+    qty = P2.beginning_stock + P2.stock_qty
+    sold = -func.sum(M.qty_base)
+    selling_out = (
+        select(M.product_id)
+        .join(P2, P2.id == M.product_id)
+        # An Open/Retail item refills itself from its whole pack when it runs
+        # low, so its own level says nothing about reordering — the pack's
+        # repack-out movements carry that rate instead.
+        .where(M.reason.in_(SELLING_REASONS), M.created_at >= _selling_cutoff(), P2.replenish_from_id.is_(None))
+        .group_by(M.product_id, P2.beginning_stock, P2.stock_qty)
+        .having(and_(qty > 0, sold > 0, qty * LOW_STOCK_LOOKBACK_DAYS < sold * Decimal(str(days))))
+    )
+    return models.Product.id.in_(selling_out)
 
 
 SORTABLE_COLUMNS = {
@@ -519,6 +587,8 @@ def list_products(
         .all()
     )
 
+    sold_map = recent_sold(db, [p.id for p in products]) if flag in ("lowstock", "nostock") else {}
+
     # Which of these products (only this page's worth) have a past sale that
     # likely double-deducted stock already reflected in a completed Stock
     # Count — reused from void_map above rather than recomputed.
@@ -649,6 +719,13 @@ def list_products(
             "sort": sort,
             "sort_dir": sort_dir,
             "dd_flags": dd_flags,
+            "days_left": (
+                {pid: days_of_stock_left(p.total_qty, sold)
+                 for p in products for pid, sold in [(p.id, sold_map.get(p.id))] if sold}
+                if flag == "lowstock" else {}
+            ),
+            "sold_30": sold_map if flag in ("lowstock", "nostock") else {},
+            "lookback_days": LOW_STOCK_LOOKBACK_DAYS,
             "flag": flag,
             "void_count": len(void_ids),
             "conversion_count": len(conversion_ids),
@@ -2408,6 +2485,7 @@ def _order_slip_rows(db, products):
         )
         for line, purchase in lines:
             last.setdefault(line.product_id, (line, purchase))
+    sold = recent_sold(db, ids)
     rows = []
     for p in products:
         line, purchase = last.get(p.id, (None, None))
@@ -2421,6 +2499,8 @@ def _order_slip_rows(db, products):
             "last_cost": f"{Decimal(str(line.unit_cost)):,.2f}" if line else "",
             "last_supplier": (purchase.supplier.name if purchase and purchase.supplier else ""),
             "last_date": (purchase.delivery_date or (purchase.created_at.date().isoformat() if purchase.created_at else "")) if purchase else "",
+            "sold_30": f"{qty(sold[p.id])} {base_unit}" if p.id in sold else "",
+            "days_left": round(days_of_stock_left(p.total_qty, sold[p.id]), 1) if p.id in sold and p.total_qty > 0 else None,
         })
     return rows
 
@@ -2496,6 +2576,7 @@ async def order_slip_pdf(request: Request, user=Depends(get_current_user)):
 
     cols = data.get("cols") or {}
     show_onhand, show_cost, show_supplier = bool(cols.get("onhand")), bool(cols.get("cost", True)), bool(cols.get("supplier"))
+    show_sold = bool(cols.get("sold"))
     supplier = text(data.get("supplier"), 150)
     slip_date = text(data.get("date"), 20)
 
@@ -2516,6 +2597,8 @@ async def order_slip_pdf(request: Request, user=Depends(get_current_user)):
     widths = [22, None, 50, 55]
     if show_onhand:
         header.append("On hand"); widths.append(60)
+    if show_sold:
+        header.append("Sold 30 days"); widths.append(70)
     if show_cost:
         header.append("Last cost"); widths.append(62)
     if show_supplier:
@@ -2530,6 +2613,8 @@ async def order_slip_pdf(request: Request, user=Depends(get_current_user)):
         row = [str(i), Paragraph(text(r.get("name")), cell), text(r.get("order_qty"), 20), Paragraph(text(r.get("unit"), 40), cell)]
         if show_onhand:
             row.append(text(r.get("on_hand"), 40))
+        if show_sold:
+            row.append(text(r.get("sold_30"), 40) or "-")
         if show_cost:
             row.append(text(r.get("last_cost"), 20) or "-")
         if show_supplier:
@@ -2539,7 +2624,7 @@ async def order_slip_pdf(request: Request, user=Depends(get_current_user)):
         table_data.append(["", "No items", ""] + [""] * (len(header) - 3))
 
     table = Table(table_data, colWidths=widths, repeatRows=1)
-    right_cols = [2] + ([header.index("On hand")] if show_onhand else []) + ([header.index("Last cost")] if show_cost else [])
+    right_cols = [2] + [header.index(h) for h, on in (("On hand", show_onhand), ("Sold 30 days", show_sold), ("Last cost", show_cost)) if on]
     style = [
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F6FEB")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),

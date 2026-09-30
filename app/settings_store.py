@@ -32,6 +32,10 @@ DEFAULTS = {
     # at 0 (i.e. nobody set one). Blank = disabled, so an unset product stays
     # silent until either this or its own reorder level is configured.
     "default_low_stock_pct": "",
+    # Sales-based low stock: flag an item once what's on hand would last
+    # fewer than this many days at its recent selling rate (see
+    # products.LOW_STOCK_LOOKBACK_DAYS). Blank = disabled.
+    "low_stock_days": "",
     # Off by default: voiding a sale is admin/manager-only. Set to "1" to
     # let a cashier void their own sales too (e.g. a busy shop where waiting
     # for a manager to fix a same-day typo isn't practical).
@@ -104,6 +108,19 @@ def default_low_stock_pct():
     db = SessionLocal()
     try:
         raw = get_setting(db, "default_low_stock_pct", "")
+        return float(raw) if raw not in (None, "") else None
+    except Exception:
+        return None
+    finally:
+        db.close()
+
+
+def low_stock_days():
+    """Days of stock left that counts as "low" by selling rate, or None when
+    not set (disabled). Standalone lookup, same as default_low_stock_pct."""
+    db = SessionLocal()
+    try:
+        raw = get_setting(db, "low_stock_days", "")
         return float(raw) if raw not in (None, "") else None
     except Exception:
         return None

@@ -87,7 +87,7 @@
   <a class="tab {{ 'active' if not flag }}" href="/products">All Products</a>
   <a class="tab {{ 'active' if flag == 'nostock' }}" href="/products?flag=nostock">No Stock{% if nostock_count %} <span class="warn-tag">{{ nostock_count }}</span>{% endif %}</a>
   <a class="tab {{ 'active' if flag == 'lowstock' }}" href="/products?flag=lowstock&sort=total_qty&sort_dir=asc"
-     title="At or under the item's Low Stock Alert At (or the shop-wide default % in Settings), but not yet zero">Low Stock{% if lowstock_count %} <span class="warn-tag">{{ lowstock_count }}</span>{% endif %}</a>
+     title="Still in stock but running low: would sell out within the days set in Settings at its selling rate, or at/under its own Low Stock Alert At">Low Stock{% if lowstock_count %} <span class="warn-tag">{{ lowstock_count }}</span>{% endif %}</a>
   {% if is_admin_user %}
   <a class="tab tab-big" href="/products/pricing">Selling Price{% if price_alert_count() %} <span class="warn-tag">{{ price_alert_count() }}</span>{% endif %}</a>
   {% if void_count %}
@@ -301,6 +301,13 @@
             {% set tiers_shown = nonzero if nonzero else [p.unit_breakdown[-1]] %}
             {%- for tier in tiers_shown -%}{{ tier.qty|qty }} {{ tier.name }}{{ ' ' if not loop.last }}{%- endfor -%}
           {% else %}{{ p.total_qty|whole_qty }}{% endif %}
+          {% if p.id in days_left %}
+          <div class="muted" style="font-size:11px;font-weight:500;" title="{{ sold_30[p.id]|qty }} sold in the last {{ lookback_days }} days">
+            {%- set d = days_left[p.id] | round | int -%}
+            {% if days_left[p.id] < 1 %}under 1 day left{% else %}≈ {{ d }} day{{ '' if d == 1 else 's' }} left{% endif %}</div>
+          {% elif p.id in sold_30 %}
+          <div class="muted" style="font-size:11px;font-weight:500;">{{ sold_30[p.id]|qty }} sold in {{ lookback_days }} days</div>
+          {% endif %}
         </td>
         <td class="row-actions">
           {% if is_admin_user %}<a class="btn-link" href="/products/{{ p.id }}/edit?back={{ cur_url|urlencode }}">Edit</a>{% endif %}

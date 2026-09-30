@@ -84,12 +84,22 @@ async def save_settings(request: Request, db: Session = Depends(get_db), user=De
             if low_stock_val <= 0 or low_stock_val >= 100:
                 return _render(request, db, user, error="Default low-stock % must be between 0 and 100.")
 
+        raw_low_days = (form.get("low_stock_days") or "").strip()
+        if raw_low_days:
+            try:
+                low_days_val = float(raw_low_days)
+            except ValueError:
+                return _render(request, db, user, error="Low stock days must be a number, or left blank to disable.")
+            if low_days_val <= 0 or low_days_val > 365:
+                return _render(request, db, user, error="Low stock days must be between 1 and 365.")
+
         before = settings_store.get_all(db)
         for key, _label, maxlen in FIELDS:
             value = (form.get(key) or "").strip()[:maxlen]
             settings_store.set_setting(db, key, value)
         settings_store.set_setting(db, "min_margin_pct", raw_margin)
         settings_store.set_setting(db, "default_low_stock_pct", raw_low_stock)
+        settings_store.set_setting(db, "low_stock_days", raw_low_days)
         settings_store.set_setting(db, "cashier_can_void", "1" if form.get("cashier_can_void") else "")
         db.flush()
         after = settings_store.get_all(db)

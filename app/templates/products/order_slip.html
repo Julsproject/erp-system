@@ -44,7 +44,8 @@
     .sign { display:none; }
     body:not(.show-onhand) .c-onhand,
     body:not(.show-cost) .c-cost,
-    body:not(.show-supplier) .c-supplier { display:none; }
+    body:not(.show-supplier) .c-supplier,
+    body:not(.show-sold) .c-sold { display:none; }
     @media print {
       body { background:#fff; }
       .toolbar, .opts, .add, .c-rm, .no-print { display:none !important; }
@@ -76,6 +77,7 @@
   <div class="opts">
     <span>Show on printout:</span>
     <label><input type="checkbox" data-col="onhand" onchange="toggleCol(this)"> On hand</label>
+    <label><input type="checkbox" data-col="sold" onchange="toggleCol(this)"> Sold 30 days</label>
     <label><input type="checkbox" data-col="cost" onchange="toggleCol(this)" checked> Last cost</label>
     <label><input type="checkbox" data-col="supplier" onchange="toggleCol(this)"> Last supplier</label>
   </div>
@@ -107,6 +109,7 @@
           <th class="num">Qty</th>
           <th>Unit</th>
           <th class="num c-onhand">On hand</th>
+          <th class="num c-sold">Sold 30 days</th>
           <th class="num c-cost">Last cost</th>
           <th class="c-supplier">Last supplier</th>
           <th class="c-rm"></th>
@@ -165,18 +168,20 @@
   const body = document.getElementById('slipBody');
   function render() {
     if (!draft.rows.length) {
-      body.innerHTML = '<tr><td colspan="8" class="empty">No items yet. Tick items in Inventory (e.g. the No Stock tab) and click 📝 Order slip, or add one below.</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" class="empty">No items yet. Tick items in Inventory (e.g. the No Stock tab) and click 📝 Order slip, or add one below.</td></tr>';
       return;
     }
     body.innerHTML = draft.rows.map((r, i) =>
       '<tr>' +
         '<td class="n">' + (i + 1) + '</td>' +
         '<td><strong>' + esc(r.name) + '</strong>' +
+          (r.days_left != null ? '<div class="muted no-print">≈ ' + (r.days_left < 1 ? 'under 1' : Math.round(r.days_left)) + ' day(s) of stock left</div>' : '') +
           (r.last_qty ? '<div class="muted no-print">Last bought ' + esc(r.last_qty) + ' ' + esc(r.unit) + (r.last_date ? ' on ' + esc(r.last_date) : '') + '</div>' : '') +
         '</td>' +
         '<td class="num"><input class="f qty" inputmode="decimal" data-i="' + i + '" data-k="order_qty" value="' + esc(r.order_qty) + '"></td>' +
         '<td><input class="f unit" data-i="' + i + '" data-k="unit" value="' + esc(r.unit) + '"></td>' +
         '<td class="num c-onhand">' + esc(r.on_hand) + '</td>' +
+        '<td class="num c-sold">' + (esc(r.sold_30) || '<span class="muted">—</span>') + '</td>' +
         '<td class="num c-cost">' + (r.last_cost ? '₱' + esc(r.last_cost) : '<span class="muted">—</span>') + '</td>' +
         '<td class="c-supplier">' + (esc(r.last_supplier) || '<span class="muted">—</span>') + '</td>' +
         '<td class="c-rm"><button type="button" class="rm" title="Remove" onclick="removeRow(' + i + ')">×</button></td>' +

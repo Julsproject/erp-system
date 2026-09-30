@@ -28,8 +28,8 @@ from . import models, settings_store
 from .backup import latest_backup
 from .database import SessionLocal, get_db
 from .deps import get_current_user, is_staff
-from .products import low_stock_expr
-from .templating import templates
+from .products import LOW_STOCK_LOOKBACK_DAYS, days_of_stock_left, low_stock_expr, recent_sold
+from .templating import qty, templates
 
 router = APIRouter()
 
@@ -93,19 +93,28 @@ def _current_alerts(db: Session) -> dict:
         .filter(models.Product.is_active.is_(True), low_stock_expr(default_low_stock_pct))
         .all()
     )
+    sold = recent_sold(db, [p.id for p in low])
     for p in low:
-        if p.reorder_level and p.reorder_level > 0:
+        # Say which low-stock rule caught it (see low_stock_expr).
+        if p.reorder_level and p.reorder_level > 0 and p.total_qty <= p.reorder_level:
             body = f"On hand {p.total_qty} is at or below the reorder level of {p.reorder_level}."
-        else:
+        elif (default_low_stock_pct and (not p.reorder_level or p.reorder_level <= 0) and p.beginning_stock > 0
+              and p.total_qty <= p.beginning_stock * Decimal(str(default_low_stock_pct)) / 100):
             body = (
                 f"On hand {p.total_qty} has dropped to {default_low_stock_pct:g}% or less of the "
                 f"beginning stock of {p.beginning_stock} — no reorder level is set for this item."
+            )
+        else:
+            left = days_of_stock_left(p.total_qty, sold.get(p.id)) or 0
+            body = (
+                f"On hand {qty(p.total_qty)} will last about {max(round(left), 1)} day(s) — "
+                f"{qty(sold.get(p.id, 0))} sold in the last {LOW_STOCK_LOOKBACK_DAYS} days."
             )
         alerts[f"stock_low:{p.id}"] = {
             "category": "stock", "severity": "warning",
             "title": f"Low stock: {p.name}",
             "body": body,
-            "link": "/products",
+            "link": "/products?flag=lowstock&sort=total_qty&sort_dir=asc",
         }
 
     # ---- below-cost pricing ---------------------------------------------
