@@ -62,7 +62,7 @@
 <body class="show-cost">
   <div class="toolbar">
     <div class="grp">
-      <a href="/products?flag=nostock">← Back to inventory</a>
+      <a href="/products?flag=nostock" onclick="if (document.referrer.includes('/products')) { history.back(); return false; }">← Back to inventory</a>
       <span class="muted">Tick more items there and click <strong>📝 Order slip</strong> again to add them.</span>
     </div>
     <div class="grp">

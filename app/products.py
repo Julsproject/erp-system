@@ -489,6 +489,8 @@ def list_products(
         query = query.filter(*_no_cost_filter())
     elif flag == "nostock":
         query = query.filter(*_no_stock_filter())
+    elif flag == "lowstock":
+        query = query.filter(low_stock_expr(settings_store.default_low_stock_pct()))
 
     total = query.count()
     pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
@@ -553,6 +555,8 @@ def list_products(
         base_for_counts = base_for_counts.filter(*_no_cost_filter())
     elif flag == "nostock":
         base_for_counts = base_for_counts.filter(*_no_stock_filter())
+    elif flag == "lowstock":
+        base_for_counts = base_for_counts.filter(low_stock_expr(settings_store.default_low_stock_pct()))
     cat_counts = dict(
         base_for_counts.filter(models.Product.category_id.isnot(None))
         .with_entities(models.Product.category_id, func.count(models.Product.id))
@@ -654,6 +658,11 @@ def list_products(
                 .filter(models.Product.is_active.is_(True), *_no_cost_filter())
                 .scalar() if is_staff(user) else 0
             ),
+            "lowstock_count": (
+                db.query(func.count(models.Product.id))
+                .filter(models.Product.is_active.is_(True), low_stock_expr(settings_store.default_low_stock_pct()))
+                .scalar()
+            ),
             "nostock_count": (
                 db.query(func.count(models.Product.id))
                 .filter(models.Product.is_active.is_(True), *_no_stock_filter())
@@ -710,6 +719,8 @@ def export_products_excel(
     # a set that no longer matches what the tab would show.
     if flag == "nostock":
         query = query.filter(*_no_stock_filter())
+    elif flag == "lowstock":
+        query = query.filter(low_stock_expr(settings_store.default_low_stock_pct()))
     if is_admin_user and flag:
         if flag == "void":
             query = query.filter(models.Product.id.in_(set(find_all_double_deduction_candidates(db)) or {-1}))

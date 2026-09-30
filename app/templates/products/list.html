@@ -86,6 +86,8 @@
 <div class="tabs">
   <a class="tab {{ 'active' if not flag }}" href="/products">All Products</a>
   <a class="tab {{ 'active' if flag == 'nostock' }}" href="/products?flag=nostock">No Stock{% if nostock_count %} <span class="warn-tag">{{ nostock_count }}</span>{% endif %}</a>
+  <a class="tab {{ 'active' if flag == 'lowstock' }}" href="/products?flag=lowstock&sort=total_qty&sort_dir=asc"
+     title="At or under the item's Low Stock Alert At (or the shop-wide default % in Settings), but not yet zero">Low Stock{% if lowstock_count %} <span class="warn-tag">{{ lowstock_count }}</span>{% endif %}</a>
   {% if is_admin_user %}
   <a class="tab tab-big" href="/products/pricing">Selling Price{% if price_alert_count() %} <span class="warn-tag">{{ price_alert_count() }}</span>{% endif %}</a>
   {% if void_count %}
