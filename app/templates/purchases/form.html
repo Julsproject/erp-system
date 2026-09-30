@@ -24,6 +24,7 @@
   <a class="tab" href="/purchases/payables/aging">AP Aging</a>
   <a class="tab" href="/suppliers">Suppliers</a>
   <a class="tab" href="/reports/supplier-costs">Supplier Costs</a>
+  {% if (user.role or '')|lower in ('admin', 'manager') %}<a class="tab" href="/products/order-slip">Order Slip</a>{% endif %}
   {% endif %}
 </div>
 {% endif %}
@@ -41,6 +42,7 @@
   <!-- Document -->
   <section class="card pos-cart-panel">
     {% if not return_against_po %}
+    <div id="slipLoadedNote" class="alert" style="display:none;background:#f0fdf4;border-color:#bbf7d0;color:#15803d;margin-bottom:14px;"></div>
     <div id="purchaseDraftBanner" class="alert" style="display:none;background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8;margin-bottom:14px;">
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;">
         <span><strong>Unfinished purchase restored.</strong> Nasa ibaba pa rin ang huli mong pinasok — hindi pa ito na-save.</span>
@@ -117,16 +119,16 @@
       <label>Cheque #<input id="chequeNo" type="text" placeholder="000123" oninput="savePurchaseDraft()"></label>
       <label>Cheque date<input id="chequeDate" type="date" oninput="savePurchaseDraft()"></label>
     </div>
-    <p class="hint" id="chequeHint" style="display:none;margin:0 0 12px;">
+    <p class="hint" id="chequeHint" style="display:none;margin:0 0 8px;font-size:11px;line-height:1.35;">
       This still logs the purchase as settled — the cheque itself goes into the <a href="/pdc">Cheques register</a> as pending until it clears.
     </p>
-    <p class="hint" id="payableHint" style="display:none;margin:0 0 12px;">
+    <p class="hint" id="payableHint" style="display:none;margin:0 0 8px;font-size:11px;line-height:1.35;">
       Stock and cost are still applied right away — this just leaves the amount owed to the supplier, and it'll show up under <a href="/purchases/payables">Payables</a>.
     </p>
     {% endif %}
 
     {% if not return_against_po %}
-    <p class="hint" style="margin:0 0 10px;">
+    <p class="hint" style="margin:0 0 6px;font-size:11px;line-height:1.35;">
       Type the Product Name to find an existing item, or type a new one to create it automatically when you save —
       no extra steps. A new row appears as soon as you start the last one.
     </p>
@@ -714,6 +716,67 @@ function showError(m) { const e = document.getElementById('pError'); e.textConte
 restorePurchaseDraft();
 purchaseDraftReady = true;
 renderLines();
+loadFromOrderSlip();
+
+/* ============================= From an Order Slip ========================
+   The Order Slip's "Receive as New Purchase" opens this page with
+   ?from_slip=1. Its items (kept in the browser under orderSlipDraft) become
+   matched lines — ordered qty and unit filled in, cost starting from the
+   item's current cost like any picked product — and its supplier is chosen
+   when the name matches one on file. Everything stays editable, since what
+   arrives rarely matches the slip exactly. */
+async function loadFromOrderSlip() {
+  if (txnType !== 'receive' || !new URLSearchParams(location.search).has('from_slip')) return;
+  history.replaceState(null, '', location.pathname);  // a reload shouldn't apply it twice
+  let slip = null;
+  try { slip = JSON.parse(localStorage.getItem('orderSlipDraft') || 'null'); } catch (e) { slip = null; }
+  if (!slip || !Array.isArray(slip.rows) || !slip.rows.length) return;
+  if (receiveLines.some(l => (l.name || '').trim())
+      && !confirm('Replace the unfinished purchase on this page with the Order Slip items?')) return;
+
+  const found = await Promise.all(slip.rows.map(r =>
+    fetch('/purchases/product/' + encodeURIComponent(r.id)).then(res => res.json()).catch(() => null)));
+
+  receiveLines = [blankRow()];
+  let loaded = 0;
+  slip.rows.forEach((r, k) => {
+    const d = found[k];
+    if (!d || !d.found) return;
+    const i = receiveLines.length - 1;   // always the trailing blank row
+    pickRowProduct(i, d.product);         // adds a new trailing blank itself
+    const l = receiveLines[i];
+    const want = String(r.unit || '').trim().toLowerCase();
+    if (l.units && want) {
+      const ui = l.units.findIndex(u => String(u.name).toLowerCase() === want);
+      if (ui >= 0) {
+        l.unitIndex = ui;
+        if (l.knownCost != null) l.unitCost = Number(l.knownCost) * (l.units[ui].factor || 1);
+      }
+    }
+    const q = parseFloat(r.order_qty);
+    l.qty = q > 0 ? q : '';
+    loaded++;
+  });
+
+  const wantSupplier = String(slip.supplier || '').trim().toLowerCase();
+  if (wantSupplier) {
+    const sel = document.getElementById('supplierId');
+    const opt = [...sel.options].find(o => o.value && o.textContent.replace(/\s*\([^)]*\)\s*$/, '').trim().toLowerCase() === wantSupplier);
+    if (opt) sel.value = opt.value;
+  }
+  renderLines();
+  savePurchaseDraft();
+
+  const failed = found.filter(d => !d).length;             // lookup itself failed (network)
+  const inactive = found.filter(d => d && !d.found).length; // archived/deleted since the slip
+  const note = document.getElementById('slipLoadedNote');
+  note.textContent = 'Filled in ' + loaded + ' item' + (loaded === 1 ? '' : 's') + ' from the Order Slip'
+    + (inactive ? ' (' + inactive + ' no longer active, left out)' : '')
+    + (failed ? ' — ' + failed + ' could not be loaded, go back to the slip and try again' : '')
+    + '. Check the quantities and costs against the delivery receipt before saving.';
+  note.style.display = 'block';
+  document.getElementById('purchaseDraftBanner').style.display = 'none';
+}
 if (document.getElementById('paymentMethod')) onPaymentMethodChange();
 </script>
 {% endblock %}

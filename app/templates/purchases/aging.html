@@ -13,6 +13,7 @@
   <a class="tab active" href="/purchases/payables/aging">AP Aging</a>
   <a class="tab" href="/suppliers">Suppliers</a>
   <a class="tab" href="/reports/supplier-costs">Supplier Costs</a>
+  {% if (user.role or '')|lower in ('admin', 'manager') %}<a class="tab" href="/products/order-slip">Order Slip</a>{% endif %}
 </div>
 
 {% set pp_url = "/purchases/payables/aging" %}{% set pp_mode = "as_of" %}{% set pp_keep = {} %}

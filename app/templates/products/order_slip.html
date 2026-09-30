@@ -63,13 +63,14 @@
 <body class="show-cost">
   <div class="toolbar">
     <div class="grp">
-      <a href="/products?flag=nostock" onclick="if (document.referrer.includes('/products')) { history.back(); return false; }">← Back to inventory</a>
+      <a href="/products?flag=nostock" onclick="if (/\/(products|purchases|suppliers|payments)/.test(document.referrer)) { history.back(); return false; }">← Back</a>
       <span class="muted">Tick more items there and click <strong>📝 Order slip</strong> again to add them.</span>
     </div>
     <div class="grp">
       <button type="button" onclick="sortBy('supplier')">Sort by last supplier</button>
       <button type="button" onclick="sortBy('name')">Sort by name</button>
       <button type="button" class="danger" onclick="clearSlip()">Clear slip</button>
+      <button type="button" onclick="receiveAsPurchase()" title="When the delivery arrives: open New Purchase with these items, quantities and units already filled in">📥 Receive as New Purchase</button>
       <button type="button" id="pdfBtn" onclick="downloadPdf()">⬇ Download PDF</button>
       <button type="button" class="primary" onclick="window.print()">🖨 Print</button>
     </div>
@@ -278,6 +279,14 @@
     if (d) { e.preventDefault(); pick(+d.dataset.i); }
   });
   searchEl.addEventListener('blur', () => setTimeout(() => { resultsEl.style.display = 'none'; }, 150));
+
+  // Delivery came in: New Purchase reads this slip (orderSlipDraft) and
+  // fills its lines from it — see loadFromOrderSlip in purchases/form.html.
+  function receiveAsPurchase() {
+    if (!draft.rows.length) { alert('Add items to the slip first.'); return; }
+    save();
+    location.href = '/purchases/new?from_slip=1';
+  }
 
   // PDF copy — built server-side from the slip exactly as it is on screen.
   async function downloadPdf() {
