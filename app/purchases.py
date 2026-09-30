@@ -1165,6 +1165,70 @@ def cancel_purchase(purchase_id: int, request: Request, db: Session = Depends(ge
     return RedirectResponse(f"/purchases/{purchase_id}", status_code=http_status.HTTP_302_FOUND)
 
 
+@router.post("/purchases/{purchase_id:int}/line/{line_id:int}/selling-price")
+def add_increase_to_selling_price(purchase_id: int, line_id: int, data: dict, request: Request,
+                                  db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """The "Add to selling price" checkbox beside a delivery line's ▲ cost
+    increase. Ticked: the item's selling price goes up by that same increase
+    (per base unit), and each fixed pack price (Box etc.) by the increase x
+    the pack size, so the peso margin stays where it was. Unticked: exactly
+    what was added comes back off. The amount is kept on the line, so ticking
+    twice can't add it twice."""
+    if not user:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    if not is_staff(user):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+    line = db.get(models.PurchaseLine, line_id)
+    if not line or line.purchase_id != purchase_id or not line.product_id:
+        return JSONResponse({"ok": False, "error": "Line not found."}, status_code=404)
+    purchase = line.purchase
+    product = line.product
+    if purchase.txn_type != "receive" or purchase.status == "cancelled" or not product:
+        return JSONResponse({"ok": False, "error": "Only a received delivery's items can do this."}, status_code=400)
+
+    apply = bool(data.get("apply"))
+    added = Decimal(str(line.selling_price_added)) if line.selling_price_added is not None else None
+    if apply == (added is not None):   # already in the state asked for
+        return {"ok": True, "applied": apply, "selling_price": float(product.selling_price or 0)}
+
+    if apply:
+        amount = Decimal(str(line.new_cost or 0)) - Decimal(str(line.old_cost or 0))
+        if amount <= 0:
+            return JSONResponse({"ok": False, "error": "This line didn't raise the cost."}, status_code=400)
+        sign = Decimal("1")
+    else:
+        amount, sign = added, Decimal("-1")
+
+    def bump(price, factor=Decimal("1")):
+        return (Decimal(str(price or 0)) + sign * amount * factor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    new_price = bump(product.selling_price)
+    if new_price <= 0:
+        return JSONResponse({"ok": False, "error": "That would bring the selling price to ₱0 or below."}, status_code=400)
+
+    old_price = Decimal(str(product.selling_price or 0))
+    product.selling_price = new_price
+    pack_changes = []
+    for u in product.units:
+        if u.price and u.price > 0:
+            before = Decimal(str(u.price))
+            u.price = bump(u.price, Decimal(str(u.factor_to_base or 1)))
+            pack_changes.append(f"{u.name} ₱{before:,.2f} → ₱{u.price:,.2f}")
+    line.selling_price_added = amount if apply else None
+
+    ref = purchase.ref_no or f"#{purchase.id}"
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="product",
+        entity_id=product.id, entity_label=product.name,
+        summary=(f"{'Added' if apply else 'Took back'} cost increase ₱{amount:,.2f} "
+                 f"{'to' if apply else 'from'} selling price of “{product.name}” ({ref})"),
+        changes={"selling_price": [f"{old_price:.2f}", f"{new_price:.2f}"],
+                 **({"pack_prices": ["", "; ".join(pack_changes)]} if pack_changes else {})},
+    )
+    db.commit()
+    return {"ok": True, "applied": apply, "selling_price": float(product.selling_price)}
+
+
 @router.get("/purchases/{purchase_id:int}", response_class=HTMLResponse)
 def view_purchase(
     purchase_id: int,
@@ -1253,6 +1317,7 @@ def view_purchase(
          "payment_method_labels": dict(PAYMENT_METHODS),
          "suppliers": suppliers, "can_edit_details": can_edit_details,
          "can_edit_items": can_edit_items, "can_edit_payment": can_edit_payment,
+         "can_add_to_price": is_staff(user) and purchase.txn_type == "receive",
          "edit_items_error": EDIT_ITEMS_ERRORS.get(edit_items_error),
          "edit_payment_error": EDIT_PAYMENT_ERRORS.get(edit_payment_error)},
     )

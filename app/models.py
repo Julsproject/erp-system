@@ -905,6 +905,9 @@ class PurchaseLine(Base):
     # Cost history: what the product's per-base cost was before/after this line.
     old_cost = Column(Numeric(12, 4), server_default="0")
     new_cost = Column(Numeric(12, 4), server_default="0")
+    # Per-base amount the delivery page's "Add to selling price" checkbox
+    # raised the selling price by (new_cost - old_cost); NULL = not applied.
+    selling_price_added = Column(Numeric(12, 4), nullable=True)
 
     purchase = relationship("Purchase", back_populates="lines")
     product = relationship("Product")
