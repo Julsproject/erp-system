@@ -444,7 +444,7 @@ function dcMarginPriceInput() {
   <h3 class="card-title">Needs your attention</h3>
   <div class="attn-grid">
 
-    <a class="attn {{ 'bad' if out_of_stock else 'ok' }}" href="/products">
+    <a class="attn {{ 'bad' if out_of_stock else 'ok' }}" href="/products?flag=nostock">
       <span class="attn-num">{{ out_of_stock|length }}</span>
       <span class="attn-label">Out of stock</span>
     </a>

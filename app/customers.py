@@ -1,5 +1,6 @@
 """Customer accounts (name, TIN, address) and receivable helper."""
 import io
+from urllib.parse import quote
 from decimal import Decimal
 
 import openpyxl
@@ -7,7 +8,7 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from . import audit, models, settings_store
@@ -90,7 +91,12 @@ def search_customers(q: str = "", db: Session = Depends(get_db), user=Depends(ge
     q = (q or "").strip()
     query = db.query(models.Customer).filter(models.Customer.is_active.is_(True))
     if q:
-        query = query.filter(models.Customer.name.ilike(f"%{q}%"))
+        like = f"%{q}%"
+        query = query.filter(or_(
+            models.Customer.name.ilike(like),
+            models.Customer.tin.ilike(like),
+            models.Customer.address.ilike(like),
+        ))
     customers = query.order_by(models.Customer.name).limit(20).all()
     return {
         "customers": [
@@ -100,6 +106,129 @@ def search_customers(q: str = "", db: Session = Depends(get_db), user=Depends(ge
     }
 
 
+@router.get("/customers/merge/search")
+def merge_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Customer picker for the Merge Duplicates modal — with enough context
+    (sales count, balance, TIN) to tell two same-looking names apart."""
+    if not user or not is_staff(user):
+        return JSONResponse({"customers": []}, status_code=401)
+    q = (q or "").strip()
+    if not q:
+        return {"customers": []}
+    customers = (
+        db.query(models.Customer)
+        .filter(models.Customer.is_active.is_(True), models.Customer.name.ilike(f"%{q}%"))
+        .order_by(models.Customer.name)
+        .limit(20)
+        .all()
+    )
+    ids = [c.id for c in customers]
+    sales = dict(
+        db.query(models.Sale.customer_id, func.count(models.Sale.id))
+        .filter(models.Sale.customer_id.in_(ids), models.Sale.is_voided.is_(False))
+        .group_by(models.Sale.customer_id)
+        .all()
+    ) if ids else {}
+    return {
+        "customers": [
+            {
+                "id": c.id, "name": c.name, "tin": c.tin or "", "address": c.address or "",
+                "sales": int(sales.get(c.id, 0)),
+                "owed": float(_customer_outstanding(db, c.id)),
+            }
+            for c in customers
+        ]
+    }
+
+
+# Everything that points at a customer — the same set _customer_has_history
+# checks. A merge re-points these from the duplicate onto the kept customer,
+# so its sales, credit balance, quotations and cheques all read under one name.
+_MERGE_HISTORY_TABLES = [models.Sale, models.Quotation, models.PostDatedCheque]
+# Blanks on the kept customer that the duplicate can fill in.
+_MERGE_FILL_FIELDS = ("tin", "address")
+
+
+@router.post("/customers/merge")
+def merge_customers(
+    request: Request, keep_id: int = Form(...), merge_id: int = Form(...),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    if keep_id == merge_id:
+        return RedirectResponse("/customers?merge_error=" + quote("Pick two different customers."), status_code=302)
+    keep = db.get(models.Customer, keep_id)
+    dup = db.get(models.Customer, merge_id)
+    if not keep or not dup or not keep.is_active or not dup.is_active:
+        return RedirectResponse("/customers?merge_error=" + quote("Customer not found."), status_code=302)
+
+    # What the Unmerge button on the Activity Log needs to put it all back.
+    filled = {f: getattr(dup, f) for f in _MERGE_FILL_FIELDS if not getattr(keep, f) and getattr(dup, f)}
+    undo = {
+        "keep_id": keep.id, "dup_id": dup.id, "filled": filled,
+        "rows": {
+            m.__tablename__: [r[0] for r in db.query(m.id).filter(m.customer_id == dup.id).order_by(m.id)]
+            for m in _MERGE_HISTORY_TABLES
+        },
+    }
+    for m in _MERGE_HISTORY_TABLES:
+        db.query(m).filter(m.customer_id == dup.id).update({m.customer_id: keep.id}, synchronize_session=False)
+    for f, v in filled.items():
+        setattr(keep, f, v)
+    dup.is_active = False
+
+    moved = undo["rows"]
+    audit.record(
+        db, user=user, request=request, action="merge", entity_type="customer",
+        entity_id=keep.id, entity_label=keep.name,
+        summary=f"Merged customer “{dup.name}” (#{dup.id}) into “{keep.name}” (#{keep.id}) — "
+                f"{len(moved['sales'])} sale(s), {len(moved['quotations'])} quotation(s) and "
+                f"{len(moved['post_dated_cheques'])} cheque(s) moved over; “{dup.name}” archived",
+        changes={"_unmerge": undo},
+    )
+    db.commit()
+    return RedirectResponse("/customers?merged=" + quote(keep.name), status_code=302)
+
+
+def unmerge_customer(db: Session, log: models.AuditLog, undo: dict, *, user, request=None) -> str:
+    """Reverse a customer merge from its Activity Log entry (route lives in
+    audit.py): the duplicate's own sales/quotations/cheques go back to it,
+    any TIN/address it filled in comes back off the kept customer, and it's
+    un-archived. Sales made to the kept customer after the merge stay there.
+    Raises ValueError with a message for the user when it can't."""
+    keep = db.get(models.Customer, undo["keep_id"])
+    dup = db.get(models.Customer, undo["dup_id"])
+    if not keep or not dup:
+        raise ValueError("One of the merged customers no longer exists.")
+    if dup.is_active:
+        raise ValueError(f"“{dup.name}” is already active again — it looks like it was restored by hand.")
+    tables = {m.__tablename__: m for m in _MERGE_HISTORY_TABLES}
+    moved = 0
+    for tname, ids in (undo.get("rows") or {}).items():
+        m = tables.get(tname)
+        if m is None or not ids:
+            continue
+        moved += db.query(m).filter(m.id.in_(ids), m.customer_id == keep.id).update(
+            {m.customer_id: dup.id}, synchronize_session=False
+        )
+    # Only take a filled-in field back if nobody has edited it since.
+    for f, v in (undo.get("filled") or {}).items():
+        if f in _MERGE_FILL_FIELDS and getattr(keep, f) == v:
+            setattr(keep, f, None)
+    dup.is_active = True
+    audit.record(
+        db, user=user, request=request, action="unmerge", entity_type="customer",
+        entity_id=dup.id, entity_label=dup.name,
+        summary=f"Unmerged customer “{dup.name}” (#{dup.id}) from “{keep.name}” (#{keep.id}) — "
+                f"{moved} sale/quotation/cheque record(s) moved back; “{dup.name}” restored to active",
+        changes={"_reverses": log.id},
+    )
+    return f"Unmerged “{dup.name}” from “{keep.name}”. Both are separate customers again."
+
+
 @router.get("/customers", response_class=HTMLResponse)
 def list_customers(
     request: Request,
@@ -107,6 +236,8 @@ def list_customers(
     page: int = 1,
     cust_msg: str = "",
     cust_error: str = "",
+    merged: str = "",
+    merge_error: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -163,6 +294,8 @@ def list_customers(
             "customers_owing": customers_owing or 0,
             "cust_msg": cust_msg,
             "cust_error": cust_error,
+            "merged": merged,
+            "merge_error": merge_error,
             "is_staff_user": is_staff(user),
         },
     )

@@ -345,6 +345,12 @@ SORTABLE_COLUMNS = {
 }
 
 
+def _no_stock_filter():
+    """Active products with nothing on hand (zero or negative) — the same
+    rule the dashboard's "Out of stock" count uses."""
+    return (models.Product.beginning_stock + models.Product.stock_qty <= 0,)
+
+
 def _no_cost_filter():
     """Stock on the shelf that has no cost against it.
 
@@ -481,6 +487,8 @@ def list_products(
         query = query.filter(models.Product.id.in_(adjustment_ids or {-1}))
     elif flag == "nocost":
         query = query.filter(*_no_cost_filter())
+    elif flag == "nostock":
+        query = query.filter(*_no_stock_filter())
 
     total = query.count()
     pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
@@ -543,6 +551,8 @@ def list_products(
         base_for_counts = base_for_counts.filter(models.Product.id.in_(adjustment_ids or {-1}))
     elif flag == "nocost":
         base_for_counts = base_for_counts.filter(*_no_cost_filter())
+    elif flag == "nostock":
+        base_for_counts = base_for_counts.filter(*_no_stock_filter())
     cat_counts = dict(
         base_for_counts.filter(models.Product.category_id.isnot(None))
         .with_entities(models.Product.category_id, func.count(models.Product.id))
@@ -644,6 +654,11 @@ def list_products(
                 .filter(models.Product.is_active.is_(True), *_no_cost_filter())
                 .scalar() if is_staff(user) else 0
             ),
+            "nostock_count": (
+                db.query(func.count(models.Product.id))
+                .filter(models.Product.is_active.is_(True), *_no_stock_filter())
+                .scalar()
+            ),
             "last_rollover_period": settings_store.get_setting(db, MONTH_END_SETTING_KEY, ""),
         },
     )
@@ -693,6 +708,8 @@ def export_products_excel(
     # Same tab filters the list page applies — the two expensive ones are
     # recomputed here rather than passed in, so a stale link can never export
     # a set that no longer matches what the tab would show.
+    if flag == "nostock":
+        query = query.filter(*_no_stock_filter())
     if is_admin_user and flag:
         if flag == "void":
             query = query.filter(models.Product.id.in_(set(find_all_double_deduction_candidates(db)) or {-1}))
@@ -2014,6 +2031,24 @@ def merge_products(
     if not keep or not dup or not keep.is_active or not dup.is_active:
         return RedirectResponse("/products?merge_error=Product+not+found", status_code=status.HTTP_302_FOUND)
 
+    # Everything the Unmerge button on the Activity Log needs to put the
+    # duplicate back exactly: which history rows were its own, what stock
+    # and barcode it brought over, and the unit ladder that gets deleted.
+    units = db.query(models.ProductUnit).filter(models.ProductUnit.product_id == merge_id).all()
+    undo = {
+        "keep_id": keep.id, "dup_id": dup.id,
+        "beginning_stock": audit._plain(dup.beginning_stock or Decimal("0")),
+        "stock_qty": audit._plain(dup.stock_qty or Decimal("0")),
+        "barcode": dup.barcode if (not keep.barcode and dup.barcode) else None,
+        "rows": {
+            model.__tablename__: [
+                r[0] for r in db.query(model.id).filter(model.product_id == merge_id).order_by(model.id)
+            ]
+            for model in _MERGE_HISTORY_TABLES
+        },
+        "units": [{c.name: audit._plain(getattr(u, c.name)) for c in u.__table__.columns} for u in units],
+    }
+
     keep.beginning_stock = (keep.beginning_stock or 0) + (dup.beginning_stock or 0)
     keep.stock_qty = (keep.stock_qty or 0) + (dup.stock_qty or 0)
     # The stock now lives on `keep` — leaving it on the archived duplicate
@@ -2022,8 +2057,11 @@ def merge_products(
     dup.stock_qty = 0
 
     if not keep.barcode and dup.barcode:
-        keep.barcode = dup.barcode
-        dup.barcode = None
+        # Clear it off the duplicate first — barcodes are unique, so both
+        # holding it for a moment makes the save fail.
+        code, dup.barcode = dup.barcode, None
+        db.flush()
+        keep.barcode = code
 
     for model in _MERGE_HISTORY_TABLES:
         db.query(model).filter(model.product_id == merge_id).update(
@@ -2036,9 +2074,74 @@ def merge_products(
         db, user=user, request=request, action="merge", entity_type="product",
         entity_id=keep.id, entity_label=keep.name,
         summary=f"Merged “{dup.name}” (#{dup.id}) into “{keep.name}” (#{keep.id}) — stock, sales, purchase and stock-count history moved over; “{dup.name}” archived",
+        changes={"_unmerge": undo},
     )
     db.commit()
     return RedirectResponse(f"/products?merged={keep.name}", status_code=status.HTTP_302_FOUND)
+
+
+def unmerge_product(db: Session, log: models.AuditLog, undo: dict, *, user, request=None) -> str:
+    """Reverse a product merge from its Activity Log entry (the Unmerge
+    button — route lives in audit.py): the duplicate's own sales/purchase/
+    stock/count rows go back to it, the stock and barcode it brought come
+    back off the kept product, its unit ladder is recreated and it's
+    un-archived. Anything done to the kept product after the merge (new
+    sales, adjustments) stays on the kept product. Raises ValueError with a
+    message for the user when it can't; returns the success message."""
+    keep = db.get(models.Product, undo["keep_id"], with_for_update=True)
+    dup = db.get(models.Product, undo["dup_id"], with_for_update=True)
+    if not keep or not dup:
+        raise ValueError("One of the merged products no longer exists.")
+    if dup.is_active:
+        raise ValueError(f"“{dup.name}” is already active again — it looks like it was restored by hand.")
+
+    tables = {m.__tablename__: m for m in _MERGE_HISTORY_TABLES}
+    moved = 0
+    for tname, ids in (undo.get("rows") or {}).items():
+        model = tables.get(tname)
+        if model is None or not ids:
+            continue
+        moved += db.query(model).filter(model.id.in_(ids), model.product_id == keep.id).update(
+            {model.product_id: dup.id}, synchronize_session=False
+        )
+
+    beg = Decimal(str(undo.get("beginning_stock") or 0))
+    stk = Decimal(str(undo.get("stock_qty") or 0))
+    keep.beginning_stock = (keep.beginning_stock or Decimal("0")) - beg
+    keep.stock_qty = (keep.stock_qty or Decimal("0")) - stk
+    dup.beginning_stock = beg
+    dup.stock_qty = stk
+
+    code = undo.get("barcode")
+    if code and keep.barcode == code:
+        keep.barcode = None
+        db.flush()
+        dup.barcode = code
+
+    # Recreate the unit ladder with fresh ids, re-pointing chain links
+    # (relative_to_unit_id) at the new copies.
+    new_ids = {}
+    pending_links = []
+    for u in undo.get("units") or []:
+        data = {k: v for k, v in u.items() if k not in ("id", "product_id", "relative_to_unit_id")}
+        row = models.ProductUnit(product_id=dup.id, **data)
+        db.add(row)
+        db.flush()
+        new_ids[u.get("id")] = row.id
+        if u.get("relative_to_unit_id"):
+            pending_links.append((row, u["relative_to_unit_id"]))
+    for row, old in pending_links:
+        row.relative_to_unit_id = new_ids.get(old)
+
+    dup.is_active = True
+    audit.record(
+        db, user=user, request=request, action="unmerge", entity_type="product",
+        entity_id=dup.id, entity_label=dup.name,
+        summary=f"Unmerged “{dup.name}” (#{dup.id}) from “{keep.name}” (#{keep.id}) — {moved} history row(s), "
+                f"stock and units moved back; “{dup.name}” restored to active",
+        changes={"_reverses": log.id},
+    )
+    return f"Unmerged “{dup.name}” from “{keep.name}”. Both are separate products again."
 
 
 @router.get("/products/archived", response_class=HTMLResponse)
@@ -2272,6 +2375,215 @@ def print_labels(request: Request, ids: list[str] = Form([]), db: Session = Depe
         "products/labels.html",
         {"request": request, "app_name": request.app.title, "user": user, "labels": labels},
     )
+
+
+def _order_slip_rows(db, products):
+    """One row per product for the Order Slip: stock on hand plus what was
+    last bought — supplier, unit, cost, qty — so the unit and supplier
+    default to how the item is normally ordered."""
+    ids = [p.id for p in products]
+    last = {}
+    if ids:
+        lines = (
+            db.query(models.PurchaseLine, models.Purchase)
+            .join(models.Purchase, models.PurchaseLine.purchase_id == models.Purchase.id)
+            .filter(
+                models.PurchaseLine.product_id.in_(ids),
+                models.Purchase.txn_type == "receive",
+                models.Purchase.status != "cancelled",
+            )
+            .order_by(models.Purchase.delivery_date.desc().nullslast(), models.Purchase.id.desc())
+            .all()
+        )
+        for line, purchase in lines:
+            last.setdefault(line.product_id, (line, purchase))
+    rows = []
+    for p in products:
+        line, purchase = last.get(p.id, (None, None))
+        base_unit = p.unit_type.name if p.unit_type else "unit"
+        rows.append({
+            "id": p.id,
+            "name": p.name,
+            "on_hand": f"{qty(p.total_qty)} {base_unit}",
+            "unit": (line.unit_name if line and line.unit_name else base_unit),
+            "last_qty": qty(line.qty) if line else "",
+            "last_cost": f"{Decimal(str(line.unit_cost)):,.2f}" if line else "",
+            "last_supplier": (purchase.supplier.name if purchase and purchase.supplier else ""),
+            "last_date": (purchase.delivery_date or (purchase.created_at.date().isoformat() if purchase.created_at else "")) if purchase else "",
+        })
+    return rows
+
+
+def _order_slip_page(request, db, user, products):
+    suppliers = (
+        db.query(models.Supplier.name)
+        .filter(models.Supplier.is_active.is_(True))
+        .order_by(models.Supplier.name)
+        .all()
+    )
+    return templates.TemplateResponse(
+        "products/order_slip.html",
+        {
+            "request": request, "app_name": request.app.title, "user": user,
+            "rows": _order_slip_rows(db, products),
+            "suppliers": [s.name for s in suppliers],
+            "today": datetime.now(MANILA).date().isoformat(),
+        },
+    )
+
+
+@router.post("/products/order-slip", response_class=HTMLResponse)
+def order_slip(request: Request, ids: list[str] = Form([]), db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Printable order slip for the products ticked in Inventory. The page
+    keeps a draft in the browser, so ticking more items on another page and
+    clicking Order Slip again adds to the same slip instead of replacing it."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
+    ids = sorted({int(i) for i in ids if i.isdigit()})
+    products = (
+        db.query(models.Product)
+        .filter(models.Product.id.in_(ids or [-1]), models.Product.is_active.is_(True))
+        .order_by(models.Product.name)
+        .all()
+    )
+    return _order_slip_page(request, db, user, products)
+
+
+@router.get("/products/order-slip", response_class=HTMLResponse)
+def order_slip_view(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
+    return _order_slip_page(request, db, user, [])
+
+
+@router.post("/products/order-slip/pdf")
+async def order_slip_pdf(request: Request, user=Depends(get_current_user)):
+    """The Order Slip as a downloadable PDF, built from what is on screen —
+    the slip itself only lives in the browser (see order_slip), so the page
+    posts its current draft here rather than the server rebuilding it."""
+    if not user or not is_staff(user):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad request"}, status_code=400)
+
+    from xml.sax.saxutils import escape
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from .pdf_utils import letterhead
+
+    def text(v, limit=200):
+        return escape(str(v or "").strip()[:limit])
+
+    cols = data.get("cols") or {}
+    show_onhand, show_cost, show_supplier = bool(cols.get("onhand")), bool(cols.get("cost", True)), bool(cols.get("supplier"))
+    supplier = text(data.get("supplier"), 150)
+    slip_date = text(data.get("date"), 20)
+
+    db = SessionLocal()
+    try:
+        biz = settings_store.get_all(db)
+    finally:
+        db.close()
+
+    styles = getSampleStyleSheet()
+    cell = ParagraphStyle("Cell", parent=styles["Normal"], fontSize=9, leading=11)
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=16 * mm, bottomMargin=16 * mm, leftMargin=16 * mm, rightMargin=16 * mm,
+                            title="Order Slip")
+    elements = letterhead(biz, "Order Slip", [f"Date: {slip_date}"] if slip_date else [], "Supplier", [supplier] if supplier else [])
+
+    header = ["#", "Item", "Qty", "Unit"]
+    widths = [22, None, 50, 55]
+    if show_onhand:
+        header.append("On hand"); widths.append(60)
+    if show_cost:
+        header.append("Last cost"); widths.append(62)
+    if show_supplier:
+        header.append("Last supplier"); widths.append(95)
+    item_width = doc.width - sum(w for w in widths if w)
+    widths[1] = item_width
+
+    table_data = [header]
+    for i, r in enumerate((data.get("rows") or [])[:500], start=1):
+        if not isinstance(r, dict):
+            continue
+        row = [str(i), Paragraph(text(r.get("name")), cell), text(r.get("order_qty"), 20), Paragraph(text(r.get("unit"), 40), cell)]
+        if show_onhand:
+            row.append(text(r.get("on_hand"), 40))
+        if show_cost:
+            row.append(text(r.get("last_cost"), 20) or "-")
+        if show_supplier:
+            row.append(Paragraph(text(r.get("last_supplier"), 150) or "-", cell))
+        table_data.append(row)
+    if len(table_data) == 1:
+        table_data.append(["", "No items", ""] + [""] * (len(header) - 3))
+
+    table = Table(table_data, colWidths=widths, repeatRows=1)
+    right_cols = [2] + ([header.index("On hand")] if show_onhand else []) + ([header.index("Last cost")] if show_cost else [])
+    style = [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F6FEB")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]
+    style += [("ALIGN", (c, 0), (c, -1), "RIGHT") for c in right_cols]
+    table.setStyle(TableStyle(style))
+    elements.append(table)
+
+    notes = text(data.get("notes"), 1000)
+    if notes:
+        elements.append(Spacer(1, 12))
+        elements.append(Paragraph("<b>Notes:</b> " + notes.replace("\n", "<br/>"), styles["Normal"]))
+
+    elements.append(Spacer(1, 40))
+    sign = Table([["Prepared by", "Approved by", "Received by (supplier)"]], colWidths=[doc.width / 3] * 3)
+    sign.setStyle(TableStyle([
+        ("LINEABOVE", (0, 0), (0, 0), 0.8, colors.black),
+        ("LINEABOVE", (1, 0), (1, 0), 0.8, colors.black),
+        ("LINEABOVE", (2, 0), (2, 0), 0.8, colors.black),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+    ]))
+    elements.append(sign)
+
+    doc.build(elements)
+    name_part = re.sub(r"[^A-Za-z0-9 _-]+", "", str(data.get("supplier") or "")).strip()[:40]
+    filename = "Order Slip" + (f" - {name_part}" if name_part else "") + (f" {slip_date}" if slip_date else "") + ".pdf"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=\"{filename}\""},
+    )
+
+
+@router.get("/products/order-slip/search")
+def order_slip_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user or not is_staff(user):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    q = (q or "").strip()
+    if not q:
+        return {"rows": []}
+    products = (
+        db.query(models.Product)
+        .filter(models.Product.is_active.is_(True), multi_word_ilike(models.Product.name, q) | (models.Product.barcode == q))
+        .order_by(models.Product.name)
+        .limit(20)
+        .all()
+    )
+    return {"rows": _order_slip_rows(db, products)}
 
 
 @router.post("/products/bulk-edit", response_class=HTMLResponse)

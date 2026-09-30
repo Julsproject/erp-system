@@ -76,19 +76,22 @@
         <h2>Download the count sheet</h2>
         <p class="muted">An Excel file listing every active product, with a blank Counted Qty column to fill in
           (already-counted lines in this session come pre-filled, so re-downloading picks up where you left off).</p>
-        {% if shelves %}
         <form method="get" action="/stock-count/{{ count.id }}/import/template" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+          <label style="margin:0;font-size:12.5px;color:var(--muted);">Which items
+            <select name="only" style="display:block;margin-top:4px;">
+              {% for key, v in sheet_filters.items() %}<option value="{{ key }}">{{ v[0] }}</option>{% endfor %}
+            </select>
+          </label>
+          {% if shelves %}
           <label style="margin:0;font-size:12.5px;color:var(--muted);">Filter by shelf (optional)
             <select name="shelf_id" style="display:block;margin-top:4px;">
               <option value="0">All shelves</option>
               {% for s in shelves %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
             </select>
           </label>
+          {% endif %}
           <button class="btn" type="submit">⬇ Download count sheet</button>
         </form>
-        {% else %}
-        <a class="btn" href="/stock-count/{{ count.id }}/import/template">⬇ Download count sheet</a>
-        {% endif %}
       </div>
     </div>
 

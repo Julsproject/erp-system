@@ -170,13 +170,14 @@ def maybe_apply_effective_date_rebases() -> None:
 HEADER_MAP_COUNT = {
     "barcode": "barcode", "bar code": "barcode", "upc": "barcode", "ean": "barcode",
     "product name": "name", "name": "name", "product": "name",
+    "shelf": "shelf_ref",
     "rename to": "rename_to", "renamed to": "rename_to", "new name": "rename_to", "rename": "rename_to",
     "counted qty": "counted", "counted": "counted", "count": "counted", "qty": "counted", "quantity": "counted",
     "unit": "unit_label", "base unit": "unit_label",
     "system qty (reference only)": "system_ref", "system qty": "system_ref", "system": "system_ref",
 }
-FIELDS_COUNT = ["barcode", "name", "rename_to", "counted", "unit_label", "system_ref"]
-BASE_HEADERS_COUNT = ["Barcode", "Product Name", "Rename To", "Unit", "System Qty (reference only)", "Counted Qty"]
+FIELDS_COUNT = ["barcode", "name", "shelf_ref", "rename_to", "counted", "unit_label", "system_ref"]
+BASE_HEADERS_COUNT = ["Barcode", "Product Name", "Shelf", "Rename To", "Unit", "System Qty (reference only)", "Counted Qty"]
 
 
 # Cells the count sheet writes as "not applicable" for a unit this product
@@ -852,7 +853,7 @@ def stock_count_import_form(count_id: int, request: Request, db: Session = Depen
     return templates.TemplateResponse(
         "stock_count/import.html",
         {"request": request, "app_name": request.app.title, "user": user, "count": count,
-         "shelves": shelves, "result": None},
+         "shelves": shelves, "result": None, "sheet_filters": COUNT_SHEET_FILTERS},
     )
 
 
@@ -904,8 +905,54 @@ def stock_count_import_upload(
     )
 
 
+# "Which items" choices on the count sheet download: key -> (dropdown label, filename tag).
+COUNT_SHEET_FILTERS = {
+    "": ("All products", ""),
+    "in_count": ("Only items already in this count", "in_count"),
+    "linked_negative": ("Linked items + negatives without a link", "linked_and_negatives"),
+    "linked": ("Linked items only (whole pack + its Open/Retail)", "linked"),
+    "negative_unlinked": ("Negatives without a link", "negatives"),
+}
+
+
+def _filter_count_sheet(products, only: str):
+    """Narrow the count sheet to the chosen group. A "linked" item is either
+    side of an Open/Retail link — the whole pack (e.g. a sealed Bag) or the
+    loose item opened from it — and both sides come out together, pack
+    first, so they're counted side by side. Negatives without a link follow,
+    by name. Returns (products, filename tag)."""
+    if not only or only not in COUNT_SHEET_FILTERS:
+        return products, ""
+    active_ids = {p.id for p in products}
+
+    def is_linked(p):
+        return bool(p.replenish_from_id) or any(o.is_active for o in (p.open_items or []))
+
+    linked, negatives = [], []
+    for p in products:
+        if is_linked(p):
+            linked.append(p)
+        elif (p.total_qty or 0) < 0:
+            negatives.append(p)
+
+    def family_key(p):
+        # Group an Open/Retail item under its whole pack's name.
+        src = p.replenish_from if p.replenish_from_id in active_ids else None
+        head = src.name if src else p.name
+        return (head.lower(), 1 if src else 0, p.name.lower())
+
+    linked.sort(key=family_key)
+    picked = {
+        "linked_negative": linked + negatives,
+        "linked": linked,
+        "negative_unlinked": negatives,
+    }[only]
+    return picked, COUNT_SHEET_FILTERS[only][1]
+
+
 @router.get("/stock-count/{count_id:int}/import/template")
-def stock_count_import_template(count_id: int, shelf_id: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def stock_count_import_template(count_id: int, shelf_id: int = 0, only: str = "",
+                                db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_floor_staff(user):
@@ -915,11 +962,23 @@ def stock_count_import_template(count_id: int, shelf_id: int = 0, db: Session = 
         return RedirectResponse("/stock-count", status_code=302)
 
     existing_by_product = {l.product_id: l for l in count.lines}
-    query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     shelf = db.get(models.Shelf, shelf_id) if shelf_id else None
-    if shelf:
-        query = query.filter(models.Product.shelf_id == shelf.id)
-    products = query.order_by(models.Product.name).all()
+    if only == "in_count":
+        # What's already on this count's own sheet — for printing/reviewing
+        # just the series you already picked, instead of the full catalog
+        # this download normally means.
+        product_ids = list(existing_by_product.keys())
+        query = db.query(models.Product).filter(models.Product.id.in_(product_ids or [0]), models.Product.is_active.is_(True))
+        if shelf:
+            query = query.filter(models.Product.shelf_id == shelf.id)
+        products = query.order_by(models.Product.name).all()
+        only_label = COUNT_SHEET_FILTERS["in_count"][1]
+    else:
+        query = db.query(models.Product).filter(models.Product.is_active.is_(True))
+        if shelf:
+            query = query.filter(models.Product.shelf_id == shelf.id)
+        products = query.order_by(models.Product.name).all()
+        products, only_label = _filter_count_sheet(products, only)
 
     # One extra column per distinct unit found across the products being
     # exported, so a product sold by the Sack can be counted as "2 Sack"
@@ -961,14 +1020,14 @@ def stock_count_import_template(count_id: int, shelf_id: int = 0, db: Session = 
             base_cell = breakdown.get(base_name, "")
         else:
             base_cell = float(line.counted_qty) if line else ""
-        row = [p.barcode or "", p.name, "", base_name, float(p.total_qty or 0), base_cell]
+        row = [p.barcode or "", p.name, (p.shelf.name if p.shelf else ""), "", base_name, float(p.total_qty or 0), base_cell]
         own_units = {(u.name or "").strip().lower() for u in p.units}
         for label in unit_headers:
             key = label.lower()
             row.append(breakdown.get(label, "") if key in own_units else "—")
         ws.append(row)
 
-    widths = [18, 32, 22, 12, 22, 14] + [12] * len(unit_headers)
+    widths = [18, 32, 18, 22, 12, 22, 14] + [12] * len(unit_headers)
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.freeze_panes = "C2"
@@ -976,7 +1035,7 @@ def stock_count_import_template(count_id: int, shelf_id: int = 0, db: Session = 
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
-    suffix = f"_{shelf.name}" if shelf else ""
+    suffix = (f"_{shelf.name}" if shelf else "") + (f"_{only_label}" if only_label else "")
     return Response(
         content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -993,6 +1052,51 @@ def stock_count_search(count_id: int, q: str = "", db: Session = Depends(get_db)
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     matches = _find_products(db, q)
     return {"products": [{"id": p.id, "name": p.name} for p in matches]}
+
+
+@router.post("/stock-count/{count_id:int}/add-products")
+def stock_count_add_products(count_id: int, data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Add several products at once, checked off a search's results — for
+    a series of similarly-named items (sizes, variants) you'd otherwise have
+    to search up and click one at a time. Same as a plain scan pick, but
+    counted_qty starts at 0 (no assumed "+1") since these were only found,
+    not physically counted yet — matches stock_count_add_shelf's own
+    starting point."""
+    if not user or not is_floor_staff(user):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    count = db.get(models.StockCount, count_id)
+    if not count or count.status != "open":
+        return JSONResponse({"ok": False, "error": "This count isn't open anymore."}, status_code=400)
+
+    try:
+        product_ids = {int(i) for i in (data.get("product_ids") or [])}
+    except (TypeError, ValueError):
+        product_ids = set()
+    if not product_ids:
+        return JSONResponse({"ok": False, "error": "Pick at least one product."}, status_code=400)
+
+    existing_ids = {
+        pid for (pid,) in db.query(models.StockCountLine.product_id)
+        .filter(models.StockCountLine.stock_count_id == count.id).all()
+    }
+    products = (
+        db.query(models.Product)
+        .filter(models.Product.id.in_(product_ids), models.Product.is_active.is_(True))
+        .all()
+    )
+    added_lines = []
+    for product in products:
+        if product.id in existing_ids:
+            continue
+        line = models.StockCountLine(
+            stock_count_id=count.id, product_id=product.id, product_name=product.name,
+            system_qty=Decimal(str(product.total_qty or 0)), counted_qty=Decimal("0"),
+        )
+        db.add(line)
+        db.flush()
+        added_lines.append(line)
+    db.commit()
+    return {"ok": True, "lines": [_line_dict(l) for l in added_lines]}
 
 
 @router.post("/stock-count/{count_id:int}/line/{line_id:int}/set")
@@ -1016,6 +1120,24 @@ def stock_count_set_line(count_id: int, line_id: int, data: dict, db: Session = 
     line.unit_breakdown = None  # a plain-number edit overrides any per-unit breakdown
     db.commit()
     return {"ok": True, "line": _line_dict(line)}
+
+
+@router.post("/stock-count/{count_id:int}/line/{line_id:int}/delete")
+def stock_count_delete_line(count_id: int, line_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Drop a line someone scanned by mistake, or decided not to count after
+    all — a plain removal from this count's sheet, not a stock movement, so
+    it never touches on-hand or the ledger either way."""
+    if not user or not is_floor_staff(user):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    count = db.get(models.StockCount, count_id)
+    if not count or count.status != "open":
+        return JSONResponse({"ok": False, "error": "This count isn't open anymore."}, status_code=400)
+    line = db.get(models.StockCountLine, line_id)
+    if not line or line.stock_count_id != count.id:
+        return JSONResponse({"ok": False, "error": "Line not found."}, status_code=404)
+    db.delete(line)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/stock-count/{count_id:int}/line/{line_id:int}/set-units")

@@ -12,6 +12,8 @@ import json
 from datetime import date, datetime
 from decimal import Decimal
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import or_
@@ -34,6 +36,7 @@ ACTION_LABELS = {
     "adjust_stock": "Stock adjusted", "stock_count": "Stock count correction", "convert": "Converted",
     "login": "Signed in", "login_failed": "Failed sign-in", "logout": "Signed out",
     "password_change": "Password changed", "settings_change": "Settings changed",
+    "merge": "Merged", "unmerge": "Unmerged",
 }
 ENTITY_LABELS = {
     "product": "Inventory", "expense": "Expense", "delivery": "Delivery",
@@ -106,6 +109,67 @@ def record(
     ))
 
 
+# Merges the Activity Log can undo, and the plain-word name for the message.
+UNMERGE_TYPES = {"product": "product", "customer": "customer"}
+
+
+def merge_undo_data(log: models.AuditLog):
+    """The undo record a merge saved (under "_unmerge" in its changes), or
+    None for merges logged before the Unmerge button existed — those didn't
+    note which rows moved, so there's nothing reliable to reverse."""
+    if not log or log.action != "merge" or log.entity_type not in UNMERGE_TYPES or not log.changes:
+        return None
+    try:
+        return json.loads(log.changes).get("_unmerge")
+    except (ValueError, AttributeError):
+        return None
+
+
+def unmerged_log_ids(db: Session) -> set:
+    """Merge log ids that an Unmerge has already reversed."""
+    done = set()
+    for (changes,) in db.query(models.AuditLog.changes).filter(
+        models.AuditLog.action == "unmerge", models.AuditLog.changes.isnot(None)
+    ):
+        try:
+            rid = json.loads(changes).get("_reverses")
+        except (ValueError, AttributeError):
+            continue
+        if rid:
+            done.add(int(rid))
+    return done
+
+
+@router.post("/audit/{log_id:int}/unmerge")
+def unmerge(log_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """The Unmerge button on a merge entry — hands off to the product or
+    customer module, which knows what that merge moved."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_admin(user):
+        return RedirectResponse("/pos", status_code=302)
+    from .customers import unmerge_customer
+    from .products import unmerge_product
+
+    def _back(key, msg):
+        return RedirectResponse(f"/audit?{key}={quote(msg)}", status_code=302)
+
+    log = db.get(models.AuditLog, log_id)
+    undo = merge_undo_data(log)
+    if undo is None:
+        return _back("error", "This merge was done before Unmerge existed, so it didn't record what moved — it can't be undone automatically.")
+    if log_id in unmerged_log_ids(db):
+        return _back("error", "That merge has already been undone.")
+    handler = unmerge_product if log.entity_type == "product" else unmerge_customer
+    try:
+        msg = handler(db, log, undo, user=user, request=request)
+    except ValueError as e:
+        db.rollback()
+        return _back("error", str(e))
+    db.commit()
+    return _back("ok", msg)
+
+
 @router.get("/audit", response_class=HTMLResponse)
 def audit_log(
     request: Request,
@@ -116,6 +180,8 @@ def audit_log(
     date_from: str = "",
     date_to: str = "",
     page: int = 1,
+    ok: str = "",
+    error: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -163,16 +229,26 @@ def audit_log(
         .all()
     )
 
-    # Decode the JSON change maps for display.
+    # Decode the JSON change maps for display. Keys starting with "_" are
+    # bookkeeping (e.g. a merge's undo record), not field edits to show.
+    reversed_merges = unmerged_log_ids(db) if any(r.action == "merge" for r in rows) else set()
     entries = []
     for r in rows:
         changes = None
         if r.changes:
             try:
-                changes = json.loads(r.changes)
-            except ValueError:
+                changes = {k: v for k, v in json.loads(r.changes).items() if not k.startswith("_")} or None
+            except (ValueError, AttributeError):
                 changes = None
-        entries.append({"row": r, "changes": changes})
+        unmerge = None
+        if r.action == "merge" and r.entity_type in UNMERGE_TYPES:
+            if r.id in reversed_merges:
+                unmerge = "done"
+            elif merge_undo_data(r) is not None:
+                unmerge = "ready"
+            else:
+                unmerge = "old"
+        entries.append({"row": r, "changes": changes, "unmerge": unmerge})
 
     users = db.query(models.User).order_by(models.User.username).all()
 
@@ -185,5 +261,6 @@ def audit_log(
             "q": q, "action": action, "entity_type": entity_type, "user_id": user_id,
             "date_from": date_from, "date_to": date_to,
             "page": page, "pages": pages, "total": total,
+            "ok": ok, "error": error,
         },
     )

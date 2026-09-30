@@ -8,6 +8,9 @@
   </div>
 </div>
 
+{% if ok %}<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;">{{ ok }}</div>{% endif %}
+{% if error %}<div class="alert" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">{{ error }}</div>{% endif %}
+
 {% set qs = '&q=' ~ q if q else '' %}
 {% set qs = qs ~ ('&action=' ~ action if action else '') %}
 {% set qs = qs ~ ('&entity_type=' ~ entity_type if entity_type else '') %}
@@ -80,7 +83,18 @@
         <td class="strong">{{ r.username or '—' }}{% if r.ip %}<br><span class="muted" style="font-size:11px;">{{ r.ip }}</span>{% endif %}</td>
         <td><span class="audit-act act-{{ r.action }}">{{ action_labels.get(r.action, r.action) }}</span><br>
           <span class="muted" style="font-size:11px;">{{ entity_labels.get(r.entity_type, r.entity_type) }}</span></td>
-        <td style="white-space:normal;max-width:320px;">{{ r.summary or '—' }}</td>
+        <td style="white-space:normal;max-width:320px;">{{ r.summary or '—' }}
+          {% if e.unmerge == 'ready' %}
+          <form method="post" action="/audit/{{ r.id }}/unmerge" style="margin-top:6px;"
+                onsubmit="return confirm('Unmerge these two products? The archived one comes back as its own product with its own sales, purchases, stock movements, counts, stock and units. Anything done to the kept product after the merge stays on it.');">
+            <button class="btn-secondary" type="submit" style="padding:4px 10px;font-size:12px;">Unmerge</button>
+          </form>
+          {% elif e.unmerge == 'done' %}
+          <div class="muted" style="font-size:11px;margin-top:4px;">Undone — see the Unmerged entry.</div>
+          {% elif e.unmerge == 'old' %}
+          <div class="muted" style="font-size:11px;margin-top:4px;">Merged before Unmerge existed — can't be undone from here.</div>
+          {% endif %}
+        </td>
         <td style="white-space:normal;max-width:300px;">
           {% if e.changes %}
           <ul class="audit-changes">

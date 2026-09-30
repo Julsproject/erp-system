@@ -1382,10 +1382,10 @@ kbd {
   display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .02em;
   padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--ink-soft); border: 1px solid var(--line);
 }
-.act-create { background: var(--ok-tint); color: var(--ok); border-color: transparent; }
+.act-create, .act-unmerge { background: var(--ok-tint); color: var(--ok); border-color: transparent; }
 .act-update, .act-settings_change { background: var(--brand-tint); color: var(--brand-600); border-color: transparent; }
 .act-adjust_stock { background: var(--warn-tint); color: var(--warn); border-color: transparent; }
-.act-void, .act-cancel, .act-archive, .act-login_failed { background: var(--danger-tint); color: var(--danger); border-color: transparent; }
+.act-void, .act-cancel, .act-archive, .act-login_failed, .act-merge { background: var(--danger-tint); color: var(--danger); border-color: transparent; }
 .act-login, .act-logout, .act-dispatch, .act-complete, .act-confirm, .act-pay, .act-convert, .act-password_change { background: var(--surface-2); color: var(--muted); }
 .audit-changes { list-style: none; margin: 0; padding: 0; font-size: 12px; }
 .audit-changes li { padding: 1px 0; }

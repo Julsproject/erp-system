@@ -2675,6 +2675,10 @@ def edit_sale_payment_method(
         sale.amount_tendered = sale.total
         sale.change_amount = Decimal("0")
         sale.payment_method = METHOD_LABELS[new_method]
+        # Replace the "receivable" payment row, don't add alongside it — a
+        # sale left holding both reads as credit AND cash, and can't be
+        # switched back later (the single-payment guard rejects it).
+        db.query(models.Payment).filter(models.Payment.sale_id == sale.id).delete(synchronize_session=False)
         db.add(models.Payment(sale_id=sale.id, method=new_method, amount=sale.total))
 
         accounting.reverse_sale_posting(db, sale, reason=f"Payment method corrected: receivable -> {new_method}", entered_by_id=user.id, same_date=True)
@@ -2710,10 +2714,16 @@ def edit_sale_payment_method(
 
         old_method = sale.payments[0].method
         db.query(models.Payment).filter(models.Payment.sale_id == sale.id).delete(synchronize_session=False)
+        # Same "receivable" payment row a credit sale rung up that way gets,
+        # so Dashboard/Cashier Activity count it under Credit.
+        db.add(models.Payment(sale_id=sale.id, method="receivable", amount=sale.total))
         sale.receivable_amount = sale.total
         sale.amount_tendered = Decimal("0")
         sale.change_amount = Decimal("0")
-        sale.due_date = date.today() + timedelta(days=int(days))
+        # Terms count from the sale's own date, same as a credit sale rung up
+        # that way (backdated ones included) — not from the day it's fixed.
+        sale_day = sale.created_at.astimezone(MANILA).date() if sale.created_at else datetime.now(MANILA).date()
+        sale.due_date = sale_day + timedelta(days=int(days))
         sale.payment_method = METHOD_LABELS["receivable"]
 
         accounting.reverse_sale_posting(db, sale, reason=f"Payment method corrected: {old_method} -> receivable", entered_by_id=user.id, same_date=True)

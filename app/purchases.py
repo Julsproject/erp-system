@@ -44,6 +44,17 @@ def _weighted_avg_cost(product: models.Product, base_qty: Decimal, unit_cost_per
     return blended.quantize(CENTS, rounding=ROUND_HALF_UP)
 
 
+def _record_typed_unit(db: Session, product: models.Product, typed) -> None:
+    """An item with no Unit Type on file takes the unit typed on its delivery
+    line (New Purchase or Edit Items) as its Unit Type, so Inventory knows it
+    from then on. Never overwrites a unit it already has, and never records
+    the "Unit" placeholder shown for an item with none."""
+    typed = (typed or "").strip()
+    if product.unit_type_id or not typed or typed.lower() == "unit":
+        return
+    product.unit_type = _get_or_create_unit_type(db, typed)
+
+
 def _restore_cost_before(product: models.Product, lines) -> Decimal | None:
     """Undoing a delivery (Edit Items or Cancel) also puts back the cost this
     purchase blended in — e.g. 4 gal at ₱1,058 keyed onto the wrong item left
@@ -822,13 +833,11 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
                 )
         if not product:
             continue
-        if txn_type == "receive" and not product.unit_type_id:
+        if txn_type == "receive":
             # Inventory had no Unit Type on file for this product (that's why
             # the row's Unit field was left editable instead of locked) —
             # whatever was typed there becomes its Unit Type going forward.
-            typed_unit = (ln.get("unit_name") or "").strip()
-            if typed_unit:
-                product.unit_type = _get_or_create_unit_type(db, typed_unit)
+            _record_typed_unit(db, product, ln.get("unit_name"))
         if (
             txn_type == "receive" and product.unit_type_id
             and (ln.get("unit_name") or "").strip() == product.unit_type.name
@@ -1481,7 +1490,7 @@ def edit_purchase_items_form(purchase_id: int, request: Request, db: Session = D
         lines_payload.append({
             "product_id": line.product_id,
             "name": line.product_name,
-            "unit_name": line.unit_name or "Unit",
+            "unit_name": line.unit_name or "",
             "factor": float(line.unit_factor or 1),
             "qty": float(line.qty or 0),
             "unit_cost": float(line.unit_cost or 0),
@@ -1489,7 +1498,8 @@ def edit_purchase_items_form(purchase_id: int, request: Request, db: Session = D
     return templates.TemplateResponse(
         "purchases/edit_items.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "purchase": purchase, "lines_json": json.dumps(lines_payload)},
+         "purchase": purchase, "lines_json": json.dumps(lines_payload),
+         "unit_types": db.query(models.UnitType).order_by(models.UnitType.name).all()},
     )
 
 
@@ -1565,6 +1575,8 @@ def edit_purchase_items(purchase_id: int, data: dict, request: Request, db: Sess
         product = db.get(models.Product, int(ln["product_id"]), with_for_update=True) if ln.get("product_id") else None
         if not product:
             continue
+        if purchase.txn_type == "receive":
+            _record_typed_unit(db, product, ln.get("unit_name"))  # same as New Purchase
         if (
             product.unit_type_id
             and (ln.get("unit_name") or "").strip() == product.unit_type.name

@@ -47,6 +47,7 @@
   </section>
 </div>
 
+<datalist id="unit-type-list">{% for u in unit_types %}<option value="{{ u.name }}">{% endfor %}</datalist>
 <script>
 const purchaseId = {{ purchase.id }};
 let cart = {{ lines_json|safe }}.map(function (l) {
@@ -74,6 +75,13 @@ async function loadCartUnits() {
     const p = byId[line.productId];
     if (!p) return;
     line.baseUnit = p.base_unit || null;
+    // No Unit Type in Inventory yet: let the unit be typed here (saved as the
+    // item's Unit Type), and drop the "Unit" placeholder it was saved with.
+    if (!p.has_unit_type) {
+      line.noUnit = true;
+      if ((line.unitName || '').toLowerCase() === 'unit') line.unitName = '';
+      return;
+    }
     if (!p.units) return;
     // A product with a linked open/retail counterpart has its base unit left
     // out of p.units (see _purchase_product_payload's steering) — if that's
@@ -167,9 +175,9 @@ function addToCart(p) {
     factor = p.units[0].factor || 1;
   }
   cart.push({
-    productId: p.id, name: p.name, unitName: unitName, factor: factor, qty: 1,
+    productId: p.id, name: p.name, unitName: p.has_unit_type ? unitName : '', factor: factor, qty: 1,
     unitCost: (p.cost_price || 0) * factor,
-    units: units, unitIndex: unitIndex, baseUnit: p.base_unit || null,
+    units: units, unitIndex: unitIndex, baseUnit: p.base_unit || null, noUnit: !p.has_unit_type,
   });
   renderCart();
 }
@@ -187,6 +195,7 @@ function setUnitIndex(i, v) {
   l.factor = newFactor;
   renderCart();
 }
+function setUnitName(i, v) { cart[i].unitName = v; }
 function setQty(i, v) { cart[i].qty = parseFloat(v) || 0; refreshCartComputed(); refreshCartHint(i); }
 function setCost(i, v) { cart[i].unitCost = parseFloat(v) || 0; refreshCartComputed(); }
 function setTotal(i, v) {
@@ -209,7 +218,10 @@ function renderCart() {
       ? '<select class="cart-unit" onchange="setUnitIndex(' + i + ', this.value)">' +
           line.units.map((u, ui) => '<option value="' + ui + '"' + (ui === line.unitIndex ? ' selected' : '') + '>' + escapeHtml(u.name) + '</option>').join('') +
         '</select>'
-      : escapeHtml(line.unitName || '');
+      : line.noUnit
+        ? '<input class="cart-unit-txt" type="text" list="unit-type-list" placeholder="e.g. Box, Pcs" value="' + escapeHtml(line.unitName) + '"' +
+          ' title="No unit in Inventory yet — what you type here becomes its Unit Type" oninput="setUnitName(' + i + ', this.value)">'
+        : escapeHtml(line.unitName || '');
     const tr = document.createElement('tr');
     tr.innerHTML =
       '<td class="strong">' + escapeHtml(line.name) + '</td>' +
@@ -260,7 +272,7 @@ async function saveEdit() {
   btn.disabled = true; btn.textContent = 'Saving…';
   const payload = {
     lines: cart.map(line => ({
-      product_id: line.productId, unit_name: line.unitName, factor: line.factor,
+      product_id: line.productId, unit_name: (line.unitName || '').trim() || (line.noUnit ? 'Piece' : line.unitName), factor: line.factor,
       qty: line.qty, unit_cost: line.unitCost, line_total: lineTotalOf(line),
     })),
   };

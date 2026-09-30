@@ -54,6 +54,7 @@
 <section class="card pos-search-panel" style="margin-bottom:18px;">
   <input id="scanBox" class="search pos-search" type="search" placeholder="Scan a barcode, or type a product name…" autofocus autocomplete="off">
   <div id="scanChoices" class="pos-results" style="display:none;"></div>
+  <button type="button" id="addCheckedBtn" class="btn-secondary" style="display:none;margin-top:8px;" onclick="addCheckedProducts()">+ Add checked to count sheet</button>
   <p class="muted" id="scanMsg" style="font-size:12.5px;margin:8px 0 0;"></p>
   {% if shelves %}
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line);">
@@ -129,7 +130,7 @@
 <div class="table-wrap">
   <table class="grid" id="linesTable">
     <thead>
-      <tr><th>Product</th><th class="num">System Qty</th><th class="num">Counted</th><th class="num">Variance</th></tr>
+      <tr><th>Product</th><th>Shelf</th><th class="num">System Qty</th><th class="num">Counted</th><th class="num">Variance</th><th></th></tr>
     </thead>
     <tbody>
       {% for l in lines %}
@@ -141,6 +142,7 @@
           <button type="button" class="btn-link" style="font-size:11.5px;" onclick="toggleUnitRow({{ l.id }})">per-unit count ▾</button>
           {% endif %}
         </td>
+        <td class="shelfCell">{{ l.shelf or '—' }}</td>
         <td class="num">{{ l.system_qty|qty }}</td>
         <td class="num">
           {% if count.status == 'open' %}
@@ -149,10 +151,15 @@
           {% else %}{{ l.counted_qty|qty }}{% endif %}
         </td>
         <td class="num varCell {{ 'owed' if l.variance != 0 }}">{{ '+' if l.variance > 0 }}{{ l.variance|qty }}</td>
+        <td>
+          {% if count.status == 'open' %}
+          <button type="button" class="btn-link" style="color:#b91c1c;" title="Remove from this count" onclick="deleteLine({{ l.id }})">✕</button>
+          {% endif %}
+        </td>
       </tr>
       {% if l.units %}
       <tr class="unit-row" id="unitRow{{ l.id }}" style="display:none;">
-        <td colspan="4" style="background:rgba(255,255,255,0.02);padding:10px 12px;">
+        <td colspan="6" style="background:rgba(255,255,255,0.02);padding:10px 12px;">
           <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;">
             {% for u in l.units %}
             <label style="margin:0;font-size:12px;">{{ u.name }}
@@ -170,7 +177,7 @@
       </tr>
       {% endif %}
       {% else %}
-      <tr><td colspan="4" class="empty">Nothing scanned yet.</td></tr>
+      <tr><td colspan="6" class="empty">Nothing scanned yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -251,6 +258,68 @@ function confirmComplete() {
 const scanBox = document.getElementById('scanBox');
 const scanChoices = document.getElementById('scanChoices');
 const scanMsg = document.getElementById('scanMsg');
+const addCheckedBtn = document.getElementById('addCheckedBtn');
+
+// Shared renderer for both the Enter-key disambiguation list and the live
+// typeahead dropdown — each row is checkable so a whole series of similarly
+// named items (sizes, variants) can be added to the count sheet in one go,
+// instead of searching and clicking one at a time. Clicking the name itself
+// still adds just that one, same as before.
+function renderScanChoices(products) {
+  scanChoices.innerHTML = '';
+  products.forEach(p => {
+    const el = document.createElement('div');
+    el.className = 'pos-item';
+    el.style.display = 'flex';
+    el.style.alignItems = 'center';
+    el.style.gap = '8px';
+    const chk = document.createElement('input');
+    chk.type = 'checkbox';
+    chk.className = 'scanChoiceChk';
+    chk.dataset.id = p.id;
+    chk.dataset.name = p.name;
+    chk.onclick = (e) => { e.stopPropagation(); updateAddCheckedBtn(); };
+    el.appendChild(chk);
+    const main = document.createElement('div');
+    main.className = 'pos-item-main';
+    main.style.flex = '1';
+    main.style.cursor = 'pointer';
+    main.innerHTML = '<span class="pos-item-name">' + escapeHtml(p.name) + '</span>';
+    main.onclick = () => doScan({product_id: p.id});
+    el.appendChild(main);
+    scanChoices.appendChild(el);
+  });
+  scanChoices.style.display = 'block';
+  updateAddCheckedBtn();
+}
+
+function updateAddCheckedBtn() {
+  const n = document.querySelectorAll('.scanChoiceChk:checked').length;
+  addCheckedBtn.style.display = n ? 'inline-block' : 'none';
+  addCheckedBtn.textContent = '+ Add ' + n + ' checked to count sheet';
+}
+
+async function addCheckedProducts() {
+  const ids = Array.from(document.querySelectorAll('.scanChoiceChk:checked')).map(c => parseInt(c.dataset.id));
+  if (!ids.length) return;
+  addCheckedBtn.disabled = true;
+  try {
+    const res = await fetch('/stock-count/' + countId + '/add-products', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({product_ids: ids}),
+    });
+    const data = await res.json();
+    if (!data.ok) { scanMsg.textContent = data.error || 'Could not add those products.'; return; }
+    data.lines.forEach(upsertRow);
+    scanMsg.textContent = 'Added ' + data.lines.length + ' item(s) to the count sheet.';
+    scanChoices.style.display = 'none';
+    scanChoices.innerHTML = '';
+    addCheckedBtn.style.display = 'none';
+    scanBox.value = '';
+    scanBox.focus();
+  } finally {
+    addCheckedBtn.disabled = false;
+  }
+}
 
 function fmtQty(v) {
   return (Math.round(v * 1000) / 1000).toString();
@@ -266,6 +335,7 @@ function upsertRow(line) {
   const varText = (variance > 0 ? '+' : '') + fmtQty(variance);
   if (row) {
     row.dataset.shelf = line.shelf || '';
+    row.querySelector('.shelfCell').textContent = line.shelf || '—';
     row.querySelector('.countedInput').value = fmtQty(line.counted_qty);
     const varCell = row.querySelector('.varCell');
     varCell.textContent = varText;
@@ -278,14 +348,16 @@ function upsertRow(line) {
       ? ' <button type="button" class="btn-link" style="font-size:11.5px;" onclick="toggleUnitRow(' + line.id + ')">per-unit count ▾</button>'
       : '';
     row.innerHTML =
-      '<td class="strong"></td><td class="num"></td>' +
+      '<td class="strong"></td><td class="shelfCell"></td><td class="num"></td>' +
       '<td class="num"><input type="number" step="0.001" min="0" class="countedInput" data-line-id="' + line.id + '" style="width:90px;text-align:right;" onchange="setCounted(this)"></td>' +
-      '<td class="num varCell"></td>';
+      '<td class="num varCell"></td>' +
+      '<td><button type="button" class="btn-link" style="color:#b91c1c;" title="Remove from this count" onclick="deleteLine(' + line.id + ')">✕</button></td>';
     row.children[0].innerHTML = escapeHtml(line.name) + toggleBtn;
-    row.children[1].textContent = fmtQty(line.system_qty);
+    row.children[1].textContent = line.shelf || '—';
+    row.children[2].textContent = fmtQty(line.system_qty);
     row.querySelector('.countedInput').value = fmtQty(line.counted_qty);
-    row.children[3].textContent = varText;
-    row.children[3].className = 'num varCell ' + varClass;
+    row.children[4].textContent = varText;
+    row.children[4].className = 'num varCell ' + varClass;
     tbody.appendChild(row);
 
     if (line.units.length) {
@@ -298,7 +370,7 @@ function upsertRow(line) {
           '<input type="number" step="1" min="0" class="unitQtyInput" data-line-id="' + line.id + '" data-unit="' + escapeHtml(u.name) + '" ' +
           'value="' + escapeHtml(u.qty || '') + '" placeholder="0" style="width:70px;text-align:right;display:block;" onchange="setUnitQty(' + line.id + ')"></label>';
       }).join('');
-      unitRow.innerHTML = '<td colspan="4" style="background:rgba(255,255,255,0.02);padding:10px 12px;">' +
+      unitRow.innerHTML = '<td colspan="6" style="background:rgba(255,255,255,0.02);padding:10px 12px;">' +
         '<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;">' + inputs +
         '<span class="muted" style="font-size:11.5px;">Counted quantities per container — auto-totals into System Qty\'s unit above.</span></div></td>';
       tbody.appendChild(unitRow);
@@ -338,13 +410,14 @@ function updateStats() {
   const rows = document.querySelectorAll('#linesTable tbody tr[data-line-id]');
   document.getElementById('statLines').textContent = rows.length;
   let withVariance = 0;
-  rows.forEach(r => { if (r.children[3].textContent.trim() !== '0' && r.children[3].textContent.trim() !== '') withVariance++; });
+  rows.forEach(r => { if (r.children[4].textContent.trim() !== '0' && r.children[4].textContent.trim() !== '') withVariance++; });
   document.getElementById('statVariance').textContent = withVariance;
 }
 
 async function doScan(payload) {
   scanMsg.textContent = '';
   scanChoices.style.display = 'none';
+  addCheckedBtn.style.display = 'none';
   const res = await fetch('/stock-count/' + countId + '/scan', {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
   });
@@ -356,16 +429,8 @@ async function doScan(payload) {
     return;
   }
   if (data.choices) {
-    scanChoices.innerHTML = '';
-    data.choices.forEach(c => {
-      const el = document.createElement('button');
-      el.type = 'button'; el.className = 'pos-item';
-      el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + c.name.replace(/</g, '&lt;') + '</span></div>';
-      el.onclick = () => doScan({product_id: c.id});
-      scanChoices.appendChild(el);
-    });
-    scanChoices.style.display = 'block';
-    scanMsg.textContent = 'Multiple matches — pick one:';
+    renderScanChoices(data.choices);
+    scanMsg.textContent = 'Multiple matches — pick one, or check several to add them together:';
     return;
   }
   scanMsg.textContent = data.error || 'Not found.';
@@ -393,16 +458,8 @@ scanBox.addEventListener('input', () => {
     const res = await fetch('/stock-count/' + countId + '/search?q=' + encodeURIComponent(q));
     const data = await res.json();
     if (scanBox.value.trim() !== q) return;  // stale response, a newer keystroke has since fired
-    if (!data.products || !data.products.length) { scanChoices.style.display = 'none'; scanChoices.innerHTML = ''; return; }
-    scanChoices.innerHTML = '';
-    data.products.forEach(p => {
-      const el = document.createElement('button');
-      el.type = 'button'; el.className = 'pos-item';
-      el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + p.name.replace(/</g, '&lt;') + '</span></div>';
-      el.onclick = () => doScan({product_id: p.id});
-      scanChoices.appendChild(el);
-    });
-    scanChoices.style.display = 'block';
+    if (!data.products || !data.products.length) { scanChoices.style.display = 'none'; scanChoices.innerHTML = ''; addCheckedBtn.style.display = 'none'; return; }
+    renderScanChoices(data.products);
   }, 200);
 });
 
@@ -413,6 +470,22 @@ async function setCounted(input) {
   });
   const data = await res.json();
   if (data.ok) upsertRow(data.line);
+}
+
+async function deleteLine(lineId) {
+  if (!confirm('Remove this item from the count sheet? It won\'t affect stock either way — you can always scan it again later.')) return;
+  const res = await fetch('/stock-count/' + countId + '/line/' + lineId + '/delete', { method: 'POST' });
+  const data = await res.json();
+  if (!data.ok) { scanMsg.textContent = data.error || 'Could not remove that item.'; return; }
+  const row = document.querySelector('#linesTable tbody tr[data-line-id="' + lineId + '"]');
+  const unitRow = document.getElementById('unitRow' + lineId);
+  if (unitRow) unitRow.remove();
+  if (row) row.remove();
+  const tbody = document.querySelector('#linesTable tbody');
+  if (!tbody.querySelector('tr[data-line-id]')) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">Nothing scanned yet.</td></tr>';
+  }
+  updateStats();
 }
 
 async function addShelf() {

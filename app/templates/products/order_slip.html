@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Order Slip · {{ app_name }}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin:0; background:#eef1f5; font-family:"Segoe UI",system-ui,sans-serif; color:#0f172a; }
+    .toolbar { max-width:1000px; margin:20px auto 10px; display:flex; flex-wrap:wrap; gap:8px; justify-content:space-between; align-items:center; padding:0 10px; }
+    .toolbar .grp { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    .toolbar a, .toolbar button { padding:9px 16px; border-radius:10px; border:1px solid #e2e8f0; cursor:pointer; font-size:14px; font-weight:600; text-decoration:none; background:#fff; color:#334155; font-family:inherit; }
+    .toolbar .primary { background:#4f46e5; color:#fff; border-color:#4f46e5; }
+    .toolbar .danger { color:#b91c1c; }
+    .opts { max-width:1000px; margin:0 auto 10px; padding:0 10px; font-size:13px; color:#475569; display:flex; flex-wrap:wrap; gap:14px; align-items:center; }
+    .opts label { display:flex; gap:5px; align-items:center; cursor:pointer; }
+    .sheet { max-width:1000px; margin:0 auto 40px; background:#fff; padding:24px; border-radius:12px; border:1px solid #e2e8f0; }
+    .head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; border-bottom:2px solid #0f172a; padding-bottom:10px; margin-bottom:14px; }
+    .biz-name { font-size:20px; font-weight:800; }
+    .biz-sub { font-size:12px; color:#475569; }
+    .title { font-size:22px; font-weight:800; letter-spacing:.08em; text-align:right; }
+    .meta { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:8px 20px; margin-bottom:14px; font-size:14px; }
+    .meta label { display:flex; gap:8px; align-items:center; }
+    .meta label span { font-weight:600; min-width:70px; }
+    .meta input { flex:1; min-width:0; }
+    input.f { border:1px solid #cbd5e1; border-radius:6px; padding:6px 8px; font:inherit; font-size:14px; background:#fff; }
+    table { width:100%; border-collapse:collapse; font-size:14px; }
+    th, td { border-bottom:1px solid #e2e8f0; padding:6px 8px; text-align:left; vertical-align:middle; }
+    th { background:#f8fafc; font-size:12px; text-transform:uppercase; letter-spacing:.03em; color:#475569; }
+    td.num, th.num { text-align:right; }
+    td.n { width:32px; color:#64748b; }
+    td .qty { width:80px; text-align:right; }
+    td .unit { width:90px; }
+    .muted { color:#64748b; font-size:12px; }
+    .rm { border:none; background:none; color:#b91c1c; font-size:18px; cursor:pointer; line-height:1; }
+    .empty { text-align:center; color:#64748b; padding:26px; }
+    .add { display:flex; gap:8px; margin-top:12px; position:relative; }
+    .add input { flex:1; }
+    .results { position:absolute; top:100%; left:0; right:0; background:#fff; border:1px solid #cbd5e1; border-radius:8px; margin-top:2px; max-height:300px; overflow:auto; z-index:5; box-shadow:0 8px 20px rgba(15,23,42,.12); }
+    .results div { padding:8px 10px; cursor:pointer; font-size:14px; border-bottom:1px solid #f1f5f9; }
+    .results div:hover, .results div.on { background:#eef2ff; }
+    .notes { margin-top:14px; font-size:14px; }
+    .notes textarea { width:100%; min-height:50px; }
+    .sign { display:none; }
+    body:not(.show-onhand) .c-onhand,
+    body:not(.show-cost) .c-cost,
+    body:not(.show-supplier) .c-supplier { display:none; }
+    @media print {
+      body { background:#fff; }
+      .toolbar, .opts, .add, .c-rm, .no-print { display:none !important; }
+      .sheet { border:none; padding:0; margin:0; max-width:none; border-radius:0; }
+      input.f, textarea.f { border:none; padding:0; background:none; resize:none; }
+      th { background:none; color:#000; border-bottom:1.5px solid #000; }
+      td { border-bottom:1px solid #999; }
+      .sign { display:flex; justify-content:space-between; gap:40px; margin-top:40px; font-size:13px; }
+      .sign div { flex:1; border-top:1px solid #000; padding-top:4px; text-align:center; }
+      @page { margin:12mm; }
+    }
+    @media (max-width:640px) { .meta { grid-template-columns:1fr; } .sheet { padding:14px; } }
+  </style>
+</head>
+<body class="show-cost">
+  <div class="toolbar">
+    <div class="grp">
+      <a href="/products?flag=nostock">← Back to inventory</a>
+      <span class="muted">Tick more items there and click <strong>📝 Order slip</strong> again to add them.</span>
+    </div>
+    <div class="grp">
+      <button type="button" onclick="sortBy('supplier')">Sort by last supplier</button>
+      <button type="button" onclick="sortBy('name')">Sort by name</button>
+      <button type="button" class="danger" onclick="clearSlip()">Clear slip</button>
+      <button type="button" id="pdfBtn" onclick="downloadPdf()">⬇ Download PDF</button>
+      <button type="button" class="primary" onclick="window.print()">🖨 Print</button>
+    </div>
+  </div>
+  <div class="opts">
+    <span>Show on printout:</span>
+    <label><input type="checkbox" data-col="onhand" onchange="toggleCol(this)"> On hand</label>
+    <label><input type="checkbox" data-col="cost" onchange="toggleCol(this)" checked> Last cost</label>
+    <label><input type="checkbox" data-col="supplier" onchange="toggleCol(this)"> Last supplier</label>
+  </div>
+
+  <div class="sheet">
+    {% set biz = business_info() %}
+    <div class="head">
+      <div>
+        <div class="biz-name">{{ biz.business_name or app_name }}</div>
+        {% if biz.receipt_address %}<div class="biz-sub">{{ biz.receipt_address }}</div>{% endif %}
+        {% if biz.receipt_contact %}<div class="biz-sub">{{ biz.receipt_contact }}</div>{% endif %}
+      </div>
+      <div class="title">ORDER SLIP</div>
+    </div>
+
+    <div class="meta">
+      <label><span>Supplier</span><input class="f" id="supplier" list="supplierList" placeholder="Supplier name"></label>
+      <label><span>Date</span><input class="f" id="slipDate" type="date"></label>
+    </div>
+    <datalist id="supplierList">
+      {% for s in suppliers %}<option value="{{ s }}">{% endfor %}
+    </datalist>
+
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Item</th>
+          <th class="num">Qty</th>
+          <th>Unit</th>
+          <th class="num c-onhand">On hand</th>
+          <th class="num c-cost">Last cost</th>
+          <th class="c-supplier">Last supplier</th>
+          <th class="c-rm"></th>
+        </tr>
+      </thead>
+      <tbody id="slipBody"></tbody>
+    </table>
+
+    <div class="add">
+      <input class="f" id="addSearch" placeholder="+ Add an item — type a name or scan a barcode" autocomplete="off">
+      <div class="results" id="addResults" style="display:none;"></div>
+    </div>
+
+    <div class="notes">
+      <strong>Notes</strong>
+      <textarea class="f" id="slipNotes" placeholder="Delivery instructions, terms…"></textarea>
+    </div>
+
+    <div class="sign">
+      <div>Prepared by</div>
+      <div>Approved by</div>
+      <div>Received by (supplier)</div>
+    </div>
+  </div>
+
+<script>
+  const KEY = 'orderSlipDraft';
+  const fresh = {{ rows|tojson }};
+  const today = {{ today|tojson }};
+
+  function load() {
+    try { return JSON.parse(localStorage.getItem(KEY)) || null; } catch (e) { return null; }
+  }
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(draft)); } catch (e) {}
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  let draft = load() || { supplier: '', date: today, notes: '', rows: [], cols: null };
+  function addRows(rows) {
+    const have = new Set(draft.rows.map(r => r.id));
+    let added = 0;
+    for (const r of rows) {
+      if (have.has(r.id)) continue;
+      draft.rows.push(Object.assign({ order_qty: '' }, r));
+      have.add(r.id);
+      added++;
+    }
+    return added;
+  }
+  addRows(fresh);
+  save();
+
+  const body = document.getElementById('slipBody');
+  function render() {
+    if (!draft.rows.length) {
+      body.innerHTML = '<tr><td colspan="8" class="empty">No items yet. Tick items in Inventory (e.g. the No Stock tab) and click 📝 Order slip, or add one below.</td></tr>';
+      return;
+    }
+    body.innerHTML = draft.rows.map((r, i) =>
+      '<tr>' +
+        '<td class="n">' + (i + 1) + '</td>' +
+        '<td><strong>' + esc(r.name) + '</strong>' +
+          (r.last_qty ? '<div class="muted no-print">Last bought ' + esc(r.last_qty) + ' ' + esc(r.unit) + (r.last_date ? ' on ' + esc(r.last_date) : '') + '</div>' : '') +
+        '</td>' +
+        '<td class="num"><input class="f qty" inputmode="decimal" data-i="' + i + '" data-k="order_qty" value="' + esc(r.order_qty) + '"></td>' +
+        '<td><input class="f unit" data-i="' + i + '" data-k="unit" value="' + esc(r.unit) + '"></td>' +
+        '<td class="num c-onhand">' + esc(r.on_hand) + '</td>' +
+        '<td class="num c-cost">' + (r.last_cost ? '₱' + esc(r.last_cost) : '<span class="muted">—</span>') + '</td>' +
+        '<td class="c-supplier">' + (esc(r.last_supplier) || '<span class="muted">—</span>') + '</td>' +
+        '<td class="c-rm"><button type="button" class="rm" title="Remove" onclick="removeRow(' + i + ')">×</button></td>' +
+      '</tr>'
+    ).join('');
+  }
+  body.addEventListener('input', e => {
+    const t = e.target;
+    if (t.dataset.k) { draft.rows[+t.dataset.i][t.dataset.k] = t.value; save(); }
+  });
+  function removeRow(i) { draft.rows.splice(i, 1); save(); render(); }
+  function sortBy(what) {
+    const key = what === 'supplier'
+      ? r => (r.last_supplier || '￿').toLowerCase() + '\u0000' + r.name.toLowerCase()
+      : r => r.name.toLowerCase();
+    draft.rows.sort((a, b) => key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0);
+    save(); render();
+  }
+  function clearSlip() {
+    if (!confirm('Clear all items from this order slip?')) return;
+    draft = { supplier: '', date: today, notes: '', rows: [], cols: draft.cols };
+    save(); fillMeta(); render();
+  }
+
+  // Header fields
+  const supplierEl = document.getElementById('supplier');
+  const dateEl = document.getElementById('slipDate');
+  const notesEl = document.getElementById('slipNotes');
+  function fillMeta() {
+    supplierEl.value = draft.supplier || '';
+    dateEl.value = draft.date || today;
+    notesEl.value = draft.notes || '';
+  }
+  supplierEl.addEventListener('input', () => { draft.supplier = supplierEl.value; save(); });
+  dateEl.addEventListener('input', () => { draft.date = dateEl.value; save(); });
+  notesEl.addEventListener('input', () => { draft.notes = notesEl.value; save(); });
+
+  // Printout columns
+  function toggleCol(cb) {
+    document.body.classList.toggle('show-' + cb.dataset.col, cb.checked);
+    draft.cols = {};
+    document.querySelectorAll('.opts input[data-col]').forEach(c => { draft.cols[c.dataset.col] = c.checked; });
+    save();
+  }
+  if (draft.cols) {
+    document.querySelectorAll('.opts input[data-col]').forEach(c => {
+      if (c.dataset.col in draft.cols) {
+        c.checked = !!draft.cols[c.dataset.col];
+        document.body.classList.toggle('show-' + c.dataset.col, c.checked);
+      }
+    });
+  }
+
+  // Add an item by search
+  const searchEl = document.getElementById('addSearch');
+  const resultsEl = document.getElementById('addResults');
+  let found = [], timer = null, seq = 0;
+  function showResults() {
+    if (!found.length) { resultsEl.style.display = 'none'; return; }
+    const have = new Set(draft.rows.map(r => r.id));
+    resultsEl.innerHTML = found.map((r, i) =>
+      '<div data-i="' + i + '">' + esc(r.name) +
+      ' <span class="muted">· on hand ' + esc(r.on_hand) + (have.has(r.id) ? ' · already on slip' : '') + '</span></div>'
+    ).join('');
+    resultsEl.style.display = 'block';
+  }
+  function pick(i) {
+    const r = found[i];
+    if (!r) return;
+    addRows([r]); save(); render();
+    searchEl.value = ''; found = []; showResults(); searchEl.focus();
+  }
+  searchEl.addEventListener('input', () => {
+    clearTimeout(timer);
+    const q = searchEl.value.trim();
+    if (!q) { found = []; showResults(); return; }
+    timer = setTimeout(async () => {
+      const my = ++seq;
+      try {
+        const res = await fetch('/products/order-slip/search?q=' + encodeURIComponent(q));
+        const data = await res.json();
+        if (my !== seq) return;
+        found = data.rows || [];
+        showResults();
+      } catch (e) {}
+    }, 200);
+  });
+  searchEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); if (found.length) pick(0); }
+    if (e.key === 'Escape') { found = []; showResults(); }
+  });
+  resultsEl.addEventListener('mousedown', e => {
+    const d = e.target.closest('[data-i]');
+    if (d) { e.preventDefault(); pick(+d.dataset.i); }
+  });
+  searchEl.addEventListener('blur', () => setTimeout(() => { resultsEl.style.display = 'none'; }, 150));
+
+  // PDF copy — built server-side from the slip exactly as it is on screen.
+  async function downloadPdf() {
+    const btn = document.getElementById('pdfBtn');
+    btn.disabled = true; btn.textContent = 'Making PDF…';
+    try {
+      const res = await fetch('/products/order-slip/pdf', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          supplier: draft.supplier, date: draft.date, notes: draft.notes, rows: draft.rows,
+          cols: Object.fromEntries([...document.querySelectorAll('.opts input[data-col]')].map(c => [c.dataset.col, c.checked])),
+        }),
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const blob = await res.blob();
+      const m = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = m ? m[1] : 'Order Slip.pdf';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    } catch (e) {
+      alert('Could not make the PDF. Please try again.');
+    } finally {
+      btn.disabled = false; btn.textContent = '⬇ Download PDF';
+    }
+  }
+
+  fillMeta();
+  render();
+</script>
+</body>
+</html>
