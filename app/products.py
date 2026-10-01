@@ -1554,6 +1554,15 @@ def create_open_counterpart(product_id: int, request: Request, name: str = Form(
     return RedirectResponse(f"/products/{counterpart.id}/edit", status_code=status.HTTP_302_FOUND)
 
 
+@router.get("/products/{product_id:int}")
+def product_address(product_id: int):
+    """/products/<id> is only the edit form's save address. A save that's
+    refused re-shows the form without changing the address, so a refresh or
+    Back later asks for it as a page — send that to the edit form instead of
+    a bare "Method Not Allowed"."""
+    return RedirectResponse(f"/products/{product_id}/edit", status_code=302)
+
+
 @router.post("/products/{product_id:int}")
 async def update_product(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
