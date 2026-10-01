@@ -183,6 +183,13 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
     <small class="hint">Warn on the dashboard when Total Qty drops to this level. Leave blank for no alert.</small>
   </label>
 
+  <label style="display:flex;gap:8px;align-items:flex-start;">
+    <input type="checkbox" name="no_restock" value="1" style="width:auto;margin-top:3px;" {{ 'checked' if product and product.no_restock }}>
+    <span>Don't restock / order on request
+      <small class="hint" style="display:block;">Keeps it off No Stock and Low Stock — for items you only buy when a customer orders them. Buying it later still adds stock as usual.</small>
+    </span>
+  </label>
+
   <div class="full">
     <label>Replenish from (sealed source) <span class="muted">— optional</span>
       <input type="text" id="replenishSearch" placeholder="Search a product to auto-open a pack from…" autocomplete="off"

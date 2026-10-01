@@ -188,6 +188,10 @@ class Product(Base):
 
     # Low-stock alert threshold in base units. 0 = no alert for this product.
     reorder_level = Column(Numeric(18, 6), nullable=False, server_default="0")
+    # "Don't restock / order on request": running out of it is expected, so it
+    # stays off Low Stock / No Stock and their counts (see products.low_stock_expr
+    # and _no_stock_filter).
+    no_restock = Column(Boolean, nullable=False, server_default="false")
 
     # Every product carries THREE selling prices at once, so the shop can quote
     # a different one per customer type without re-pricing the item:

@@ -341,7 +341,8 @@ def low_stock_expr(default_pct):
     days = settings_store.low_stock_days()
     if days:
         rules.append(_selling_out_expr(days))
-    return or_(*rules)
+    # A "Don't restock / order on request" item is expected to run out.
+    return and_(models.Product.no_restock.is_(False), or_(*rules))
 
 
 # Sales-based low stock looks at this many days of selling. Movement reasons
@@ -406,6 +407,84 @@ def _selling_out_expr(days):
     return models.Product.id.in_(selling_out)
 
 
+# Mover classes: on how many different days an item sold in the last
+# LOW_STOCK_LOOKBACK_DAYS days. That's how often customers ask for it, which
+# a quantity can't tell — one contractor's 2,000 of sand in a single order
+# reads as a huge rate. Low Stock / No Stock put the frequent ones first so
+# an out-of-stock fast mover isn't buried under items nobody asks for.
+FAST_SALE_DAYS = 8
+REGULAR_SALE_DAYS = 4
+MOVER_CHOICES = {  # ?mover= value -> label
+    "fr": "Fast & Regular", "fast": "Fast", "regular": "Regular", "slow": "Slow", "none": "Not moving",
+}
+
+
+def sale_days_subquery():
+    """(product_id, days): how many Manila days in the lookback window the
+    product had a net sale on. Only products that sold at all have a row."""
+    from sqlalchemy import select
+
+    M = models.StockMovement
+    day = func.date(func.timezone("Asia/Manila", M.created_at))
+    per_day = (
+        select(M.product_id.label("product_id"), day.label("d"))
+        .where(M.reason.in_(SELLING_REASONS), M.created_at >= _selling_cutoff())
+        .group_by(M.product_id, day)
+        .having(func.sum(M.qty_base) < 0)
+        .subquery()
+    )
+    return (
+        select(per_day.c.product_id, func.count().label("days"))
+        .group_by(per_day.c.product_id)
+        .subquery()
+    )
+
+
+def sale_days_map(db, product_ids):
+    """{product_id: sale days} for these products (missing = 0)."""
+    if not product_ids:
+        return {}
+    sd = sale_days_subquery()
+    return dict(db.query(sd.c.product_id, sd.c.days).filter(sd.c.product_id.in_(list(product_ids))).all())
+
+
+def mover_of(days):
+    days = days or 0
+    if days >= FAST_SALE_DAYS:
+        return "fast"
+    if days >= REGULAR_SALE_DAYS:
+        return "regular"
+    return "slow" if days > 0 else "none"
+
+
+def _mover_case(days_col):
+    from sqlalchemy import case
+
+    return case(
+        (days_col >= FAST_SALE_DAYS, "fast"),
+        (days_col >= REGULAR_SALE_DAYS, "regular"),
+        (days_col > 0, "slow"),
+        else_="none",
+    )
+
+
+def apply_mover(query, mover):
+    """Join a Product query to its sale days. Returns (the query, filtered to
+    `mover` when one is picked; the sale-days column for ordering; counts per
+    mover class before that filter)."""
+    sd = sale_days_subquery()
+    query = query.outerjoin(sd, sd.c.product_id == models.Product.id)
+    days_col = func.coalesce(sd.c.days, 0)
+    cls = _mover_case(days_col)
+    counts = dict(query.with_entities(cls, func.count(models.Product.id)).group_by(cls).all())
+    counts["fr"] = counts.get("fast", 0) + counts.get("regular", 0)
+    if mover == "fr":
+        query = query.filter(days_col >= REGULAR_SALE_DAYS)
+    elif mover in MOVER_CHOICES:
+        query = query.filter(cls == mover)
+    return query, days_col, counts
+
+
 SORTABLE_COLUMNS = {
     "beginning_stock": models.Product.beginning_stock,
     "stock_qty": models.Product.stock_qty,
@@ -415,8 +494,10 @@ SORTABLE_COLUMNS = {
 
 def _no_stock_filter():
     """Active products with nothing on hand (zero or negative) — the same
-    rule the dashboard's "Out of stock" count uses."""
-    return (models.Product.beginning_stock + models.Product.stock_qty <= 0,)
+    rule the dashboard's "Out of stock" count uses. A "Don't restock /
+    order on request" item is left off: running out of it is expected."""
+    return (models.Product.beginning_stock + models.Product.stock_qty <= 0,
+            models.Product.no_restock.is_(False))
 
 
 def _no_cost_filter():
@@ -500,6 +581,7 @@ def list_products(
     merged: str = "",
     merge_error: str = "",
     flag: str = "",
+    mover: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -508,6 +590,8 @@ def list_products(
 
     q = (q or "").strip()
     page = max(page, 1)
+    mover_tab = flag in ("lowstock", "nostock")
+    mover = mover if mover_tab and mover in MOVER_CHOICES else ""
     sort_dir = "desc" if sort_dir == "desc" else "asc"
 
     # Every product with an open double-deduction candidate, store-wide —
@@ -559,6 +643,11 @@ def list_products(
         query = query.filter(*_no_stock_filter())
     elif flag == "lowstock":
         query = query.filter(low_stock_expr(settings_store.default_low_stock_pct()))
+    elif flag == "norestock":
+        query = query.filter(models.Product.no_restock.is_(True))
+    days_col, mover_counts = None, {}
+    if mover_tab:
+        query, days_col, mover_counts = apply_mover(query, mover)
 
     total = query.count()
     pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
@@ -578,6 +667,11 @@ def list_products(
         # products) in a stable, predictable order instead of shuffling on
         # every page load.
         order = (sort_col.desc() if sort_dir == "desc" else sort_col.asc(), models.Product.name)
+        if days_col is not None:
+            order = (order[0], days_col.desc(), models.Product.name)
+    elif days_col is not None:
+        # Low Stock / No Stock: the items customers ask for most often first.
+        order = (days_col.desc(), qty_expr.asc(), models.Product.name)
     else:
         order = (models.Product.name,)
     products = (
@@ -627,6 +721,10 @@ def list_products(
         base_for_counts = base_for_counts.filter(*_no_stock_filter())
     elif flag == "lowstock":
         base_for_counts = base_for_counts.filter(low_stock_expr(settings_store.default_low_stock_pct()))
+    elif flag == "norestock":
+        base_for_counts = base_for_counts.filter(models.Product.no_restock.is_(True))
+    if mover:
+        base_for_counts, _, _ = apply_mover(base_for_counts, mover)
     cat_counts = dict(
         base_for_counts.filter(models.Product.category_id.isnot(None))
         .with_entities(models.Product.category_id, func.count(models.Product.id))
@@ -725,6 +823,18 @@ def list_products(
                 if flag == "lowstock" else {}
             ),
             "sold_30": sold_map if flag in ("lowstock", "nostock") else {},
+            "mover": mover,
+            "mover_tab": mover_tab,
+            "mover_counts": mover_counts,
+            "mover_choices": MOVER_CHOICES,
+            "sale_days": sale_days_map(db, page_ids) if mover_tab else {},
+            "mover_of": mover_of,
+            "lookback_days_sold": LOW_STOCK_LOOKBACK_DAYS,
+            "norestock_count": (
+                db.query(func.count(models.Product.id))
+                .filter(models.Product.is_active.is_(True), models.Product.no_restock.is_(True))
+                .scalar()
+            ),
             "lookback_days": LOW_STOCK_LOOKBACK_DAYS,
             "flag": flag,
             "void_count": len(void_ids),
@@ -758,6 +868,7 @@ def export_products_excel(
     subcategory_id: int = 0,
     shelf_id: int = 0,
     flag: str = "",
+    mover: str = "",
     sort: str = "",
     sort_dir: str = "asc",
     db: Session = Depends(get_db),
@@ -798,6 +909,11 @@ def export_products_excel(
         query = query.filter(*_no_stock_filter())
     elif flag == "lowstock":
         query = query.filter(low_stock_expr(settings_store.default_low_stock_pct()))
+    elif flag == "norestock":
+        query = query.filter(models.Product.no_restock.is_(True))
+    days_col = None
+    if flag in ("lowstock", "nostock"):
+        query, days_col, _ = apply_mover(query, mover if mover in MOVER_CHOICES else "")
     if is_admin_user and flag:
         if flag == "void":
             query = query.filter(models.Product.id.in_(set(find_all_double_deduction_candidates(db)) or {-1}))
@@ -811,6 +927,8 @@ def export_products_excel(
     sort_col = SORTABLE_COLUMNS.get(sort)
     if sort_col is not None:
         order = (sort_col.desc() if sort_dir == "desc" else sort_col.asc(), models.Product.name)
+    elif days_col is not None:
+        order = (days_col.desc(), (models.Product.beginning_stock + models.Product.stock_qty).asc(), models.Product.name)
     else:
         order = (models.Product.name,)
     products = query.order_by(*order).all()
@@ -1306,6 +1424,7 @@ def _save_from_form(product: models.Product, db: Session, form):
     product.beginning_stock = _to_decimal(form.get("beginning_stock"))
     product.stock_qty = _to_decimal(form.get("stock_qty"))
     product.reorder_level = _to_decimal(form.get("reorder_level"))
+    product.no_restock = bool(form.get("no_restock"))
     product.is_vat = bool(form.get("is_vat"))
 
     # Open/retail counterpart link — see Product.replenish_from_id. Kept a
@@ -2694,7 +2813,7 @@ def order_slip_search(q: str = "", db: Session = Depends(get_db), user=Depends(g
 @router.post("/products/bulk-edit", response_class=HTMLResponse)
 def bulk_edit_start(request: Request, ids: list[str] = Form([]), db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Step 1: pick which fields to change (shelf, unit type, category, sub
-    category) for the products ticked in Inventory — same two-step shape as
+    category, restocking) for the products ticked in Inventory — same two-step shape as
     Bulk Price Update. Fields left unticked are not touched."""
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -2739,6 +2858,7 @@ def bulk_edit_apply(
     set_unit: str = Form(""), unit_type: str = Form(""),
     set_category: str = Form(""), category: str = Form(""),
     set_subcategory: str = Form(""), subcategory: str = Form(""),
+    set_restock: str = Form(""), restock: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """Step 2: apply each ticked field to every selected product. Shelf
@@ -2752,7 +2872,7 @@ def bulk_edit_apply(
     ids = sorted({int(i) for i in ids if i.isdigit()})
     if not ids:
         return RedirectResponse("/products", status_code=302)
-    if not (set_shelf or set_unit or set_category or set_subcategory):
+    if not (set_shelf or set_unit or set_category or set_subcategory or set_restock):
         return RedirectResponse("/products?bulk_msg=Nothing+was+ticked+to+change.", status_code=status.HTTP_302_FOUND)
 
     shelf = None
@@ -2795,6 +2915,9 @@ def bulk_edit_apply(
             if p.subcategory_id != (new_sub.id if new_sub else None):
                 changes["subcategory"] = [p.subcategory.name if p.subcategory else None, new_sub.name if new_sub else None]
                 p.subcategory = new_sub
+        if set_restock and p.no_restock != (restock == "no"):
+            changes["restock"] = ["no" if p.no_restock else "yes", restock]
+            p.no_restock = restock == "no"
         if changes:
             audit.record(
                 db, user=user, request=request, action="update", entity_type="product",

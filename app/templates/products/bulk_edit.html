@@ -33,6 +33,14 @@
       <label style="display:flex;gap:8px;align-items:center;margin:0;"><input type="checkbox" name="set_subcategory" value="1" data-field="subcategory" onchange="toggleField(this)"> Change <strong>sub category</strong></label>
       <input name="subcategory" id="f_subcategory" list="be-subcats" placeholder="Type or pick — blank clears it" disabled autocomplete="off" style="margin-top:6px;">
     </div>
+    <div>
+      <label style="display:flex;gap:8px;align-items:center;margin:0;"><input type="checkbox" name="set_restock" value="1" data-field="restock" onchange="toggleField(this)"> Change <strong>restocking</strong></label>
+      <select name="restock" id="f_restock" disabled style="margin-top:6px;">
+        <option value="no">Don't restock / order on request</option>
+        <option value="yes">Restock normally</option>
+      </select>
+      <p class="hint" style="margin:4px 0 0;">“Don't restock” keeps an item off No Stock and Low Stock. Buying it later still adds stock as usual.</p>
+    </div>
     <div class="form-actions" style="margin:0;">
       <button class="btn" type="submit">Apply to {{ products|length }} product{{ '' if products|length == 1 else 's' }}</button>
     </div>
@@ -44,7 +52,7 @@
 
 <div class="table-wrap" style="max-width:900px;">
   <table class="grid">
-    <thead><tr><th>Product</th><th>Shelf</th><th>Unit Type</th><th>Category</th><th>Sub Category</th></tr></thead>
+    <thead><tr><th>Product</th><th>Shelf</th><th>Unit Type</th><th>Category</th><th>Sub Category</th><th>Restock</th></tr></thead>
     <tbody>
       {% for p in products %}
       <tr>
@@ -53,6 +61,7 @@
         <td>{{ p.unit_type.name if p.unit_type else '—' }}</td>
         <td>{{ p.category.name if p.category else '—' }}</td>
         <td>{{ p.subcategory.name if p.subcategory else '—' }}</td>
+        <td>{{ "Don't restock" if p.no_restock else 'Yes' }}</td>
       </tr>
       {% endfor %}
     </tbody>

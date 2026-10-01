@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from . import models, settings_store
 from .database import get_db
 from .deps import get_current_user, is_display, is_staff
-from .products import low_stock_expr
+from .products import apply_mover, low_stock_expr
 from .templating import templates
 
 router = APIRouter()
@@ -122,21 +122,22 @@ def store_display(
     # list below — otherwise a shop with more than ATTENTION_LIMIT items low
     # would show a KPI number bigger than the list it's counting.
     qty_expr = models.Product.beginning_stock + models.Product.stock_qty
-    out_of_stock = (
-        db.query(models.Product)
-        .filter(models.Product.is_active.is_(True), qty_expr <= 0)
-        .order_by(models.Product.name)
-        .all()
+    # Most often sold first (see products.apply_mover) — the list below is
+    # capped, so the items customers ask for must make the cut.
+    out_q, out_days, _ = apply_mover(
+        db.query(models.Product).filter(
+            models.Product.is_active.is_(True), qty_expr <= 0, models.Product.no_restock.is_(False)),
+        "",
     )
-    low_stock = (
-        db.query(models.Product)
-        .filter(
+    out_of_stock = out_q.order_by(out_days.desc(), models.Product.name).all()
+    low_q, low_days, _ = apply_mover(
+        db.query(models.Product).filter(
             models.Product.is_active.is_(True),
             low_stock_expr(settings_store.default_low_stock_pct()),
-        )
-        .order_by(models.Product.name)
-        .all()
+        ),
+        "",
     )
+    low_stock = low_q.order_by(low_days.desc(), qty_expr, models.Product.name).all()
     # Out-of-stock first (more urgent), then low-stock — same priority order
     # the panel already rendered in, just unified into one paginated list.
     restock_rows = (

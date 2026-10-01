@@ -16,7 +16,7 @@ from . import models, settings_store
 from .backup import latest_backup
 from .database import get_db
 from .deps import get_current_user, is_staff
-from .products import low_stock_expr
+from .products import apply_mover, low_stock_expr
 from .purchases import _purchase_outstanding, _settled_for_purchases
 from .templating import templates
 
@@ -298,18 +298,21 @@ def dashboard(
         })
 
     # ---- stock alerts ----------------------------------------------------
-    out_of_stock = (
-        db.query(models.Product)
-        .filter(models.Product.is_active.is_(True), _qty_expr() <= 0)
-        .order_by(models.Product.name)
-        .all()
+    # Most often sold first (see products.apply_mover), so the preview rows
+    # below are the ones that matter; "Don't restock" items are left out.
+    out_q, out_days, out_movers = apply_mover(
+        db.query(models.Product).filter(
+            models.Product.is_active.is_(True), _qty_expr() <= 0, models.Product.no_restock.is_(False)),
+        "",
     )
-    low_stock = (
-        db.query(models.Product)
-        .filter(models.Product.is_active.is_(True), low_stock_expr(settings_store.default_low_stock_pct()))
-        .order_by(models.Product.name)
-        .all()
+    out_of_stock = out_q.order_by(out_days.desc(), models.Product.name).all()
+    fast_out_of_stock = out_movers.get("fast", 0)
+    low_q, low_days, _ = apply_mover(
+        db.query(models.Product).filter(
+            models.Product.is_active.is_(True), low_stock_expr(settings_store.default_low_stock_pct())),
+        "",
     )
+    low_stock = low_q.order_by(low_days.desc(), _qty_expr(), models.Product.name).all()
     no_cost = (
         db.query(func.count(models.Product.id))
         .filter(models.Product.is_active.is_(True), models.Product.cost_price <= 0)
@@ -468,7 +471,7 @@ def dashboard(
             "kpi": kpi, "compare": compare, "inventory": inventory,
             "trend": trend, "trend_max": trend_max,
             "payments": payments, "pay_total": pay_total,
-            "out_of_stock": out_of_stock, "low_stock": low_stock, "no_cost": no_cost,
+            "out_of_stock": out_of_stock, "low_stock": low_stock, "fast_out_of_stock": fast_out_of_stock, "no_cost": no_cost,
             "pdc_alert_count": pdc_alert_count,
             "credit_total": credit_total, "due_soon": due_soon, "overdue": overdue,
             "credit_alerts_page": credit_alerts_page, "credit_page": credit_page, "credit_pages": credit_pages,

@@ -449,7 +449,13 @@ function dcMarginPriceInput() {
       <span class="attn-label">Out of stock</span>
     </a>
 
-    <a class="attn {{ 'warn' if low_stock else 'ok' }}" href="/products?flag=lowstock&sort=total_qty&sort_dir=asc">
+    <a class="attn {{ 'bad' if fast_out_of_stock else 'ok' }}" href="/products?flag=nostock&mover=fast"
+       title="Out of stock and sold on 8 or more of the last 30 days — restock these first">
+      <span class="attn-num">{{ fast_out_of_stock }}</span>
+      <span class="attn-label">Fast movers out of stock</span>
+    </a>
+
+    <a class="attn {{ 'warn' if low_stock else 'ok' }}" href="/products?flag=lowstock">
       <span class="attn-num">{{ low_stock|length }}</span>
       <span class="attn-label">Low stock</span>
     </a>
