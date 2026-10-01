@@ -21,7 +21,7 @@ from .database import get_db
 from .deps import get_current_user, is_floor_staff, is_staff
 from .pos import MANILA, VAT_DIVISOR, VAT_RATE, _find_backdated_stock_conflicts, _resolve_txn_datetime, _resolve_unit_factor, _vat_of
 from .sales import _resolve_settlement_datetime
-from .products import _get_or_create_category, _get_or_create_unit_type
+from .products import LOW_STOCK_LOOKBACK_DAYS, _get_or_create_category, _get_or_create_unit_type, recent_sold
 from .search_utils import multi_word_ilike
 from .templating import templates
 
@@ -223,7 +223,15 @@ def _must_receive_by_pack(db: Session, p: models.Product) -> bool:
     return bool(p.units) and _has_open_counterpart(db, p)
 
 
-def _purchase_product_payload(db: Session, p: models.Product, *, keep_unit_name: str | None = None) -> dict:
+def _sold_per_week(sold) -> float | None:
+    """Base qty sold per week at the last 30 days' rate — shown beside the
+    purchase row's Low Stock Alert box to judge a level by. None = no sales."""
+    if not sold or sold <= 0:
+        return None
+    return round(float(sold) * 7 / LOW_STOCK_LOOKBACK_DAYS, 1)
+
+
+def _purchase_product_payload(db: Session, p: models.Product, *, keep_unit_name: str | None = None, sold=None) -> dict:
     """Shape a product for the purchase form's picker (units by name+factor
     only — a purchase line's cost is typed in, not chosen from a price).
 
@@ -252,6 +260,8 @@ def _purchase_product_payload(db: Session, p: models.Product, *, keep_unit_name:
         "cost_price": float(p.cost_price or 0),
         "selling_price": float(p.selling_price or 0),
         "on_hand": float(p.total_qty or 0),
+        "reorder_level": float(p.reorder_level or 0),
+        "sold_week": _sold_per_week(sold),
     }
 
 
@@ -267,7 +277,8 @@ def purchase_search(q: str = "", db: Session = Depends(get_db), user=Depends(get
     if q:
         query = query.filter(multi_word_ilike(models.Product.name, q))
     products = query.order_by(models.Product.name).limit(30).all()
-    return {"products": [_purchase_product_payload(db, p) for p in products]}
+    sold = recent_sold(db, [p.id for p in products])
+    return {"products": [_purchase_product_payload(db, p, sold=sold.get(p.id)) for p in products]}
 
 
 @router.get("/purchases/product/{product_id:int}")
@@ -281,7 +292,7 @@ def purchase_product(product_id: int, db: Session = Depends(get_db), user=Depend
     p = db.get(models.Product, product_id)
     if not p or not p.is_active:
         return {"found": False}
-    return {"found": True, "product": _purchase_product_payload(db, p)}
+    return {"found": True, "product": _purchase_product_payload(db, p, sold=recent_sold(db, [p.id]).get(p.id))}
 
 
 @router.get("/purchases", response_class=HTMLResponse)
@@ -628,7 +639,8 @@ def new_purchase(
         {"request": request, "app_name": request.app.title, "user": user,
          "suppliers": suppliers, "preselect": supplier,
          "return_against_po": return_against_po, "return_lines_prefill": return_lines_prefill,
-         "categories": categories, "unit_types": unit_types, "payment_methods": PAYMENT_METHODS},
+         "categories": categories, "unit_types": unit_types, "payment_methods": PAYMENT_METHODS,
+         "can_set_alert": is_staff(user)},
     )
 
 
@@ -838,6 +850,20 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
             # the row's Unit field was left editable instead of locked) —
             # whatever was typed there becomes its Unit Type going forward.
             _record_typed_unit(db, product, ln.get("unit_name"))
+            # The row's Low Stock Alert column — sent only when it was changed
+            # on the form, so a purchase never quietly resets one. Manager+
+            # only, same as the product's own Edit form.
+            if "reorder_level" in ln and is_staff(user):
+                new_level = _dec(ln.get("reorder_level"))
+                old_level = Decimal(str(product.reorder_level or 0))
+                if new_level >= 0 and new_level != old_level:
+                    product.reorder_level = new_level
+                    audit.record(
+                        db, user=user, request=request, action="update", entity_type="product",
+                        entity_id=product.id, entity_label=product.name,
+                        summary=f"Low Stock Alert At for “{product.name}”: {old_level.normalize():f} → {new_level.normalize():f} (set on a purchase)",
+                        changes={"reorder_level": [str(old_level.normalize()), str(new_level.normalize())]},
+                    )
         if (
             txn_type == "receive" and product.unit_type_id
             and (ln.get("unit_name") or "").strip() == product.unit_type.name

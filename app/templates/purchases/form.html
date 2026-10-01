@@ -137,7 +137,7 @@
     <div class="table-wrap">
       <table class="grid cart-table">
         <thead>
-          <tr><th class="num">Qty</th><th>Unit</th><th>Product Name</th><th class="num">Unit Price</th><th class="num">Subtotal</th><th></th></tr>
+          <tr><th class="num">Qty</th><th>Unit</th><th>Product Name</th><th class="num">Unit Price</th><th class="num">Subtotal</th>{% if can_set_alert and not return_against_po %}<th class="num" title="Low Stock Alert At — warn when Total Qty drops to this. Saving the purchase updates the item.">Low Stock Alert</th>{% endif %}<th></th></tr>
         </thead>
         <tbody id="linesBody"></tbody>
       </table>
@@ -173,6 +173,7 @@ const peso = n => '₱' + (Number(n) || 0).toLocaleString('en-PH', {minimumFract
 const txnType = {{ 'true' if return_against_po else 'false' }} ? 'return' : 'receive';
 const isReturnAgainstPo = {{ 'true' if return_against_po else 'false' }};
 const returnAgainstId = {{ return_against_po.id if return_against_po else 'null' }};
+const canSetAlert = {{ 'true' if can_set_alert else 'false' }};
 function round2(n) { return (Math.round((Number(n) || 0) * 100) / 100).toString(); }
 function fmtQty(n) { return (Math.round((Number(n) || 0) * 1000) / 1000).toString(); }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -308,7 +309,35 @@ function restorePurchaseDraft() {
 let receiveLines = txnType === 'receive' ? [blankRow()] : [];
 let searchTimers = {};
 
-function blankRow() { return { productId: null, name: '', unitName: '', unitCost: '', qty: '', knownCost: null, unitLocked: false, units: null, unitIndex: 0, unitFactor: 1, baseUnit: null }; }
+function blankRow() { return { productId: null, name: '', unitName: '', unitCost: '', qty: '', knownCost: null, unitLocked: false, units: null, unitIndex: 0, unitFactor: 1, baseUnit: null, alertAt: '', alertOrig: '', soldWeek: null }; }
+
+/* Low Stock Alert column: the item's current Low Stock Alert At (in its base
+   unit), editable here so it gets set while the delivery is being encoded.
+   Sent on save only when changed. Under it: its base unit and how much of
+   it sells in a week, to judge a level by. */
+function alertHint(l) {
+  const unit = l.baseUnit || (l.productId ? '' : (l.unitName || ''));
+  const parts = [];
+  if (unit) parts.push(escapeHtml(unit));
+  if (l.soldWeek) parts.push('sells ~' + fmtQty(l.soldWeek) + '/wk');
+  if ((l.alertAt || '') !== (l.alertOrig || '')) parts.push('<strong>will update</strong>');
+  return parts.join(' · ');
+}
+function alertCell(l, i) {
+  if (!canSetAlert) return '';
+  return '<td class="num"><input class="cart-disc row-alert" type="number" step="any" min="0" inputmode="decimal" style="width:70px;"' +
+    ' value="' + escapeHtml(l.alertAt || '') + '" placeholder="—" title="Warn when Total Qty drops to this. Blank = no alert."' +
+    ' oninput="setRAlert(' + i + ', this.value)">' +
+    '<div class="hint row-alert-hint">' + alertHint(l) + '</div></td>';
+}
+function setRAlert(i, v) {
+  const l = receiveLines[i];
+  l.alertAt = v.trim();
+  const tr = document.querySelectorAll('#linesBody tr')[i];
+  const hint = tr && tr.querySelector('.row-alert-hint');
+  if (hint) hint.innerHTML = alertHint(l);
+  savePurchaseDraft();
+}
 
 /* "= 20 Kg"-style hint for a row currently set to a pack unit (factor != 1),
    so whoever's typing a purchase can see the base-unit size of a whole
@@ -357,6 +386,7 @@ function rowHtml(l, i) {
     '</td>' +
     '<td class="num"><input class="cart-disc line-cost" type="number" step="any" min="0" value="' + (l.unitCost === '' ? '' : round2(l.unitCost)) + '" oninput="setRCost(' + i + ', this.value)"></td>' +
     '<td class="num"><input class="cart-disc line-total" type="number" step="any" min="0" value="' + round2(lineTotal(l)) + '" oninput="setRTotal(' + i + ', this.value)"></td>' +
+    alertCell(l, i) +
     '<td><button class="btn-link danger" onclick="removeReceiveLine(' + i + ')">✕</button></td>'
   );
 }
@@ -429,7 +459,16 @@ function onNameInput(i, v) {
   receiveLines[i].unitLocked = false;
   receiveLines[i].unitFactor = 1;
   receiveLines[i].baseUnit = null;
+  // A level that came from the product just un-matched isn't the new name's.
+  const keptAlert = receiveLines[i].alertAt !== receiveLines[i].alertOrig;
+  if (!keptAlert) receiveLines[i].alertAt = '';
+  receiveLines[i].alertOrig = '';
+  receiveLines[i].soldWeek = null;
   const tr = document.querySelectorAll('#linesBody tr')[i];
+  const alertEl = tr && tr.querySelector('.row-alert');
+  if (alertEl && !keptAlert) alertEl.value = '';
+  const alertHintEl = tr && tr.querySelector('.row-alert-hint');
+  if (alertHintEl) alertHintEl.innerHTML = alertHint(receiveLines[i]);
   const hint = tr && tr.querySelector('.row-hint');
   if (hint) { hint.style.display = v.trim() ? 'block' : 'none'; hint.textContent = 'will be created as a new product'; }
   if (ensureTrailingBlankRow()) appendRowDom(receiveLines.length - 1);
@@ -478,6 +517,9 @@ function pickRowProduct(i, p) {
   l.name = p.name;
   l.knownCost = p.cost_price;
   l.baseUnit = p.has_unit_type ? p.base_unit : null;
+  l.alertOrig = p.reorder_level > 0 ? fmtQty(p.reorder_level) : '';
+  l.alertAt = l.alertOrig;
+  l.soldWeek = p.sold_week || null;
   if (p.has_unit_type && p.units && p.units.length > 1) {
     // More than one unit is offered — a real units ladder (e.g. Box + Piece),
     // or a product steered to pack-only because it has a linked open/retail
@@ -629,6 +671,7 @@ async function savePurchase() {
             unit_name: u ? u.name : (l.unitName || 'Piece'),
             factor: u ? u.factor : (l.unitFactor || 1),
             qty: l.qty, unit_cost: l.unitCost, line_total: lineTotal(l),
+            ...(canSetAlert && (l.alertAt || '') !== (l.alertOrig || '') ? { reorder_level: l.alertAt || '0' } : {}),
           };
         }),
   };
