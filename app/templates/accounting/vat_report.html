@@ -65,6 +65,7 @@
     <strong>{{ output_vat_missing_count }} invoice number{{ '' if output_vat_missing_count == 1 else 's' }} unaccounted for</strong> in this period's booklet range —
     {% for r in output_vat_gaps if r.missing %}{{ r.receipt_type }} {{ r.missing|join(', ') }}{{ '; ' if not loop.last }}{% endfor %}.
     <a class="btn-link" href="/pos/invoice-gaps">Investigate / log as cancelled</a>
+    <div style="font-size:12px;margin-top:4px;opacity:.85;">Checked: {% for r in output_vat_gaps %}{{ r.receipt_type }} {% for lo, hi in r.ranges %}{{ lo }}{% if hi != lo %}–{{ hi }}{% endif %}{{ ', ' if not loop.last }}{% endfor %}{{ '; ' if not loop.last }}{% endfor %} — each pad's run of numbers on its own, so numbers not written yet between two pads in use aren't counted.</div>
     {% else %}
     <strong>No missing invoice numbers</strong> — every number in this period's booklet range ({{ output_vat_gaps|map(attribute='receipt_type')|join(', ') }}) is either a real transaction or logged as cancelled.
     {% endif %}

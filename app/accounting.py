@@ -1716,6 +1716,8 @@ def _vat_output_detail(db: Session, period_start: date, period_end: date):
 
 
 VAT_GAP_RANGE_LIMIT = 5000
+# More unused numbers than this between two used ones = a different pad.
+VAT_SERIES_BREAK = 100
 
 
 def _vat_output_invoice_gaps(db: Session, period_start: date, period_end: date):
@@ -1734,25 +1736,46 @@ def _vat_output_invoice_gaps(db: Session, period_start: date, period_end: date):
                 _local_date(models.Sale.created_at).between(period_start, period_end))
         .all()
     )
-    by_booklet = {}
+    by_booklet = {}  # receipt_type -> ({numbers used this period}, width)
     for receipt_type, invoice_no in rows:
         core = _numeric_core(invoice_no)
         if core is None:
             continue
-        width = len(invoice_no or "")
-        if receipt_type not in by_booklet:
-            by_booklet[receipt_type] = [core, core, width]
-        else:
-            entry = by_booklet[receipt_type]
-            entry[0] = min(entry[0], core)
-            entry[1] = max(entry[1], core)
-            entry[2] = max(entry[2], width)
+        nums, width = by_booklet.get(receipt_type, (set(), 0))
+        nums.add(core)
+        by_booklet[receipt_type] = (nums, max(width, len(invoice_no or "")))
 
     results = []
-    for receipt_type, (lo, hi, width) in sorted(by_booklet.items()):
-        if hi - lo + 1 > VAT_GAP_RANGE_LIMIT:
-            continue  # unusually wide span for one period — leave it to the standalone tool
-        results.append(_invoice_gap_check(db, receipt_type, lo, hi, width))
+    for receipt_type, (nums, width) in sorted(by_booklet.items()):
+        # Two pads of the same booklet type are often in use at once (DRB
+        # 53,xxx and 54,5xx side by side), so lowest-to-highest would call
+        # every not-yet-written number between the pads "missing". Check each
+        # run of numbers separately instead — a jump of more than
+        # VAT_SERIES_BREAK unused numbers starts a new run.
+        runs, ordered = [], sorted(nums)
+        start = prev = ordered[0]
+        for n in ordered[1:]:
+            if n - prev > VAT_SERIES_BREAK:
+                runs.append((start, prev))
+                start = n
+            prev = n
+        runs.append((start, prev))
+        merged = None
+        for lo, hi in runs:
+            if hi - lo + 1 > VAT_GAP_RANGE_LIMIT:
+                continue  # unusually wide span for one period — leave it to the standalone tool
+            r = _invoice_gap_check(db, receipt_type, lo, hi, width)
+            r["ranges"] = [(str(lo).zfill(width), str(hi).zfill(width))]
+            if merged is None:
+                merged = r
+            else:
+                for key in ("checked_count", "accounted_count", "missing_count"):
+                    merged[key] += r[key]
+                merged["missing"] += r["missing"]
+                merged["cancelled_in_range"] += r["cancelled_in_range"]
+                merged["ranges"] += r["ranges"]
+        if merged is not None:
+            results.append(merged)
     return results
 
 
