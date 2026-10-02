@@ -2490,6 +2490,16 @@ def edit_sale_customer(
     return _back()
 
 
+# The movement reasons that make up a transaction's own stock effect, per
+# txn_type — what edit_sale_date nets to know where the stock stands before
+# settle_redate applies the stock-count rule to the new date.
+REDATE_STOCK_REASONS = {
+    "sale": ("sale", "sale-edit-reverse", "correction"),
+    "exchange": ("exchange-sale", "exchange-return", "correction"),
+    "refund": ("refund", "correction"),
+}
+
+
 @router.post("/pos/receipt/{sale_id:int}/edit-date")
 def edit_sale_date(
     sale_id: int,
@@ -2555,14 +2565,19 @@ def edit_sale_date(
         moves = [m for m in moves if stock_dates.local_date(m.created_at) == old_d]
     for m in moves:
         m.created_at = stock_dates.on_date(m.created_at, new_d)
-    if sale.txn_type == "sale":
+    # Refunds and exchanges too. A sale's or exchange's line qty is what left
+    # (an exchange's returned items are negative), a refund's is what came
+    # back — so the natural stock effect is -qty, or +qty for a refund.
+    stock_reasons = REDATE_STOCK_REASONS.get(sale.txn_type)
+    if stock_reasons:
+        sign = Decimal("1") if sale.txn_type == "refund" else Decimal("-1")
         for pid in pids:
             product = db.get(models.Product, pid, with_for_update=True)
             if not product:
                 continue
-            natural = -sum((Decimal(str(l.qty or 0)) * Decimal(str(l.unit_factor or 1)) for l in sale.lines if l.product_id == pid), Decimal("0"))
+            natural = sign * sum((Decimal(str(l.qty or 0)) * Decimal(str(l.unit_factor or 1)) for l in sale.lines if l.product_id == pid), Decimal("0"))
             current = sum((Decimal(str(m.qty_base or 0)) for m in moves
-                           if m.product_id == pid and m.reason in ("sale", "sale-edit-reverse", "correction")), Decimal("0"))
+                           if m.product_id == pid and m.reason in stock_reasons), Decimal("0"))
             stock_dates.settle_redate(db, product, old_date=old_d, new_date=new_d, current_effect=current,
                                       natural_effect=natural, ref=ref, created_at=new_created_at)
 
