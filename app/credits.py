@@ -151,6 +151,10 @@ def credit_references(
             )
         )
     total = query.count()
+    # Across every matching payment, not just this page — so a search for one
+    # customer or cheque # shows everything it paid in total.
+    total_amount = query.with_entities(
+        func.coalesce(func.sum(models.ReceivableSettlement.amount), 0)).scalar() or 0
     pages = max((total + PAGE_SIZE - 1) // PAGE_SIZE, 1)
     page = min(page, pages)
     settlements = (
@@ -166,7 +170,7 @@ def credit_references(
         "credits/references.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "settlements": settlements, "q": q, "page": page, "pages": pages, "total": total,
-         "undoable": undoable},
+         "total_amount": total_amount, "undoable": undoable},
     )
 
 

@@ -11,6 +11,7 @@
 
 <div class="stat-row">
   <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>{{ 'Matching payments' if q else 'Payments with a reference #' }}</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total_amount|peso }}</span><span>Total amount{{ ' (matching)' if q else '' }}</span></div>
 </div>
 
 <form class="toolbar" method="get" action="/credits/references">
@@ -54,6 +55,15 @@
       <tr><td colspan="7" class="empty">No payments {{ 'match that search' if q else 'with a reference # on file yet' }}.</td></tr>
       {% endfor %}
     </tbody>
+    {% if settlements %}
+    <tfoot>
+      <tr>
+        <td colspan="5" class="strong">Total{{ ' — all ' ~ total ~ ' payments' if pages > 1 else '' }}</td>
+        <td class="num strong">{{ total_amount|peso }}</td>
+        <td></td>
+      </tr>
+    </tfoot>
+    {% endif %}
   </table>
 </div>
 
