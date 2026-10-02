@@ -2265,6 +2265,7 @@ def merge_products(
         "units": [{c.name: audit._plain(getattr(u, c.name)) for c in u.__table__.columns} for u in units],
     }
 
+    value_before = _shelf_value(keep) + _shelf_value(dup)
     keep.beginning_stock = (keep.beginning_stock or 0) + (dup.beginning_stock or 0)
     keep.stock_qty = (keep.stock_qty or 0) + (dup.stock_qty or 0)
     # The stock now lives on `keep` — leaving it on the archived duplicate
@@ -2286,6 +2287,9 @@ def merge_products(
     db.query(models.ProductUnit).filter(models.ProductUnit.product_id == merge_id).delete(synchronize_session=False)
 
     dup.is_active = False
+    _book_merge_value_shift(db, keep, dup, value_before, ref=f"MERGE #{dup.id}",
+                            note=f"Merged “{dup.name}” in — its stock now counts at this item's cost",
+                            entered_by_id=user.id)
     audit.record(
         db, user=user, request=request, action="merge", entity_type="product",
         entity_id=keep.id, entity_label=keep.name,
@@ -2294,6 +2298,27 @@ def merge_products(
     )
     db.commit()
     return RedirectResponse(f"/products?merged={keep.name}", status_code=status.HTTP_302_FOUND)
+
+
+def _shelf_value(p: models.Product) -> Decimal:
+    return Decimal(str(p.total_qty or 0)) * Decimal(str(p.cost_price or 0))
+
+
+def _book_merge_value_shift(db: Session, keep: models.Product, dup: models.Product, value_before: Decimal,
+                            *, ref: str, note: str, entered_by_id=None) -> None:
+    """A merge moves the duplicate's stock onto the kept item at the KEPT
+    item's cost (an unmerge moves it back at the duplicate's own), so the
+    pair's shelf value changes without any goods moving. Book that change
+    like a cost re-average — a Stock Card row on the kept item plus
+    Inventory vs cost variance — so the ledger keeps following the shelf.
+    Without this, merges left the books off by the cost difference (found
+    2026-10-02 tracing the inventory gap)."""
+    from . import stock_books
+    db.flush()
+    stock_books.book_cost_variance(
+        db, keep, value_before=value_before, value_added=-_shelf_value(dup),
+        ref=ref, note=note, entered_by_id=entered_by_id,
+    )
 
 
 def unmerge_product(db: Session, log: models.AuditLog, undo: dict, *, user, request=None) -> str:
@@ -2323,6 +2348,7 @@ def unmerge_product(db: Session, log: models.AuditLog, undo: dict, *, user, requ
 
     beg = Decimal(str(undo.get("beginning_stock") or 0))
     stk = Decimal(str(undo.get("stock_qty") or 0))
+    value_before = _shelf_value(keep) + _shelf_value(dup)
     keep.beginning_stock = (keep.beginning_stock or Decimal("0")) - beg
     keep.stock_qty = (keep.stock_qty or Decimal("0")) - stk
     dup.beginning_stock = beg
@@ -2350,6 +2376,9 @@ def unmerge_product(db: Session, log: models.AuditLog, undo: dict, *, user, requ
         row.relative_to_unit_id = new_ids.get(old)
 
     dup.is_active = True
+    _book_merge_value_shift(db, keep, dup, value_before, ref=f"UNMERGE #{dup.id}",
+                            note=f"Unmerged “{dup.name}” — its stock is back at its own cost",
+                            entered_by_id=user.id if user else None)
     audit.record(
         db, user=user, request=request, action="unmerge", entity_type="product",
         entity_id=dup.id, entity_label=dup.name,
