@@ -160,7 +160,8 @@ def _journal_lines(adj: models.InventoryAdjustment, movements: list, *, reversin
         net += v
         if m.reason == MV_REVAL:
             key = "INV_REVALUATION"
-        elif adj.reason in REASON_CONTRA:  # no move lines on these — see post_adjustment
+        elif adj is not None and adj.reason in REASON_CONTRA:  # no move lines on these — see post_adjustment
+            # (adj is None when book_stock_movements books a Stock Count's movements)
             key = REASON_CONTRA[adj.reason]
         elif m.reason == MV_CORRECTION:
             key = "INV_ADJ_CORRECTION"
