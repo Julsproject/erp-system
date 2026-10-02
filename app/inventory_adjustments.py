@@ -60,10 +60,17 @@ REASONS = [
     ("theft", "Theft / loss", "pnl"),
     ("expired", "Expired / spoiled", "pnl"),
     ("found", "Found / extra stock", "pnl"),
+    ("freebie", "Freebie / promo (no sale)", "pnl"),
+    ("owner_use", "Owner's use (personal)", "equity"),
     ("other", "Other", "pnl"),
 ]
 REASON_LABELS = {k: label for k, label, _ in REASONS}
 REASON_BOOKS = {k: books for k, _, books in REASONS}
+# Reasons whose qty change has its own contra account instead of the generic
+# loss/gain or Inventory Corrections one: a give-away is a selling expense,
+# and stock the owner takes home is a withdrawal (Owner's Drawings), not a
+# cost of the business. A cost change on these still goes to INV_REVALUATION.
+REASON_CONTRA = {"freebie": "INV_ADJ_FREEBIE", "owner_use": "INV_ADJ_DRAWINGS"}
 
 SOURCE_LABELS = {"manual": "Adjustment", "product_edit": "Product Edit", "pricing": "Selling Price tab"}
 
@@ -153,6 +160,8 @@ def _journal_lines(adj: models.InventoryAdjustment, movements: list, *, reversin
         net += v
         if m.reason == MV_REVAL:
             key = "INV_REVALUATION"
+        elif adj.reason in REASON_CONTRA:  # no move lines on these — see post_adjustment
+            key = REASON_CONTRA[adj.reason]
         elif m.reason == MV_CORRECTION:
             key = "INV_ADJ_CORRECTION"
         else:
@@ -205,6 +214,13 @@ def post_adjustment(db: Session, adj: models.InventoryAdjustment, *, user, reque
         raise AdjustmentError("Add at least one item before posting.")
     if adj.adj_date > _today():
         raise AdjustmentError("The adjustment date can't be in the future.")
+    if adj.reason in REASON_CONTRA and any((l.qty_input or 0) > 0 or l.mode == "set" for l in adj.lines):
+        raise AdjustmentError(f"“{REASON_LABELS[adj.reason]}” only takes items out — every quantity must be a deduction.")
+    if adj.reason in REASON_CONTRA and any(l.is_move for l in adj.lines):
+        # A move's value difference is a correction, but on these reasons every
+        # line goes to the reason's own account — keep the two apart.
+        raise AdjustmentError(f"“{REASON_LABELS[adj.reason]}” can't include a move between items — "
+                              "put the move on its own adjustment.")
 
     qty_reason = MV_CORRECTION if books_for(adj.reason) == "equity" else MV_PNL
     reason_label = REASON_LABELS.get(adj.reason, adj.reason)
@@ -686,6 +702,14 @@ def adjustment_header(adj_id: int, adj_date: str = Form(""), reason: str = Form(
     adj.adj_date = d
     if reason in REASON_LABELS:
         adj.reason = reason
+    if adj.reason in REASON_CONTRA:
+        if any(l.is_move or l.mode == "set" for l in adj.lines):
+            db.rollback()
+            return _err(adj_id, f"“{REASON_LABELS[adj.reason]}” only takes items out — remove the move / "
+                                "counted-qty lines first, or keep the other reason.")
+        for l in adj.lines:  # lines added under another reason: same "taken out" rule
+            if l.qty_input is not None:
+                l.qty_input = -abs(l.qty_input)
     adj.notes = notes.strip()[:255] or None
     db.commit()
     return RedirectResponse(f"/inventory-adjustments/{adj_id}", status_code=302)
@@ -720,6 +744,12 @@ def adjustment_add_line(adj_id: int, product_id: int = Form(...), unit_name: str
     except AdjustmentError as e:
         return _err(adj_id, str(e))
     mode = "set" if mode == "set" else "delta"
+    if adj.reason in REASON_CONTRA:
+        # Freebie / owner's use only ever take stock out: the qty typed is how
+        # many left, whatever its sign — typing 1 must never ADD a piece.
+        mode = "delta"
+        if qty_val is not None:
+            qty_val = -abs(qty_val)
     if qty_val is not None and mode == "set" and qty_val < 0:
         return _err(adj_id, "A counted quantity can't be negative.")
     if qty_val is not None and mode == "delta" and qty_val == 0:
@@ -760,6 +790,8 @@ def adjustment_add_move(adj_id: int, from_id: int = Form(0), from_unit: str = Fo
     adj, redirect = _draft_or_redirect(db, adj_id)
     if redirect:
         return redirect
+    if adj.reason in REASON_CONTRA:
+        return _err(adj_id, f"A move between items can't go on a “{REASON_LABELS[adj.reason]}” adjustment — start a separate one for it.")
     src, dst = db.get(models.Product, from_id), db.get(models.Product, to_id)
     if not src or not dst:
         return _err(adj_id, "Pick both the item to move from and the item to move to.")

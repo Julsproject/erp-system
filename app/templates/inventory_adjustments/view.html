@@ -52,13 +52,17 @@
   <div style="display:flex;gap:28px;flex-wrap:wrap;">
     <div><span class="muted" style="font-size:12.5px;">Date</span><br><strong>{{ adj.adj_date.strftime('%b %d, %Y') }}</strong></div>
     <div><span class="muted" style="font-size:12.5px;">Reason</span><br><strong>{{ reason_labels.get(adj.reason, adj.reason) }}</strong></div>
-    <div><span class="muted" style="font-size:12.5px;">Books</span><br><strong>{{ 'Inventory Corrections (equity)' if equity else 'P&L — shrinkage / gain' }}</strong></div>
+    <div><span class="muted" style="font-size:12.5px;">Books</span><br><strong>{{ {'freebie': 'P&L — Promotions & Freebies', 'owner_use': "Owner's Drawings (equity)"}.get(adj.reason) or ('Inventory Corrections (equity)' if equity else 'P&L — shrinkage / gain') }}</strong></div>
     {% if adj.journal_entry %}<div><span class="muted" style="font-size:12.5px;">Journal entry</span><br><a class="btn-link" href="/accounting/journal-entries/{{ adj.journal_entry.id }}/view">{{ adj.journal_entry.journal_no }}</a></div>{% endif %}
     {% if adj.notes %}<div style="flex:1;min-width:200px;"><span class="muted" style="font-size:12.5px;">Notes</span><br>{{ adj.notes }}</div>{% endif %}
   </div>
   {% endif %}
   <p class="hint" style="margin:10px 0 0;">
-    {% if equity %}
+    {% if adj.reason == 'freebie' %}
+      A <strong>give-away with no sale</strong>: the items' cost goes to the Promotions &amp; Freebies expense.
+    {% elif adj.reason == 'owner_use' %}
+      <strong>Stock the owner took for personal use</strong>: its cost goes to Owner's Drawings (equity) — a withdrawal, not an expense, so profit isn't understated.
+    {% elif equity %}
       This is a <strong>correction</strong>: the peso difference goes to Inventory Corrections (equity), not to profit or loss.
     {% else %}
       This reason counts on the P&amp;L: a shortage goes to Inventory Shrinkage &amp; Losses, extra stock goes to Inventory Gain.
@@ -81,6 +85,13 @@
       <label style="margin:0;">Unit
         <select name="unit_name" id="lfUnit"></select>
       </label>
+      {% if adj.reason in ('freebie', 'owner_use') %}
+      {# These only ever take stock out — the server makes the qty a deduction whatever its sign. #}
+      <input type="hidden" name="mode" id="lfMode" value="delta">
+      <label style="margin:0;"><span id="lfQtyLabel">Qty taken out</span>
+        <input type="number" name="qty" step="any" min="0" style="max-width:130px;" placeholder="e.g. 1">
+      </label>
+      {% else %}
       <label style="margin:0;">Quantity
         <select name="mode" id="lfMode">
           <option value="delta">Change by (+ / −)</option>
@@ -90,6 +101,7 @@
       <label style="margin:0;"><span id="lfQtyLabel">Qty (+ add, − remove)</span>
         <input type="number" name="qty" step="any" style="max-width:130px;" placeholder="leave blank = no qty change">
       </label>
+      {% endif %}
       <label style="margin:0;">New cost <span class="muted" id="lfCostUnit"></span>
         <input type="number" name="new_cost" step="0.01" min="0" style="max-width:130px;" placeholder="blank = keep">
       </label>
