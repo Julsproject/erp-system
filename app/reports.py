@@ -79,29 +79,34 @@ def reports_hub(request: Request, user=Depends(get_current_user)):
 def _pl_data(db: Session, period_start: date, period_end: date):
     """Same formulas the Dashboard uses, so the numbers agree with what the
     owner already sees there: Revenue = net sales (sale + refund + exchange
-    totals); Gross Profit = revenue from 'sale' lines minus their frozen cost."""
+    totals); Gross Profit = revenue from 'sale' lines minus their frozen cost.
+    An SI ("si") is left out of both: it only re-documents DRs already
+    counted as sales (credits.issue_si), so adding it counted them twice."""
     revenue = (
         db.query(func.coalesce(func.sum(models.Sale.total), 0))
         .filter(
             _local_date(models.Sale.created_at).between(period_start, period_end),
             models.Sale.is_voided.is_(False),
+            models.Sale.txn_type != "si",
         )
         .scalar()
     )
     revenue = Decimal(str(revenue or 0))
 
     cogs_expr = models.SaleLine.qty * models.SaleLine.unit_factor * models.SaleLine.unit_cost
-    gross_profit = (
-        db.query(func.coalesce(func.sum(models.SaleLine.line_total - cogs_expr), 0))
+    goods_sales, cogs = (
+        db.query(func.coalesce(func.sum(models.SaleLine.line_total), 0), func.coalesce(func.sum(cogs_expr), 0))
         .join(models.Sale, models.SaleLine.sale_id == models.Sale.id)
         .filter(
             models.Sale.txn_type == "sale",
             models.Sale.is_voided.is_(False),
             _local_date(models.Sale.created_at).between(period_start, period_end),
         )
-        .scalar()
+        .one()
     )
-    gross_profit = Decimal(str(gross_profit or 0))
+    goods_sales = Decimal(str(goods_sales or 0)).quantize(Decimal("0.01"))
+    cogs = Decimal(str(cogs or 0)).quantize(Decimal("0.01"))
+    gross_profit = goods_sales - cogs
 
     expense_rows = (
         db.query(models.ExpenseCategory.name, func.coalesce(func.sum(models.Expense.amount), 0))
@@ -127,6 +132,8 @@ def _pl_data(db: Session, period_start: date, period_end: date):
 
     return {
         "revenue": revenue,
+        "goods_sales": goods_sales,
+        "cogs": cogs,
         "gross_profit": gross_profit,
         "expenses_by_category": expenses_by_category,
         "total_expenses": total_expenses,
@@ -194,6 +201,8 @@ def export_profit_loss(
     ws.append([])
     header_row(["Line", "Amount"])
     ws.append(["Revenue (net of refunds/exchanges)", float(data["revenue"])])
+    ws.append(["Sales of goods (before refunds & exchanges)", float(data["goods_sales"])])
+    ws.append(["Less: Cost of goods sold", float(-data["cogs"])])
     ws.append(["Gross Profit (from goods sold)", float(data["gross_profit"])])
     ws.append([])
     header_row(["Expenses by category", "Amount"])

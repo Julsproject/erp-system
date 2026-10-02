@@ -17,7 +17,11 @@
     <tbody>
       <tr><td class="strong">Revenue</td><td class="num strong">{{ revenue|peso }}</td></tr>
       <tr><td class="muted" style="padding-left:18px;">net of refunds &amp; exchanges</td><td></td></tr>
-      <tr><td class="strong" style="padding-top:14px;">Gross Profit</td><td class="num strong {{ 'neg' if gross_profit < 0 }}" style="padding-top:14px;">{{ gross_profit|peso }}</td></tr>
+      <tr><td style="padding-top:14px;">Sales of goods</td><td class="num" style="padding-top:14px;">{{ goods_sales|peso }}</td></tr>
+      <tr><td class="muted" style="padding-left:18px;">before refunds &amp; exchanges</td><td></td></tr>
+      <tr><td>Less: Cost of goods sold</td><td class="num">({{ cogs|peso }})</td></tr>
+      <tr><td class="muted" style="padding-left:18px;">what those goods cost the shop</td><td></td></tr>
+      <tr><td class="strong" style="padding-top:14px;border-top:1px solid var(--line);">Gross Profit</td><td class="num strong {{ 'neg' if gross_profit < 0 }}" style="padding-top:14px;border-top:1px solid var(--line);">{{ gross_profit|peso }}</td></tr>
       <tr><td class="muted" style="padding-left:18px;">from goods sold this period</td><td></td></tr>
     </tbody>
   </table>

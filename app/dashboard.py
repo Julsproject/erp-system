@@ -74,12 +74,14 @@ def _qty_expr():
 
 
 def _sales_between(db: Session, start: date, end: date) -> Decimal:
-    """Net sales (sales minus refunds, plus exchange differences)."""
+    """Net sales (sales minus refunds, plus exchange differences). An SI is
+    left out — it only re-documents DRs already counted (credits.issue_si)."""
     total = (
         db.query(func.coalesce(func.sum(models.Sale.total), 0))
         .filter(
             _local_date(models.Sale.created_at).between(start, end),
             models.Sale.is_voided.is_(False),
+            models.Sale.txn_type != "si",
         )
         .scalar()
     )
@@ -229,6 +231,7 @@ def dashboard(
         .filter(
             _local_date(models.Sale.created_at).between(period_start, period_end),
             models.Sale.is_voided.is_(False),
+            models.Sale.txn_type != "si",   # SI re-documents DRs already counted
         )
         .group_by("d")
         .all()
