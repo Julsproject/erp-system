@@ -169,7 +169,8 @@ def dashboard(
         .filter(models.Expense.is_voided.is_(False), models.Expense.expense_date.between(period_start, period_end))
         .scalar()
     )
-    period_expenses = Decimal(str(period_expenses or 0))
+    from .reports import payroll_total   # payroll is booked as journal entries, not Expenses
+    period_expenses = Decimal(str(period_expenses or 0)) + payroll_total(db, period_start, period_end)
     period_profit = _profit_between(db, period_start, period_end)
 
     kpi = {
@@ -192,7 +193,7 @@ def dashboard(
         db.query(func.coalesce(func.sum(models.Expense.amount), 0))
         .filter(models.Expense.is_voided.is_(False), models.Expense.expense_date.between(prev_start, prev_end))
         .scalar() or 0
-    ))
+    )) + payroll_total(db, prev_start, prev_end)
     compare = {
         "prev_start": prev_start, "prev_end": prev_end,
         "sales": {"now": kpi["period"], "prev": prev_sales, "pct": _pct_change(kpi["period"], prev_sales)},

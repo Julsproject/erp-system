@@ -76,6 +76,37 @@ def reports_hub(request: Request, user=Depends(get_current_user)):
     )
 
 
+# Payroll is entered as journal entries (Accounting → Journal Entries), not
+# through Expenses: one payday splits into salaries, deductions and cash. These
+# accounts' posted entries count as expenses here so the operational P&L,
+# Dashboard and Weekly Summary carry payroll like the ledger P&L does.
+PAYROLL_ACCOUNT_CODES = ("6200", "6210", "6220", "6230")
+
+
+def payroll_by_account(db: Session, period_start: date, period_end: date) -> list:
+    """[{"name", "amount"}] — net debits on the payroll accounts in the
+    period, by journal date. Drafts are left out; a reversed entry and its
+    reversal net to zero."""
+    rows = (
+        db.query(models.Account.name, func.coalesce(func.sum(models.JournalLine.debit - models.JournalLine.credit), 0))
+        .join(models.JournalLine, models.JournalLine.account_id == models.Account.id)
+        .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
+        .filter(
+            models.Account.code.in_(PAYROLL_ACCOUNT_CODES),
+            models.JournalEntry.status != "draft",
+            models.JournalEntry.txn_date.between(period_start, period_end),
+        )
+        .group_by(models.Account.code, models.Account.name)
+        .order_by(models.Account.code)
+        .all()
+    )
+    return [{"name": name, "amount": Decimal(str(amt or 0))} for name, amt in rows if amt]
+
+
+def payroll_total(db: Session, period_start: date, period_end: date) -> Decimal:
+    return sum((r["amount"] for r in payroll_by_account(db, period_start, period_end)), Decimal("0"))
+
+
 def _pl_data(db: Session, period_start: date, period_end: date):
     """Same formulas the Dashboard uses, so the numbers agree with what the
     owner already sees there: Revenue = net sales (sale + refund + exchange
@@ -117,7 +148,8 @@ def _pl_data(db: Session, period_start: date, period_end: date):
         .all()
     )
     expenses_by_category = sorted(
-        [{"name": name or "Uncategorized", "amount": Decimal(str(amt or 0))} for name, amt in expense_rows],
+        [{"name": name or "Uncategorized", "amount": Decimal(str(amt or 0))} for name, amt in expense_rows]
+        + payroll_by_account(db, period_start, period_end),
         key=lambda r: r["amount"], reverse=True,
     )
     total_expenses = sum((r["amount"] for r in expenses_by_category), ZERO)
@@ -1599,7 +1631,7 @@ def _weekly_summary_data(db: Session, period_start: date, period_end: date):
         .filter(models.Expense.is_voided.is_(False), models.Expense.expense_date.between(period_start, period_end))
         .scalar()
     )
-    expenses_paid = Decimal(str(expenses_paid or 0))
+    expenses_paid = Decimal(str(expenses_paid or 0)) + payroll_total(db, period_start, period_end)
 
     top_products = _sales_by_product(db, period_start, period_end)[:8]
 
