@@ -79,7 +79,8 @@ function addLine(prefill) {
       <option value="debit" ${side === 'debit' ? 'selected' : ''}>Debit</option>
       <option value="credit" ${side === 'credit' ? 'selected' : ''}>Credit</option>
     </select></td>
-    <td><input name="amount" type="number" step="0.01" min="0.01" value="${prefill.amount || ''}" oninput="recalc()"></td>
+    <td><input name="amount" type="text" inputmode="decimal" autocomplete="off" style="text-align:right;"
+               value="${prefill.amount ? withCommas(String(prefill.amount)) : ''}" oninput="formatAmount(this); recalc()"></td>
     <td><input name="memo" placeholder="optional" value="${prefill.memo || ''}"></td>
     <td><button type="button" class="btn-link" onclick="this.closest('tr').remove(); recalc();">Remove</button></td>
   `;
@@ -88,21 +89,49 @@ function addLine(prefill) {
   recalc();
 }
 
+/* Amounts show thousands commas while typing (49,149.50); they're stripped
+   again right before the form is sent, since the server reads plain numbers. */
+function withCommas(raw) {
+  let s = String(raw).replace(/[^0-9.]/g, '');
+  const dot = s.indexOf('.');
+  if (dot >= 0) s = s.slice(0, dot + 1) + s.slice(dot + 1).replace(/\./g, '').slice(0, 2);
+  const [whole, frac] = s.split('.');
+  const grouped = (whole || '').replace(/^0+(?=\d)/, '').replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return frac !== undefined ? (grouped || '0') + '.' + frac : grouped;
+}
+function formatAmount(input) {
+  // Keep the cursor after the same digit once commas are added or removed.
+  const caret = input.selectionStart;
+  const digitsBefore = input.value.slice(0, caret).replace(/[^0-9.]/g, '').length;
+  input.value = withCommas(input.value);
+  let pos = 0, seen = 0;
+  while (pos < input.value.length && seen < digitsBefore) {
+    if (/[0-9.]/.test(input.value[pos])) seen++;
+    pos++;
+  }
+  input.setSelectionRange(pos, pos);
+}
+function amountOf(input) { return parseFloat(String(input.value).replace(/,/g, '')) || 0; }
+const peso = n => n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+document.getElementById('jeForm').addEventListener('submit', () => {
+  document.querySelectorAll('#lineBody input[name=amount]').forEach(i => { i.value = i.value.replace(/,/g, ''); });
+});
+
 function recalc() {
   let debit = 0, credit = 0;
   document.querySelectorAll('#lineBody tr').forEach(row => {
-    const amt = parseFloat(row.querySelector('input[name=amount]').value) || 0;
+    const amt = amountOf(row.querySelector('input[name=amount]'));
     const side = row.querySelector('select[name=side]').value;
     if (side === 'debit') debit += amt; else credit += amt;
   });
-  document.getElementById('totalsCell').textContent = `Dr ₱${debit.toFixed(2)} / Cr ₱${credit.toFixed(2)}`;
+  document.getElementById('totalsCell').textContent = `Dr ₱${peso(debit)} / Cr ₱${peso(credit)}`;
   const balanceCell = document.getElementById('balanceCell');
   if (debit === 0 && credit === 0) {
     balanceCell.textContent = 'Add at least 2 lines'; balanceCell.style.color = '';
   } else if (Math.abs(debit - credit) < 0.005) {
     balanceCell.textContent = 'Balanced ✓'; balanceCell.style.color = '#15803d';
   } else {
-    balanceCell.textContent = `Out of balance by ₱${Math.abs(debit - credit).toFixed(2)}`; balanceCell.style.color = '#b91c1c';
+    balanceCell.textContent = `Out of balance by ₱${peso(Math.abs(debit - credit))}`; balanceCell.style.color = '#b91c1c';
   }
 }
 
