@@ -15,7 +15,7 @@ from openpyxl.utils import get_column_letter
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import and_, func, not_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from . import models, pricing, settings_store
 from .database import get_db
@@ -86,15 +86,21 @@ PAYROLL_ACCOUNT_CODES = ("6200", "6210", "6220", "6230")
 def payroll_by_account(db: Session, period_start: date, period_end: date) -> list:
     """[{"name", "amount"}] — net debits on the payroll accounts in the
     period, by journal date. Drafts are left out; a reversed entry and its
-    reversal net to zero."""
+    reversal net to zero. Only manual journal entries (and their reversals)
+    count: an Expense whose category posts to one of these accounts (e.g.
+    "Salaries - Inventory Count" → 6200) is already counted as an Expense."""
+    original = aliased(models.JournalEntry)
     rows = (
         db.query(models.Account.name, func.coalesce(func.sum(models.JournalLine.debit - models.JournalLine.credit), 0))
         .join(models.JournalLine, models.JournalLine.account_id == models.Account.id)
         .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
+        .outerjoin(original, models.JournalEntry.is_reversal_of_id == original.id)
         .filter(
             models.Account.code.in_(PAYROLL_ACCOUNT_CODES),
             models.JournalEntry.status != "draft",
             models.JournalEntry.txn_date.between(period_start, period_end),
+            (models.JournalEntry.source_type == "manual")
+            | ((models.JournalEntry.source_type == "reversal") & (original.source_type == "manual")),
         )
         .group_by(models.Account.code, models.Account.name)
         .order_by(models.Account.code)
