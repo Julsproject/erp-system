@@ -61,7 +61,7 @@ const EXISTING_LINES = [
 ];
 
 const TEMPLATE_LINES = [
-  {% if not entry %}{% for line in template_lines %}{accountId: {{ line.account_id }}, side: {{ line.side|tojson }}},{% endfor %}{% endif %}
+  {% if not entry %}{% for line in template_lines %}{accountId: {{ line.account_id }}, side: {{ line.side|tojson }}, memo: {{ line.memo|tojson }}, auto: {{ 'true' if line.auto else 'false' }}},{% endfor %}{% endif %}
 ];
 
 function accountOptions(selected) {
@@ -73,6 +73,7 @@ function addLine(prefill) {
   const side = prefill.side || 'debit';
   const tbody = document.getElementById('lineBody');
   const row = document.createElement('tr');
+  if (prefill.auto) row.dataset.auto = '1';
   row.innerHTML = `
     <td><select name="account_id">${accountOptions(prefill.accountId || null)}</select></td>
     <td><select name="side">
@@ -80,8 +81,10 @@ function addLine(prefill) {
       <option value="credit" ${side === 'credit' ? 'selected' : ''}>Credit</option>
     </select></td>
     <td><input name="amount" type="text" inputmode="decimal" autocomplete="off" style="text-align:right;"
-               value="${prefill.amount ? withCommas(String(prefill.amount)) : ''}" oninput="formatAmount(this); recalc()"></td>
-    <td><input name="memo" placeholder="optional" value="${prefill.memo || ''}"></td>
+               value="${prefill.amount ? withCommas(String(prefill.amount)) : ''}"
+               ${prefill.auto ? 'placeholder="auto" title="Fills itself in to balance the entry — type over it to set it yourself"' : ''}
+               oninput="this.closest('tr').dataset.auto=''; formatAmount(this); recalc()"></td>
+    <td><input name="memo" placeholder="optional" value="${(prefill.memo || '').replace(/"/g, '&quot;')}"></td>
     <td><button type="button" class="btn-link" onclick="this.closest('tr').remove(); recalc();">Remove</button></td>
   `;
   tbody.appendChild(row);
@@ -117,7 +120,24 @@ document.getElementById('jeForm').addEventListener('submit', () => {
   document.querySelectorAll('#lineBody input[name=amount]').forEach(i => { i.value = i.value.replace(/,/g, ''); });
 });
 
+/* A template's "auto" line (e.g. the cash paid out) holds whatever balances
+   the entry, until someone types in it themselves. */
+function fillAutoLine() {
+  const auto = document.querySelector('#lineBody tr[data-auto="1"]');
+  if (!auto) return;
+  let debit = 0, credit = 0;
+  document.querySelectorAll('#lineBody tr').forEach(row => {
+    if (row === auto) return;
+    const amt = amountOf(row.querySelector('input[name=amount]'));
+    if (row.querySelector('select[name=side]').value === 'debit') debit += amt; else credit += amt;
+  });
+  const side = auto.querySelector('select[name=side]').value;
+  const need = side === 'credit' ? debit - credit : credit - debit;
+  auto.querySelector('input[name=amount]').value = need > 0 ? withCommas(need.toFixed(2)) : '';
+}
+
 function recalc() {
+  fillAutoLine();
   let debit = 0, credit = 0;
   document.querySelectorAll('#lineBody tr').forEach(row => {
     const amt = amountOf(row.querySelector('input[name=amount]'));

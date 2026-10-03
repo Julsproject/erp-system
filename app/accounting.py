@@ -2074,11 +2074,40 @@ def journal_entries_list(request: Request, date_from: str = "", date_to: str = "
 # it" (Dr Cash + Dr Sales Revenue / Cr Accounts Receivable + Cr Output VAT)
 # instead of a blank 2-line form. Amounts are deliberately left blank —
 # this exists precisely for a transaction the system has no figures for.
+#
+# Each line is (account, side) or (account, side, note[, "auto"]). The
+# account is a mapping function key, or "code:XXXX" for a plain chart
+# account. The note pre-fills the memo so whoever is typing knows what goes
+# on that line; "auto" makes that line fill itself with whatever balances the
+# entry (e.g. the cash actually paid out), so only the known figures are typed.
 JOURNAL_TEMPLATES = {
     "customer_payment": [
         ("SALE_CASH", "debit"), ("SALES_REVENUE", "debit"),
         ("AR", "credit"), ("OUTPUT_VAT", "credit"),
     ],
+    # Payday: gross salaries out, employees' shares held back as payables.
+    "payroll": [
+        ("code:6200", "debit", "Gross pay — total salaries before deductions"),
+        ("code:2300", "credit", "SSS — employees' share deducted"),
+        ("code:2310", "credit", "PhilHealth — employees' share deducted"),
+        ("code:2320", "credit", "Pag-IBIG — employees' share deducted"),
+        ("code:1000", "credit", "Net pay handed out in cash (fills itself in)", "auto"),
+    ],
+    # Paying SSS / PhilHealth / Pag-IBIG: clear the employees' shares held
+    # since payday, and book the employer's share as expense now.
+    "gov_remittance": [
+        ("code:2300", "debit", "SSS — employees' share (deducted on payday)"),
+        ("code:2310", "debit", "PhilHealth — employees' share (deducted on payday)"),
+        ("code:2320", "debit", "Pag-IBIG — employees' share (deducted on payday)"),
+        ("code:6210", "debit", "SSS — employer's share"),
+        ("code:6220", "debit", "PhilHealth — employer's share"),
+        ("code:6230", "debit", "Pag-IBIG — employer's share"),
+        ("code:1000", "credit", "Total paid in cash (fills itself in)", "auto"),
+    ],
+}
+JOURNAL_TEMPLATE_DESCRIPTIONS = {
+    "payroll": "Salaries for ",
+    "gov_remittance": "SSS / PhilHealth / Pag-IBIG payment for ",
 }
 
 
@@ -2091,12 +2120,21 @@ def journal_entry_new(request: Request, error: str = "", description: str = "", 
         return RedirectResponse("/pos", status_code=302)
     accounts = db.query(models.Account).filter(models.Account.is_active.is_(True)).order_by(models.Account.code).all()
     template_lines = []
-    for function_key, side in JOURNAL_TEMPLATES.get(template, []):
-        try:
-            account = _resolve_mapping(db, function_key)
-        except PostingError:
-            continue  # not set up yet — fall back to a blank form instead of a half-filled one
-        template_lines.append({"account_id": account.id, "side": side})
+    for function_key, side, *extra in JOURNAL_TEMPLATES.get(template, []):
+        if function_key.startswith("code:"):
+            account = db.query(models.Account).filter(
+                models.Account.code == function_key[5:], models.Account.is_active.is_(True)).first()
+            if not account:
+                continue  # not set up yet — leave that line out rather than guess an account
+        else:
+            try:
+                account = _resolve_mapping(db, function_key)
+            except PostingError:
+                continue  # not set up yet — fall back to a blank form instead of a half-filled one
+        template_lines.append({"account_id": account.id, "side": side,
+                               "memo": extra[0] if extra else "", "auto": "auto" in extra[1:]})
+    if not description and template in JOURNAL_TEMPLATE_DESCRIPTIONS:
+        description = JOURNAL_TEMPLATE_DESCRIPTIONS[template]
     return templates.TemplateResponse(
         "accounting/journal_entry_form.html",
         {"request": request, "app_name": request.app.title, "user": user, "accounts": accounts,

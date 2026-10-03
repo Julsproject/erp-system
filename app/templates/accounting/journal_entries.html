@@ -9,6 +9,8 @@
   </div>
   <div class="head-actions">
     {% set pp_url = "/accounting/journal-entries" %}{% set pp_keep = {} %}{% set pp_mode = "all" %}{% include "_period_picker.html" %}
+    <a class="btn-secondary" href="/accounting/journal-entries/new?template=payroll&back={{ back_here() }}" title="Payday: salaries, SSS/PhilHealth/Pag-IBIG deductions, net pay in cash">+ Payroll (payday)</a>
+    <a class="btn-secondary" href="/accounting/journal-entries/new?template=gov_remittance&back={{ back_here() }}" title="Paying SSS, PhilHealth and Pag-IBIG: employees' and employer's shares">+ Pay SSS / PhilHealth / Pag-IBIG</a>
     <a class="btn" href="/accounting/journal-entries/new?back={{ back_here() }}">+ New Entry</a>
   </div>
 </div>
