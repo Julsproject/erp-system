@@ -9,7 +9,11 @@
     <h1 class="page-title">Expenses</h1>
     <p class="muted">Business costs outside of inventory purchases — rent, utilities, salaries, and so on</p>
   </div>
-  <a class="btn" href="/expenses/new?back={{ cur_url|urlencode }}">+ Add expense</a>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <a class="btn-secondary" href="/accounting/journal-entries/new?template=payroll&back={{ cur_url|urlencode }}" title="Payday: salaries, SSS/PhilHealth/Pag-IBIG deductions, net pay in cash — saved for the admin to post">+ Payroll (payday)</a>
+    <a class="btn-secondary" href="/accounting/journal-entries/new?template=gov_remittance&back={{ cur_url|urlencode }}" title="Paying SSS, PhilHealth and Pag-IBIG — saved for the admin to post">+ Pay SSS / PhilHealth / Pag-IBIG</a>
+    <a class="btn" href="/expenses/new?back={{ cur_url|urlencode }}">+ Add expense</a>
+  </div>
 </div>
 
 <div class="stat-row">

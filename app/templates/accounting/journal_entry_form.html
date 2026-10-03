@@ -5,9 +5,13 @@
   <h1 class="page-title">{{ "Edit " ~ entry.journal_no if entry else "New Journal Entry" }}</h1>
   <a class="btn-link" href="{{ back }}">← Back</a>
 </div>
-{% include "accounting/_subnav.html" %}
+{# The edit page doesn't pass is_admin_user — only admin reaches it. #}
+{% set admin_view = is_admin_user is not defined or is_admin_user %}
+{% if admin_view %}{% include "accounting/_subnav.html" %}{% endif %}
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+{% if saved %}<div class="alert" style="background:#dcfce7;color:#15803d;border-color:#bbf7d0;">Saved {{ saved }} as a draft.
+  {% if admin_view %}Post it from Journal Entries once it's checked.{% else %}The admin checks it and posts it to the books — nothing more to do here.{% endif %}</div>{% endif %}
 
 <form class="card form" method="post" action="{{ '/accounting/journal-entries/' ~ entry.id ~ '/edit' if entry else '/accounting/journal-entries' }}" novalidate id="jeForm">
   <input type="hidden" name="back" value="{{ back }}">
@@ -46,8 +50,8 @@
   {% if entry %}
   <p class="muted full">{{ 'Still a draft' if entry.status == 'draft' else 'Already posted' }} — saving replaces its lines immediately{{ '' if entry.status == 'draft' else ", updating every report that reads from it." }} Editing is only available today; past that, use Reverse instead.</p>
   {% else %}
-  <p class="muted full">Saved as a draft first — it won't affect any report or balance until someone explicitly
-    Posts it from the Manual Journal Entries list.</p>
+  <p class="muted full">Saved as a draft first — it won't affect any report or balance until
+    {% if admin_view %}someone explicitly Posts it from the Manual Journal Entries list{% else %}the admin checks it and Posts it{% endif %}.</p>
   {% endif %}
 </form>
 

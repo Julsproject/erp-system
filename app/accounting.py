@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from . import audit, models
 from .database import get_db
-from .deps import get_current_user, is_admin, safe_back_url, url_with
+from .deps import get_current_user, is_admin, is_staff, safe_back_url, url_with
 from .templating import templates
 
 router = APIRouter()
@@ -2105,21 +2105,14 @@ JOURNAL_TEMPLATES = {
         ("code:1000", "credit", "Total paid in cash (fills itself in)", "auto"),
     ],
 }
-JOURNAL_TEMPLATE_DESCRIPTIONS = {
-    "payroll": "Salaries for ",
-    "gov_remittance": "SSS / PhilHealth / Pag-IBIG payment for ",
-}
+# Templates a manager (not just admin) may open and save — as a draft only,
+# limited to that template's own accounts; the admin checks and Posts it.
+# Everything else about Journal Entries stays admin-only.
+STAFF_JOURNAL_TEMPLATES = ("payroll", "gov_remittance")
 
 
-@router.get("/accounting/journal-entries/new", response_class=HTMLResponse)
-def journal_entry_new(request: Request, error: str = "", description: str = "", template: str = "", back: str = "",
-                       db: Session = Depends(get_db), user=Depends(get_current_user)):
-    if not user:
-        return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
-        return RedirectResponse("/pos", status_code=302)
-    accounts = db.query(models.Account).filter(models.Account.is_active.is_(True)).order_by(models.Account.code).all()
-    template_lines = []
+def _template_lines(db: Session, template: str) -> list:
+    lines = []
     for function_key, side, *extra in JOURNAL_TEMPLATES.get(template, []):
         if function_key.startswith("code:"):
             account = db.query(models.Account).filter(
@@ -2131,16 +2124,43 @@ def journal_entry_new(request: Request, error: str = "", description: str = "", 
                 account = _resolve_mapping(db, function_key)
             except PostingError:
                 continue  # not set up yet — fall back to a blank form instead of a half-filled one
-        template_lines.append({"account_id": account.id, "side": side,
-                               "memo": extra[0] if extra else "", "auto": "auto" in extra[1:]})
+        lines.append({"account_id": account.id, "side": side,
+                      "memo": extra[0] if extra else "", "auto": "auto" in extra[1:]})
+    return lines
+
+
+def _can_use_journal_form(user, template: str) -> bool:
+    return is_admin(user) or (is_staff(user) and template in STAFF_JOURNAL_TEMPLATES)
+
+
+JOURNAL_TEMPLATE_DESCRIPTIONS = {
+    "payroll": "Salaries for ",
+    "gov_remittance": "SSS / PhilHealth / Pag-IBIG payment for ",
+}
+
+
+@router.get("/accounting/journal-entries/new", response_class=HTMLResponse)
+def journal_entry_new(request: Request, error: str = "", description: str = "", template: str = "", back: str = "",
+                       saved: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not _can_use_journal_form(user, template):
+        return RedirectResponse("/pos", status_code=302)
+    template_lines = _template_lines(db, template)
+    accounts = db.query(models.Account).filter(models.Account.is_active.is_(True)).order_by(models.Account.code).all()
+    if not is_admin(user):
+        # A manager only ever sees the template's own accounts.
+        allowed = {l["account_id"] for l in template_lines}
+        accounts = [a for a in accounts if a.id in allowed]
     if not description and template in JOURNAL_TEMPLATE_DESCRIPTIONS:
         description = JOURNAL_TEMPLATE_DESCRIPTIONS[template]
     return templates.TemplateResponse(
         "accounting/journal_entry_form.html",
         {"request": request, "app_name": request.app.title, "user": user, "accounts": accounts,
          "today": _today().isoformat(), "error": error, "prefill_description": description,
-         "template_lines": template_lines, "je_template": template,
-         "back": safe_back_url(back, "/accounting/journal-entries")},
+         "template_lines": template_lines, "je_template": template, "saved": saved,
+         "is_admin_user": is_admin(user),
+         "back": safe_back_url(back, "/accounting/journal-entries" if is_admin(user) else "/expenses")},
     )
 
 
@@ -2159,7 +2179,7 @@ def journal_entry_create(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_admin(user):
+    if not _can_use_journal_form(user, template):
         return RedirectResponse("/pos", status_code=302)
     back = safe_back_url(back, "")
     txn_date = _parse_date(txn_date) or _today()
@@ -2185,6 +2205,12 @@ def journal_entry_create(
     if not description:
         return RedirectResponse(url_with("/accounting/journal-entries/new", error="Description is required.",
                                          template=template, back=back), status_code=302)
+    if not is_admin(user):
+        # A manager's entry may only use this template's own accounts.
+        allowed = {l["account_id"] for l in _template_lines(db, template)}
+        if any(l["_account_id"] not in allowed for l in lines):
+            return RedirectResponse(url_with("/accounting/journal-entries/new", error="Only this form's own accounts can be used.",
+                                             template=template, description=description, back=back), status_code=302)
 
     try:
         entry = post_journal(
@@ -2195,6 +2221,11 @@ def journal_entry_create(
         return RedirectResponse(url_with("/accounting/journal-entries/new", error=str(e), template=template,
                                          description=description, back=back), status_code=302)
     db.commit()
+    if not is_admin(user):
+        # A manager can't open the Journal Entries list — back to the form with
+        # a confirmation. It stays a draft until the admin checks and Posts it.
+        return RedirectResponse(url_with("/accounting/journal-entries/new", saved=entry.journal_no,
+                                         template=template, back=back), status_code=302)
     return RedirectResponse(f"/accounting/journal-entries?created={entry.journal_no}", status_code=302)
 
 
