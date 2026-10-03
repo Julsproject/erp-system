@@ -6,13 +6,14 @@
     <h1 class="page-title">Archived Customers</h1>
     <p class="muted">Hidden from the customer list and pickers — their sales history is untouched.</p>
   </div>
-  <a class="btn-secondary" href="/customers">← Back to Customers</a>
+  <a class="btn-secondary" href="{{ back }}">← Back to Customers</a>
 </div>
 
 <form class="toolbar" method="get" action="/customers/archived">
+  <input type="hidden" name="back" value="{{ back }}">
   <input class="search" type="search" name="q" id="qSearch" value="{{ q }}" placeholder="Search archived customer…" autofocus>
   <button class="btn-secondary" type="submit">Search</button>
-  {% if q %}<a class="btn-link" href="/customers/archived">Clear</a>{% endif %}
+  {% if q %}<a class="btn-link" href="/customers/archived?back={{ back|urlencode }}">Clear</a>{% endif %}
 </form>
 <script>
   // See products/list.html for why: autofocus on a pre-filled box can put
@@ -35,9 +36,9 @@
         <td>{{ c.tin or '—' }}</td>
         <td>{{ c.address or '—' }}</td>
         <td class="row-actions">
-          <a class="btn-link" href="/customers/{{ c.id }}/history">History</a>
+          <a class="btn-link" href="/customers/{{ c.id }}/history?back={{ back_here() }}">History</a>
           <form method="post" action="/customers/{{ c.id }}/restore" style="display:inline;"
-                onsubmit="return confirm('Restore {{ c.name|e }} to the customer list?');">
+                onsubmit="return confirm('Restore {{ c.name|e }} to the customer list?');"><input type="hidden" name="back" value="{{ request.url.path ~ ('?' ~ request.url.query if request.url.query else '') }}">
             <button type="submit" class="btn-link">Restore</button>
           </form>
         </td>

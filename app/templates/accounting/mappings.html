@@ -6,9 +6,10 @@
     <h1 class="page-title">Accounting Setup</h1>
     <p class="muted">Which account each ERP function posts to. Change these anytime — nothing here needs a code change.</p>
   </div>
-  <a class="btn-link" href="/accounting/coa">← Back to Chart of Accounts</a>
+  <a class="btn-link" href="{{ back }}">← Back</a>
 </div>
 {% include "accounting/_subnav.html" %}
+{% set cur_url = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') %}
 
 <div class="table-wrap">
   <table class="grid">
@@ -21,6 +22,7 @@
         <td class="strong">{{ m.label }}<div class="muted" style="font-size:11px;">{{ m.function_key }}</div></td>
         <td colspan="2">
           <form method="post" action="/accounting/mappings/{{ m.id }}" style="display:inline-flex;gap:8px;align-items:center;">
+            <input type="hidden" name="back" value="{{ cur_url }}">
             <select name="account_id" style="min-width:260px;">
               {% for a in accounts %}
               <option value="{{ a.id }}" {{ 'selected' if a.id == m.account_id }}>{{ a.code }} · {{ a.name }}</option>
@@ -51,6 +53,7 @@
         <td class="strong">{{ c.name }}</td>
         <td>
           <form method="post" action="/accounting/expense-category-account/{{ c.id }}" style="display:inline-flex;gap:8px;align-items:center;">
+            <input type="hidden" name="back" value="{{ cur_url }}">
             <select name="account_id" style="min-width:260px;">
               <option value="">— use fallback —</option>
               {% for a in expense_accounts %}

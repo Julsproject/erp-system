@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from . import accounting, audit, cheque_books, models
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_staff, safe_back_url, url_with
 from .purchases import PAYMENT_METHODS, _purchase_outstanding, _settled_for_purchases
 from .sales import _resolve_settlement_datetime
 from .suppliers import _outstanding_purchases
@@ -132,21 +132,24 @@ def _cheque_context(db: Session):
 
 @router.get("/payments/new", response_class=HTMLResponse)
 def new_payment(
-    request: Request, supplier_id: int = 0, error: str = "",
+    request: Request, supplier_id: int = 0, error: str = "", back: str = "",
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
+    """`back` is the page it was opened from (Pay Suppliers, a filtered
+    Payables list)."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
+    back = safe_back_url(back, "/payments")
     supplier = db.get(models.Supplier, supplier_id) if supplier_id else None
     if not supplier:
-        return RedirectResponse("/payments", status_code=302)
-    return _payment_form(request, db, user, supplier, error=error)
+        return RedirectResponse(back, status_code=302)
+    return _payment_form(request, db, user, supplier, error=error, back=back)
 
 
 def _payment_form(request: Request, db: Session, user, supplier, *, error: str = "", posted: dict = None,
-                  status_code: int = 200):
+                  status_code: int = 200, back: str = "/payments"):
     """The payment screen. `posted` is what was just submitted, when it was
     turned back — so the ticks, amounts and cheque details come back as they
     were typed instead of a blank form."""
@@ -157,7 +160,7 @@ def _payment_form(request: Request, db: Session, user, supplier, *, error: str =
         {"request": request, "app_name": request.app.title, "user": user,
          "supplier": supplier, "owed": owed, "total": total,
          "methods": PAYMENT_METHODS, "accounts": _cheque_context(db),
-         "today": _today().isoformat(), "error": error, "posted": posted},
+         "today": _today().isoformat(), "error": error, "posted": posted, "back": back},
         status_code=status_code,
     )
 
@@ -171,19 +174,21 @@ def create_payment(
     cheque_no: str = Form(""), cheque_date: str = Form(""), bank: str = Form(""),
     notes: str = Form(""),
     apply_id: list[str] = Form([]), apply_amount: list[str] = Form([]),
+    back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
+    back = safe_back_url(back, "/payments")
 
     try:
         supplier = db.get(models.Supplier, int(supplier_id or 0))
     except ValueError:
         supplier = None
     if not supplier:
-        return RedirectResponse("/payments", status_code=302)
+        return RedirectResponse(back, status_code=302)
 
     posted = {
         "method": method, "payment_date": payment_date, "bank_account_id": bank_account_id,
@@ -196,7 +201,7 @@ def create_payment(
 
     def fail(msg):
         # Re-render rather than redirect, so nothing that was ticked or typed is lost.
-        return _payment_form(request, db, user, supplier, error=msg, posted=posted, status_code=400)
+        return _payment_form(request, db, user, supplier, error=msg, posted=posted, status_code=400, back=back)
 
     method = (method or "cheque").strip().lower()
     if method not in dict(PAYMENT_METHODS):
@@ -292,7 +297,7 @@ def create_payment(
                 pdc.cheque_no, supplier.name, len(applications), total),
         )
         db.commit()
-        return RedirectResponse("/pdc/{}".format(pdc.id), status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url_with("/pdc/{}".format(pdc.id), back=back), status_code=status.HTTP_302_FOUND)
 
     # --- everything else settles right away --------------------------------
     payment_dt, date_err = _resolve_settlement_datetime(payment_date)
@@ -329,4 +334,7 @@ def create_payment(
             supplier.name, total, dict(PAYMENT_METHODS)[method], len(applications)),
     )
     db.commit()
-    return RedirectResponse("/suppliers/{}/history".format(supplier.id), status_code=status.HTTP_302_FOUND)
+    # The supplier's history shows the payment just made; its Back returns
+    # to wherever this payment was started from.
+    return RedirectResponse(url_with("/suppliers/{}/history".format(supplier.id), back=back),
+                            status_code=status.HTTP_302_FOUND)

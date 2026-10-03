@@ -6,7 +6,7 @@
     <h1 class="page-title">Suppliers</h1>
     <p class="muted">{{ total }} supplier{{ '' if total == 1 else 's' }}</p>
   </div>
-  <a class="btn" href="/suppliers/new">+ Add supplier</a>
+  <a class="btn" href="/suppliers/new?back={{ back_here() }}">+ Add supplier</a>
 </div>
 
 <div class="tabs">
@@ -63,8 +63,8 @@
           {% endif %}
         </td>
         <td class="row-actions">
-          <a class="btn-link" href="/suppliers/{{ s.id }}/history">History</a>
-          <a class="btn-link" href="/suppliers/{{ s.id }}/edit">Edit</a>
+          <a class="btn-link" href="/suppliers/{{ s.id }}/history?back={{ back_here() }}">History</a>
+          <a class="btn-link" href="/suppliers/{{ s.id }}/edit?back={{ back_here() }}">Edit</a>
         </td>
       </tr>
       {% else %}
@@ -76,9 +76,9 @@
 
 {% if pages > 1 %}
 <div class="pager">
-  {% if page > 1 %}<a class="btn-secondary" href="/suppliers?page={{ page - 1 }}&q={{ q }}">← Prev</a>{% endif %}
+  {% if page > 1 %}<a class="btn-secondary" href="/suppliers?page={{ page - 1 }}&q={{ q|urlencode }}">← Prev</a>{% endif %}
   <span class="muted">Page {{ page }} of {{ pages }}</span>
-  {% if page < pages %}<a class="btn-secondary" href="/suppliers?page={{ page + 1 }}&q={{ q }}">Next →</a>{% endif %}
+  {% if page < pages %}<a class="btn-secondary" href="/suppliers?page={{ page + 1 }}&q={{ q|urlencode }}">Next →</a>{% endif %}
 </div>
 {% endif %}
 {% endblock %}

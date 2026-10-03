@@ -7,7 +7,7 @@ until it is converted.
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from . import audit, models, settings_store
 from .customers import get_or_create_customer
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_staff, safe_back_url, url_with
 from .pos import METHOD_LABELS, _finalize_sale, _money, _vat_of
 from .templating import templates
 
@@ -218,19 +218,23 @@ def view_quotation(
     quote_id: int,
     request: Request,
     error: str = "",
+    back: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
+    """`back` is the page this quotation was opened from — the (filtered)
+    Quotations list, or POS right after saving one there."""
     if not user:
         return RedirectResponse("/login", status_code=302)
+    back = safe_back_url(back, "/quotations")
     quote = db.get(models.Quotation, quote_id)
     if not quote:
-        return RedirectResponse("/quotations", status_code=302)
+        return RedirectResponse(back, status_code=302)
     return templates.TemplateResponse(
         "quotations/view.html",
         {
             "request": request, "app_name": request.app.title, "user": user,
-            "quote": quote, "error": error, "methods": METHOD_LABELS,
+            "quote": quote, "error": error, "methods": METHOD_LABELS, "back": back,
         },
     )
 
@@ -313,7 +317,7 @@ def quotation_pdf(quote_id: int, db: Session = Depends(get_db), user=Depends(get
 
 
 @router.post("/quotations/{quote_id:int}/confirm")
-def confirm_quotation(quote_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def confirm_quotation(quote_id: int, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     quote = db.get(models.Quotation, quote_id)
@@ -321,11 +325,11 @@ def confirm_quotation(quote_id: int, db: Session = Depends(get_db), user=Depends
         quote.status = "confirmed"
         quote.confirmed_at = func.now()
         db.commit()
-    return RedirectResponse(f"/quotations/{quote_id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url_with(f"/quotations/{quote_id}", back=safe_back_url(back, "")), status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/quotations/{quote_id:int}/cancel")
-def cancel_quotation(quote_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def cancel_quotation(quote_id: int, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     quote = db.get(models.Quotation, quote_id)
@@ -333,11 +337,11 @@ def cancel_quotation(quote_id: int, db: Session = Depends(get_db), user=Depends(
         quote.status = "cancelled"
         quote.cancelled_at = func.now()
         db.commit()
-    return RedirectResponse(f"/quotations/{quote_id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url_with(f"/quotations/{quote_id}", back=safe_back_url(back, "")), status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/quotations/{quote_id:int}/reopen")
-def reopen_quotation(quote_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def reopen_quotation(quote_id: int, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Bring a cancelled quotation back to pending, e.g. the customer changed their mind."""
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -346,7 +350,7 @@ def reopen_quotation(quote_id: int, db: Session = Depends(get_db), user=Depends(
         quote.status = "pending"
         quote.cancelled_at = None
         db.commit()
-    return RedirectResponse(f"/quotations/{quote_id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url_with(f"/quotations/{quote_id}", back=safe_back_url(back, "")), status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/quotations/{quote_id:int}/convert")

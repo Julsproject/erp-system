@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from . import audit, models
 from .database import get_db
-from .deps import get_current_user
+from .deps import get_current_user, safe_back_url, url_with
 from .templating import templates
 
 router = APIRouter()
@@ -189,7 +189,8 @@ def create_delivery(
         collected = _dec(collect_amount)
         if collected <= 0:
             return RedirectResponse(
-                "/deliveries/new?error=Enter+the+amount+collected+for+this+COD+delivery.", status_code=302
+                url_with("/deliveries/new", sale_id=sale.id, error="Enter the amount collected for this COD delivery."),
+                status_code=302,
             )
         if collected > outstanding:
             collected = outstanding  # never collect more than is owed
@@ -242,32 +243,36 @@ def view_delivery(
     delivery_id: int,
     request: Request,
     error: str = "",
+    back: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    back = safe_back_url(back, "/deliveries")
     delivery = db.get(models.Delivery, delivery_id)
     if not delivery:
-        return RedirectResponse("/deliveries", status_code=302)
+        return RedirectResponse(back, status_code=302)
     return templates.TemplateResponse(
         "deliveries/view.html",
         {"request": request, "app_name": request.app.title, "user": user, "delivery": delivery,
          "labels": STATUS_LABELS, "cod_methods": COD_METHODS, "error": error,
-         "outstanding": _outstanding(db, delivery.sale)},
+         "outstanding": _outstanding(db, delivery.sale), "back": back},
     )
 
 
 @router.get("/deliveries/{delivery_id:int}/edit", response_class=HTMLResponse)
-def edit_delivery(delivery_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def edit_delivery(delivery_id: int, request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    view_url = url_with(f"/deliveries/{delivery_id}", back=safe_back_url(back, ""))
     delivery = db.get(models.Delivery, delivery_id)
     if not delivery or delivery.status == "cancelled":
-        return RedirectResponse(f"/deliveries/{delivery_id}", status_code=302)
+        return RedirectResponse(view_url, status_code=302)
     return templates.TemplateResponse(
         "deliveries/edit.html",
-        {"request": request, "app_name": request.app.title, "user": user, "delivery": delivery},
+        {"request": request, "app_name": request.app.title, "user": user, "delivery": delivery,
+         "back": safe_back_url(back, ""), "view_url": view_url},
     )
 
 
@@ -276,13 +281,15 @@ def update_delivery(
     delivery_id: int,
     recipient_name: str = Form(""), address: str = Form(""), contact_no: str = Form(""),
     driver_name: str = Form(""), vehicle: str = Form(""), scheduled_date: str = Form(""), notes: str = Form(""),
+    back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    view_url = url_with(f"/deliveries/{delivery_id}", back=safe_back_url(back, ""))
     delivery = db.get(models.Delivery, delivery_id)
     if not delivery or delivery.status == "cancelled":
-        return RedirectResponse(f"/deliveries/{delivery_id}", status_code=302)
+        return RedirectResponse(view_url, status_code=302)
     delivery.recipient_name = (recipient_name or "").strip() or None
     delivery.address = (address or "").strip() or None
     delivery.contact_no = (contact_no or "").strip() or None
@@ -291,11 +298,11 @@ def update_delivery(
     delivery.scheduled_date = _parse_date((scheduled_date or "").strip())
     delivery.notes = (notes or "").strip() or None
     db.commit()
-    return RedirectResponse(f"/deliveries/{delivery_id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(view_url, status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/deliveries/{delivery_id:int}/cancel")
-def cancel_delivery(delivery_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def cancel_delivery(delivery_id: int, request: Request, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     delivery = db.get(models.Delivery, delivery_id)
@@ -308,4 +315,4 @@ def cancel_delivery(delivery_id: int, request: Request, db: Session = Depends(ge
             summary=f"Cancelled {delivery.delivery_no}",
         )
         db.commit()
-    return RedirectResponse(f"/deliveries/{delivery_id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url_with(f"/deliveries/{delivery_id}", back=safe_back_url(back, "")), status_code=status.HTTP_302_FOUND)

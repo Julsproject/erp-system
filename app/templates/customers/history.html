@@ -13,7 +13,7 @@
   <div class="head-actions">
     <a class="btn-secondary" href="/customers/{{ customer.id }}/history/export.xlsx">⬇ Export Excel</a>
     <a class="btn-secondary" href="/customers/{{ customer.id }}/history/export.pdf">⬇ Export PDF</a>
-    <a class="btn-secondary" href="/customers">← Back to Customers</a>
+    <a class="btn-secondary" href="{{ back }}">← Back</a>
   </div>
 </div>
 
@@ -25,7 +25,7 @@
 
 {% if rows %}
 <form class="toolbar" onsubmit="return false;">
-  <input class="search" type="search" id="invFilter" placeholder="Filter by invoice #…" autocomplete="off" oninput="filterInvoices()">
+  <input class="search" type="search" id="invFilter" data-remember="inv" placeholder="Filter by invoice #…" autocomplete="off" oninput="filterInvoices()">
 </form>
 {% endif %}
 
@@ -51,7 +51,7 @@
           {% endif %}
         </td>
         <td class="row-actions">
-          <a class="btn-link" href="/pos/receipt/{{ s.id }}?from=customer&cust={{ customer.id }}">Receipt</a>
+          <a class="btn-link" href="/pos/receipt/{{ s.id }}?from=customer&cust={{ customer.id }}&back={{ back_here() }}">Receipt</a>
           <a class="btn-link" href="/pos/receipt/{{ s.id }}/pdf">PDF</a>
         </td>
       </tr>

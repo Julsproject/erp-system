@@ -38,7 +38,7 @@
         <td>{{ s.voided_at.strftime('%b %d, %Y %I:%M %p') if s.voided_at else '—' }}</td>
         <td>{{ (s.voided_by.full_name or s.voided_by.username) if s.voided_by else '—' }}</td>
         <td>{{ s.void_reason or '—' }}</td>
-        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales">Receipt</a></td>
+        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales&back={{ back_here() }}">Receipt</a></td>
       </tr>
       {% else %}
       <tr><td colspan="8" class="empty">No voided sales{{ '' }}.</td></tr>

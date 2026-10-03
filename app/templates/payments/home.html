@@ -6,7 +6,7 @@
     <h1 class="page-title">Supplier Payments</h1>
     <p class="muted">Who we still owe. Pick a supplier to pay several of its invoices with one cheque.</p>
   </div>
-  <a class="btn-secondary" href="/cheques/books">Cheque Books →</a>
+  <a class="btn-secondary" href="/cheques/books?back={{ back_here() }}">Cheque Books →</a>
 </div>
 
 <div class="tabs">
@@ -52,7 +52,7 @@
         </td>
         <td class="num strong">{{ r.owed|peso }}</td>
         <td class="row-actions">
-          <a class="btn-link" href="/payments/new?supplier_id={{ r.supplier.id }}">Pay →</a>
+          <a class="btn-link" href="/payments/new?supplier_id={{ r.supplier.id }}&back={{ back_here() }}">Pay →</a>
         </td>
       </tr>
       {% else %}

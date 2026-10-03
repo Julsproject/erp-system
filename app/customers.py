@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from . import audit, models, settings_store
 from .database import get_db
-from .deps import get_current_user, is_staff, safe_back_url
+from .deps import get_current_user, is_staff, safe_back_url, url_with
 from .templating import templates
 
 router = APIRouter()
@@ -151,7 +151,7 @@ _MERGE_FILL_FIELDS = ("tin", "address")
 
 @router.post("/customers/merge")
 def merge_customers(
-    request: Request, keep_id: int = Form(...), merge_id: int = Form(...),
+    request: Request, keep_id: int = Form(...), merge_id: int = Form(...), back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -159,11 +159,11 @@ def merge_customers(
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     if keep_id == merge_id:
-        return RedirectResponse("/customers?merge_error=" + quote("Pick two different customers."), status_code=302)
+        return RedirectResponse(url_with(safe_back_url(back, "/customers"), merge_error="Pick two different customers.", merged=None), status_code=302)
     keep = db.get(models.Customer, keep_id)
     dup = db.get(models.Customer, merge_id)
     if not keep or not dup or not keep.is_active or not dup.is_active:
-        return RedirectResponse("/customers?merge_error=" + quote("Customer not found."), status_code=302)
+        return RedirectResponse(url_with(safe_back_url(back, "/customers"), merge_error="Customer not found.", merged=None), status_code=302)
 
     # What the Unmerge button on the Activity Log needs to put it all back.
     filled = {f: getattr(dup, f) for f in _MERGE_FILL_FIELDS if not getattr(keep, f) and getattr(dup, f)}
@@ -190,7 +190,7 @@ def merge_customers(
         changes={"_unmerge": undo},
     )
     db.commit()
-    return RedirectResponse("/customers?merged=" + quote(keep.name), status_code=302)
+    return RedirectResponse(url_with(safe_back_url(back, "/customers"), merged=keep.name, merge_error=None), status_code=302)
 
 
 def unmerge_customer(db: Session, log: models.AuditLog, undo: dict, *, user, request=None) -> str:
@@ -302,13 +302,13 @@ def list_customers(
 
 
 @router.get("/customers/new", response_class=HTMLResponse)
-def new_customer(request: Request, user=Depends(get_current_user)):
+def new_customer(request: Request, back: str = "", user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     return templates.TemplateResponse(
         "customers/form.html",
         {"request": request, "app_name": request.app.title, "user": user, "customer": None, "error": None,
-         "back": "/customers"},
+         "back": safe_back_url(back, "/customers")},
     )
 
 
@@ -328,7 +328,7 @@ def edit_customer(customer_id: int, request: Request, back: str = "", db: Sessio
 
 
 @router.get("/customers/{customer_id:int}/history", response_class=HTMLResponse)
-def customer_history(customer_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def customer_history(customer_id: int, request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     customer = db.get(models.Customer, customer_id)
@@ -371,6 +371,7 @@ def customer_history(customer_id: int, request: Request, db: Session = Depends(g
             "request": request, "app_name": request.app.title, "user": user,
             "customer": customer, "rows": rows, "count": len(rows),
             "total_spent": total_spent, "total_out": total_out,
+            "back": safe_back_url(back, "/customers"),
         },
     )
 
@@ -660,7 +661,7 @@ def delete_customer(customer_id: int, request: Request, db: Session = Depends(ge
 
 
 @router.get("/customers/archived", response_class=HTMLResponse)
-def archived_customers(request: Request, q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+def archived_customers(request: Request, q: str = "", back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -672,12 +673,13 @@ def archived_customers(request: Request, q: str = "", db: Session = Depends(get_
     customers = query.order_by(models.Customer.name).all()
     return templates.TemplateResponse(
         "customers/archived.html",
-        {"request": request, "app_name": request.app.title, "user": user, "customers": customers, "q": q},
+        {"request": request, "app_name": request.app.title, "user": user, "customers": customers, "q": q,
+         "back": safe_back_url(back, "/customers")},
     )
 
 
 @router.post("/customers/{customer_id:int}/restore")
-def restore_customer(customer_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def restore_customer(customer_id: int, request: Request, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -691,4 +693,4 @@ def restore_customer(customer_id: int, request: Request, db: Session = Depends(g
             summary=f"Restored customer “{customer.name}” from archive",
         )
         db.commit()
-    return RedirectResponse("/customers/archived", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(safe_back_url(back, "/customers/archived"), status_code=status.HTTP_302_FOUND)

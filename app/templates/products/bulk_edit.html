@@ -6,10 +6,11 @@
     <h1 class="page-title">Bulk Edit</h1>
     <p class="muted">{{ products|length }} product{{ '' if products|length == 1 else 's' }} selected. Tick what to change — anything left unticked stays as it is.</p>
   </div>
-  <a class="btn-link" href="/products">← Back to inventory</a>
+  <a class="btn-link" href="{{ back }}">← Back to inventory</a>
 </div>
 
 <form method="post" action="/products/bulk-edit/apply" onsubmit="return confirmBulk();">
+  <input type="hidden" name="back" value="{{ back }}">
   {% for p in products %}<input type="hidden" name="ids" value="{{ p.id }}">{% endfor %}
 
   <div class="card" style="max-width:520px;margin-bottom:18px;display:grid;gap:14px;">

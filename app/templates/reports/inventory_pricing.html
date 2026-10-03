@@ -6,7 +6,7 @@
     <h1 class="page-title">Inventory Pricing</h1>
     <p class="muted">Selling price, markup and margin for every product — and for each of its unit conversions</p>
   </div>
-  <a class="btn-secondary" href="/reports/inventory-pricing/export?q={{ q }}&category_id={{ category_id }}&shelf_id={{ shelf_id }}">⬇ Download Excel</a>
+  <a class="btn-secondary" href="/reports/inventory-pricing/export?q={{ q|urlencode }}&category_id={{ category_id }}&shelf_id={{ shelf_id }}">⬇ Download Excel</a>
 </div>
 
 <div class="stat-row">
@@ -29,7 +29,7 @@
   })();
 </script>
 
-{% set qs_base = ('q=' ~ q ~ '&' if q) %}
+{% set qs_base = ('q=' ~ q|urlencode ~ '&' if q) %}
 <div class="pill-filter-bar">
   {% if categories %}
   {% set current_cat = categories|selectattr('id', 'equalto', category_id)|map(attribute='name')|first if category_id else None %}
@@ -118,9 +118,9 @@
 
 {% if pages > 1 %}
 <div class="pager">
-  {% if page > 1 %}<a class="btn-secondary" href="/reports/inventory-pricing?page={{ page - 1 }}&q={{ q }}&category_id={{ category_id }}&shelf_id={{ shelf_id }}">← Prev</a>{% endif %}
+  {% if page > 1 %}<a class="btn-secondary" href="/reports/inventory-pricing?page={{ page - 1 }}&q={{ q|urlencode }}&category_id={{ category_id }}&shelf_id={{ shelf_id }}">← Prev</a>{% endif %}
   <span class="muted">Page {{ page }} of {{ pages }}</span>
-  {% if page < pages %}<a class="btn-secondary" href="/reports/inventory-pricing?page={{ page + 1 }}&q={{ q }}&category_id={{ category_id }}&shelf_id={{ shelf_id }}">Next →</a>{% endif %}
+  {% if page < pages %}<a class="btn-secondary" href="/reports/inventory-pricing?page={{ page + 1 }}&q={{ q|urlencode }}&category_id={{ category_id }}&shelf_id={{ shelf_id }}">Next →</a>{% endif %}
 </div>
 {% endif %}
 

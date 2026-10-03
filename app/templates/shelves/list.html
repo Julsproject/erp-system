@@ -9,7 +9,7 @@
   <div class="head-actions">
     {% set can_edit = (user.role or '')|lower in ('admin', 'manager') %}
     {% if can_edit %}<button type="button" class="btn-secondary" onclick="openShelfMerge()">⇄ Merge Shelves</button>{% endif %}
-    <a class="btn-link" href="/products">← Back to inventory</a>
+    <a class="btn-link" href="{{ back }}">← Back to inventory</a>
   </div>
 </div>
 
@@ -22,6 +22,7 @@
 <div class="card" style="max-width:420px; margin-bottom:18px;">
   <h2 style="margin:0 0 12px; font-size:16px;">Add a shelf</h2>
   <form class="form" method="post" action="/shelves" style="grid-template-columns:1fr;">
+    <input type="hidden" name="back" value="{{ back }}">
     <label>Shelf name
       <input type="text" name="name" placeholder="e.g. Shelf 1, Shelf A" maxlength="80" required>
     </label>
@@ -84,6 +85,7 @@
 </div>
 
 <form id="shelfMergeForm" method="post" action="/shelves/merge" style="display:none;">
+  <input type="hidden" name="back" value="{{ back }}">
   <input type="hidden" name="keep_id" id="shelfMergeKeepId">
   <input type="hidden" name="merge_id" id="shelfMergeMergeId">
 </form>

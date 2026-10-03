@@ -8,7 +8,7 @@
     <p class="muted">{{ product.name }} · currently counted in <strong>{{ old_unit }}</strong></p>
   </div>
   <div class="head-actions">
-    <a class="btn-link" href="/products/{{ product.id }}/edit">← Back to product</a>
+    <a class="btn-link" href="/products/{{ product.id }}/edit{{ '?back=' ~ back|urlencode if back }}">← Back to product</a>
   </div>
 </div>
 
@@ -16,6 +16,7 @@
 
 <section class="card" style="max-width:720px;">
   <form method="post" action="/products/{{ product.id }}/change-unit" id="cuForm">
+    <input type="hidden" name="back" value="{{ back }}">
     <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
       <label style="margin:0;">New base unit
         <input name="new_unit" id="cuUnit" list="cu-units" required placeholder="e.g. Box, Roll, Bag" autocomplete="off">

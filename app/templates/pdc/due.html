@@ -29,6 +29,7 @@
 
 {% if rows %}
 <form method="post" action="/pdc/due/clear" id="clearForm" onsubmit="return confirmClear();">
+  <input type="hidden" name="direction" value="{{ direction }}">
   <div class="card form" style="margin-bottom:14px;">
     <label>Cleared on
       <input type="date" name="clear_date" value="{{ today_iso }}" required>
@@ -56,7 +57,7 @@
         <tr>
           <td><input type="checkbox" name="pdc_id" value="{{ r.id }}" class="pick"
                      data-amount="{{ r.amount or 0 }}" onchange="recalc()" checked></td>
-          <td class="strong"><a class="btn-link" href="/pdc/{{ r.id }}">{{ r.cheque_no or '—' }}</a></td>
+          <td class="strong"><a class="btn-link" href="/pdc/{{ r.id }}?back={{ back_here() }}">{{ r.cheque_no or '—' }}</a></td>
           <td>
             {{ r.cheque_date.strftime('%b %d, %Y') }}
             {% set overdue = (today - r.cheque_date).days %}

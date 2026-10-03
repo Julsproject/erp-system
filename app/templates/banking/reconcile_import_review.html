@@ -5,7 +5,7 @@
   <div>
     <h1 class="page-title">Review Statement Import — {{ account.name }}</h1>
   </div>
-  <a class="btn-secondary" href="/banking/accounts/{{ account.id }}/reconcile">← Back to Reconcile</a>
+  <a class="btn-secondary" href="/banking/accounts/{{ account.id }}/reconcile?{{ {"statement_balance": statement_balance, "back": back}|urlencode }}">← Back to Reconcile</a>
 </div>
 
 {% if error %}
@@ -18,6 +18,8 @@
   If these look wrong, re-check your CSV's header row and re-upload.</p>
 
 <form method="post" action="/banking/accounts/{{ account.id }}/reconcile">
+  <input type="hidden" name="statement_balance" value="{{ statement_balance }}">
+  <input type="hidden" name="back" value="{{ back }}">
   <h3>Matched <span class="muted">({{ matched|length }} statement row(s) matched to an existing transaction — unchecking one leaves it unreconciled)</span></h3>
   <div class="table-wrap" style="margin-bottom:18px;">
     <table class="grid">

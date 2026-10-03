@@ -14,7 +14,9 @@ from sqlalchemy.orm import Session
 
 from . import accounting, models
 from .database import get_db
-from .deps import get_current_user, is_staff
+from urllib.parse import quote
+
+from .deps import get_current_user, is_staff, safe_back_url
 from .templating import templates
 
 router = APIRouter()
@@ -99,14 +101,19 @@ def _sold_amount(sale) -> Decimal:
     return sale.total or Decimal("0")
 
 
-def _back_url(user, sale=None, from_page: str = "") -> str:
-    """Where "back"/"cancel"/post-submit should go. `from_page` (carried
+def _back_url(user, sale=None, from_page: str = "", back: str = "") -> str:
+    """Where "back"/"cancel"/post-submit should go. An explicit `back` (the
+    exact page that opened this one — Receivables with its filters, the
+    Dashboard, a credit statement) wins. Otherwise `from_page` (carried
     through the page's own query string / hidden field) wins when set — it's
     how we actually know whether this collect-payment page was opened from
     the Credits statement or from Sales > Receivables, instead of guessing
     from role. Falls back to the old role-based guess (admins ->
     receivables list; cashiers, who can't see that list, -> the customer's
     credit statement) only when nothing was passed."""
+    back = safe_back_url(back, "")
+    if back:
+        return back
     if from_page == "credits" and sale and sale.customer_id:
         return f"/credits/{sale.customer_id}"
     if is_staff(user):
@@ -511,7 +518,7 @@ def receivables(
 
 
 @router.get("/sales/receivables/{sale_id:int}/pay", response_class=HTMLResponse)
-def settle_form(sale_id: int, request: Request, from_page: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+def settle_form(sale_id: int, request: Request, from_page: str = "", back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -526,7 +533,8 @@ def settle_form(sale_id: int, request: Request, from_page: str = "", db: Session
         {
             "request": request, "app_name": request.app.title, "user": user,
             "sale": sale, "outstanding": outstanding, "methods": SETTLE_METHODS, "error": None,
-            "back_url": _back_url(user, sale, from_page), "from_page": from_page, "payment_date": "",
+            "back_url": _back_url(user, sale, from_page, back), "from_page": from_page, "back": safe_back_url(back, ""),
+            "payment_date": "",
             "today_iso": datetime.now(MANILA).date().isoformat(),
         },
     )
@@ -537,6 +545,7 @@ def settle_pay(
     sale_id: int, request: Request,
     method: str = Form("cash"), amount: str = Form(""), ref_no: str = Form(""), from_page: str = Form(""),
     payment_date: str = Form(""), cheque_date: str = Form(""), bank: str = Form(""), cheque_no: str = Form(""),
+    back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -553,13 +562,14 @@ def settle_pay(
     amount = _dec(amount)
     ref_no = (ref_no or "").strip() or None
     from_page = (from_page or "").strip()
+    back = safe_back_url(back, "")
 
     def rerender(error):
         return templates.TemplateResponse(
             "sales/settle.html",
             {"request": request, "app_name": request.app.title, "user": user,
              "sale": sale, "outstanding": outstanding, "methods": SETTLE_METHODS, "error": error,
-             "back_url": _back_url(user, sale, from_page), "from_page": from_page,
+             "back_url": _back_url(user, sale, from_page, back), "from_page": from_page, "back": back,
              "payment_date": payment_date or "",
              "today_iso": datetime.now(MANILA).date().isoformat()},
         )
@@ -593,7 +603,10 @@ def settle_pay(
         db.flush()
         db.add(models.PdcApplication(pdc_id=pdc.id, sale_id=sale.id, amount=amount))
         db.commit()
-        return RedirectResponse(f"/pdc/{pdc.id}", status_code=status.HTTP_302_FOUND)
+        # The new cheque's page, whose "← Back" returns to wherever this
+        # payment was started from.
+        return RedirectResponse(f"/pdc/{pdc.id}?back={quote(_back_url(user, sale, from_page, back), safe='')}",
+                                status_code=status.HTTP_302_FOUND)
 
     settlement = models.ReceivableSettlement(
         sale_id=sale.id, method=method, amount=amount, ref_no=ref_no,
@@ -612,4 +625,4 @@ def settle_pay(
     except accounting.PostingError:
         pass
     db.commit()
-    return RedirectResponse(_back_url(user, sale, from_page), status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(_back_url(user, sale, from_page, back), status_code=status.HTTP_302_FOUND)

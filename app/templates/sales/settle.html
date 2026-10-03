@@ -17,6 +17,7 @@
 
 <form class="card form" method="post" action="/sales/receivables/{{ sale.id }}/pay" style="margin-top:16px;" id="settleForm">
   <input type="hidden" name="from_page" value="{{ from_page }}">
+  <input type="hidden" name="back" value="{{ back }}">
   <label>Method
     <select name="method" id="method" onchange="toggleCheque()">
       {% for value, label in methods %}<option value="{{ value }}">{{ label }}</option>{% endfor %}

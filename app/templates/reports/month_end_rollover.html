@@ -33,7 +33,7 @@
       {% for r in rows %}
       <tr>
         <td class="strong">{{ r.period }}</td>
-        <td><a class="btn-link" href="/reports/month-end-rollover?q={{ r.product_name }}">{{ r.product_name }}</a></td>
+        <td><a class="btn-link" href="/reports/month-end-rollover?q={{ r.product_name|urlencode }}{{ '&period=' ~ period|urlencode if period }}">{{ r.product_name }}</a></td>
         <td class="num strong">{{ r.qty_moved|qty }}</td>
         <td class="num muted">{{ r.old_beginning|qty }}</td>
         <td class="num">{{ r.new_beginning|qty }}</td>

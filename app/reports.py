@@ -12,14 +12,14 @@ from zoneinfo import ZoneInfo
 import openpyxl
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import and_, func, not_
 from sqlalchemy.orm import Session
 
 from . import models, pricing, settings_store
 from .database import get_db
-from .deps import get_current_user, is_admin, is_staff
+from .deps import get_current_user, is_admin, is_staff, safe_back_url, url_with
 from .products import low_stock_expr
 from .search_utils import multi_word_ilike
 from .templating import templates
@@ -621,23 +621,24 @@ def pos_price_changes(request: Request, days: int = 30, date_from: str = "", dat
 
 
 @router.post("/reports/pos-price-changes/{entry_id:int}/undo")
-def pos_price_change_undo(entry_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def pos_price_change_undo(entry_id: int, request: Request, back: str = Form(""),
+                          db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Put back the price a POS "Set as new price" replaced — admin only, and
     only while the price is still the one the POS set (a later change on the
     Selling Price tab isn't silently thrown away)."""
-    from urllib.parse import quote
     from . import audit
-    back = "/reports/pos-price-changes"
+    # Back to the report as it was (period/filters), with the notice on it.
+    back = safe_back_url(back, "/reports/pos-price-changes")
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
-        return RedirectResponse(f"{back}?msg={quote('Only an admin can undo a price change.')}", status_code=302)
+        return RedirectResponse(url_with(back, msg="Only an admin can undo a price change."), status_code=302)
     e = db.get(models.AuditLog, entry_id)
     if not e or not (e.summary or "").count("from POS:"):
-        return RedirectResponse(f"{back}?msg={quote('That price change was not found.')}", status_code=302)
+        return RedirectResponse(url_with(back, msg="That price change was not found."), status_code=302)
     rows = [r for r in _pos_price_change_rows(db, date(2000, 1, 1), _today()) if r["entry"].id == entry_id]
     if not rows or not rows[0]["can_undo"]:
-        return RedirectResponse(f"{back}?msg={quote('The price has changed since (or it was already undone) — edit it on the Selling Price tab instead.')}", status_code=302)
+        return RedirectResponse(url_with(back, msg="The price has changed since (or it was already undone) — edit it on the Selling Price tab instead."), status_code=302)
     r = rows[0]
     product = db.get(models.Product, r["product"].id)
     unit = next((u for u in product.units if u.name == r["unit"]), None)
@@ -654,7 +655,7 @@ def pos_price_change_undo(entry_id: int, request: Request, db: Session = Depends
     )
     db.commit()
     done = f"{product.name}: price back to ₱{r['old']:,.2f} per {r['unit']}."
-    return RedirectResponse(f"{back}?msg={quote(done)}", status_code=302)
+    return RedirectResponse(url_with(back, msg=done), status_code=302)
 
 
 @router.get("/reports/price-overrides/export")

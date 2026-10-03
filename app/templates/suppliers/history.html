@@ -12,8 +12,8 @@
     </p>
   </div>
   <div class="head-actions">
-    <a class="btn-secondary" href="/suppliers">← Back</a>
-    <a class="btn" href="/purchases/new?supplier={{ supplier.id }}">+ New purchase</a>
+    <a class="btn-secondary" href="{{ back }}">← Back</a>
+    <a class="btn" href="/purchases/new?supplier={{ supplier.id }}&back={{ back_here() }}">+ New purchase</a>
   </div>
 </div>
 
@@ -28,7 +28,7 @@
 {% if payable_rows %}
 <div class="page-head" style="margin-top:22px;">
   <h3 class="ex-h" style="margin:0;">Outstanding payables</h3>
-  <a class="btn" href="/suppliers/{{ supplier.id }}/pay-full">Pay Full</a>
+  <a class="btn" href="/suppliers/{{ supplier.id }}/pay-full?back={{ back_here() }}">Pay Full</a>
 </div>
 <div class="table-wrap">
   <table class="grid">
@@ -41,7 +41,7 @@
         <td>{{ r.purchase.due_date.strftime('%b %d, %Y') if r.purchase.due_date else '—' }}</td>
         <td class="num">{{ r.purchase.total|peso }}</td>
         <td class="num owed">{{ r.outstanding|peso }}</td>
-        <td class="row-actions"><a class="btn-link" href="/purchases/{{ r.purchase.id }}">View / Pay</a></td>
+        <td class="row-actions"><a class="btn-link" href="/purchases/{{ r.purchase.id }}?back={{ back_here() }}">View / Pay</a></td>
       </tr>
       {% endfor %}
     </tbody>
@@ -102,7 +102,7 @@
         <td>{{ p.invoice_no or '—' }}</td>
         <td>{{ p.delivery_date or '—' }}</td>
         <td class="num strong">{{ p.total|peso }}</td>
-        <td class="row-actions"><a class="btn-link" href="/purchases/{{ p.id }}">View</a></td>
+        <td class="row-actions"><a class="btn-link" href="/purchases/{{ p.id }}?back={{ back_here() }}">View</a></td>
       </tr>
       {% else %}
       <tr><td colspan="8" class="empty">No purchases from this supplier yet.</td></tr>

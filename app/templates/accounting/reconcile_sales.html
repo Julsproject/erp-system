@@ -9,6 +9,7 @@
   {% set pp_url = "/accounting/reconcile-sales" %}{% set pp_keep = {} %}{% include "_period_picker.html" %}
 </div>
 {% include "accounting/_subnav.html" %}
+{% set cur_url = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') %}
 
 <div class="stat-row">
   <div class="mini-stat"><span class="mini-num">{{ ledger_total|peso }}</span><span>Ledger total (Sales + Output VAT)</span></div>
@@ -29,7 +30,7 @@
         <td class="strong">{{ s.invoice_no }}</td>
         <td>{{ s.created_at.strftime('%b %d, %Y %I:%M %p') if s.created_at else '' }}</td>
         <td class="num">{{ s.total|peso }}</td>
-        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales">Receipt</a></td>
+        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?back={{ back_here() }}">Receipt</a></td>
       </tr>
       {% endfor %}
     </tbody>
@@ -50,6 +51,7 @@
     ({{ missing_period|length }} in this period). Posting adds one entry per sale, dated the sale's own date.</span>
   <form method="post" action="/accounting/reconcile-sales/post-cogs"
         onsubmit="return confirm('Post cost of sales for {{ missing_all|length }} sale(s), {{ missing_total|peso }} in total? Each gets its own journal entry dated on the sale.');">
+    <input type="hidden" name="back" value="{{ cur_url }}">
     <button class="btn" type="submit">Post missing cost of sales</button>
   </form>
 </div>
@@ -65,7 +67,7 @@
         <td class="num">{{ have|peso }}</td>
         <td class="num">{{ should|peso }}</td>
         <td class="num strong">{{ (should - have)|peso }}</td>
-        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales">Receipt</a></td>
+        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?back={{ back_here() }}">Receipt</a></td>
       </tr>
       {% endfor %}
     </tbody>
@@ -81,6 +83,7 @@
   <span><strong>{{ unbooked_count }}</strong> stock count / import movement(s) worth <strong>{{ unbooked_total|peso }}</strong> never reached the books
     (their posting failed, e.g. an unmapped account).</span>
   <form method="post" action="/accounting/reconcile-sales/post-stock">
+    <input type="hidden" name="back" value="{{ cur_url }}">
     <button class="btn" type="submit">Book them now</button>
   </form>
 </div>
@@ -97,6 +100,7 @@
     A true-up books the difference to Inventory Corrections (remappable as “INV_TRUE_UP” in Accounting Setup).</span>
   <form method="post" action="/accounting/reconcile-sales/true-up"
         onsubmit="return confirm('Post an inventory true-up of {{ inv_gap|peso }}, dated today?');">
+    <input type="hidden" name="back" value="{{ cur_url }}">
     <button class="btn" type="submit">True up now</button>
   </form>
 </div>

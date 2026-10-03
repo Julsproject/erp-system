@@ -6,7 +6,7 @@
     <h1 class="page-title">Bulk Price Update</h1>
     <p class="muted">{{ products|length }} product{{ '' if products|length == 1 else 's' }} selected</p>
   </div>
-  <a class="btn-link" href="/products">← Back to inventory</a>
+  <a class="btn-link" href="{{ back }}">← Back to inventory</a>
 </div>
 
 <div class="card" style="margin-bottom:18px;">
@@ -32,6 +32,7 @@
 
 <form id="applyForm" method="post" action="/products/bulk-price/apply"
       onsubmit="return confirm('Apply this price change to ' + {{ products|length }} + ' product(s)? This cannot be undone in bulk — each product would need to be corrected individually.');">
+  <input type="hidden" name="back" value="{{ back }}">
   <input type="hidden" name="mode" id="modeInput">
   <input type="hidden" name="value" id="valueInput">
   {% for p in products %}

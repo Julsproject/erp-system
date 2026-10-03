@@ -49,7 +49,7 @@
         <td class="num {{ '' if r.direction == 'over' else 'neg' }}" style="{{ 'color:#15803d;' if r.direction == 'over' }}">
           {{ '+' if r.direction == 'over' else '-' }}{{ r.diff_total|peso }}
         </td>
-        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ r.sale.id }}?from=price_overrides">Receipt</a></td>
+        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ r.sale.id }}?from=price_overrides&back={{ back_here() }}">Receipt</a></td>
       </tr>
       {% else %}
       <tr><td colspan="9" class="empty">No price overrides in this period.</td></tr>

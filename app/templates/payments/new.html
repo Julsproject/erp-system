@@ -6,7 +6,7 @@
     <h1 class="page-title">Pay {{ supplier.name }}</h1>
     <p class="muted">Tick the invoices this payment covers. One cheque can cover as many as you like.</p>
   </div>
-  <a class="btn-secondary" href="/payments">← Back to Payments</a>
+  <a class="btn-secondary" href="{{ back }}">← Back</a>
 </div>
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
@@ -14,6 +14,7 @@
 {% set applied = pv.applied if posted else none %}
 
 <form class="card form" method="post" action="/payments/new" id="payForm">
+  <input type="hidden" name="back" value="{{ back }}">
   <input type="hidden" name="supplier_id" value="{{ supplier.id }}">
 
   <label>Payment method
@@ -118,7 +119,7 @@
 
   <div class="form-actions full">
     <button class="btn" type="submit" {{ 'disabled' if not owed }}>Record Payment</button>
-    <a class="btn-secondary" href="/payments">Cancel</a>
+    <a class="btn-secondary" href="{{ back }}">Cancel</a>
   </div>
 </form>
 

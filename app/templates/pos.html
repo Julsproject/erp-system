@@ -212,7 +212,7 @@
           <option value="">— not tracked —</option>
           {% for e in encoders %}<option value="{{ e.id }}">{{ e.name }}</option>{% endfor %}
         </select>
-        {% if not encoders %}<a class="btn-link hf-link" href="/encoders">+ Add encoders to track this</a>{% endif %}
+        {% if not encoders %}<a class="btn-link hf-link" href="/encoders?back={{ back_here() }}">+ Add encoders to track this</a>{% endif %}
       </label>
     </div>
 
@@ -1243,6 +1243,13 @@ function clearDraft() {
   try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
 }
 
+// The sale went through — the next customer starts with an empty product
+// search instead of the last one's. (Not in clearDraft(): that also runs at
+// page load when there's no draft, which would undo the search restore.)
+function forgetPosSearch() {
+  try { localStorage.removeItem('pos_last_search'); } catch (e) {}
+}
+
 /* ===== Parked sales ("Save as draft") =====
    Distinct from the autosave draft above: that one is a crash-guard for the
    ONE sale in progress on this browser. These are deliberately parked sales,
@@ -1707,6 +1714,7 @@ async function checkout() {
       const data = await res.json();
       if (data.ok) {
         clearDraft();
+        forgetPosSearch();
         // This sale came off the parked list and is now real — drop it, so
         // the same list can't be rung up twice. Awaited so the delete lands
         // before the page navigates away.
@@ -1754,7 +1762,7 @@ async function checkout() {
     try {
       const res = await fetch('/pos/refund', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
       const data = await res.json();
-      if (data.ok) { clearDraft(); window.location = '/pos/receipt/' + data.sale_id; }
+      if (data.ok) { clearDraft(); forgetPosSearch(); window.location = '/pos/receipt/' + data.sale_id; }
       else { showError(data.error || 'Return failed.'); btn.disabled = false; btn.textContent = 'Complete Sale'; }
     } catch (e) {
       showError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Complete Sale';
@@ -1790,7 +1798,7 @@ async function checkout() {
   try {
     const res = await fetch('/pos/exchange', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
     const data = await res.json();
-    if (data.ok) { clearDraft(); window.location = '/pos/receipt/' + data.sale_id; }
+    if (data.ok) { clearDraft(); forgetPosSearch(); window.location = '/pos/receipt/' + data.sale_id; }
     else { showError(data.error || 'Exchange failed.'); btn.disabled = false; btn.textContent = 'Complete Sale'; }
   } catch (e) {
     showError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Complete Sale';
@@ -2210,7 +2218,7 @@ async function quoSave() {
   try {
     const res = await fetch('/quotations', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
     const data = await res.json();
-    if (data.ok) { quoClearDraft(); window.location = '/quotations/' + data.quotation_id; }
+    if (data.ok) { quoClearDraft(); window.location = '/quotations/' + data.quotation_id + '?back=%2Fpos'; }
     else { showQuoError(data.error || 'Save failed.'); btn.disabled = false; btn.textContent = 'Save Quotation'; }
   } catch (e) {
     showQuoError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Save Quotation';

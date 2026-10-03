@@ -45,7 +45,7 @@
       {% for g in groups %}
       <tr style="background:var(--surface-2);">
         <td class="strong" colspan="7">
-          <a href="/products/{{ g.product.id }}/stock-card">{{ g.product.name }}</a>
+          <a href="/products/{{ g.product.id }}/stock-card?back={{ back_here() }}">{{ g.product.name }}</a>
           <span class="muted" style="font-weight:400;font-size:12px;">per {{ g.unit }}</span>
           {% if g.suppliers|length > 1 and g.spread > 0 %}<span class="warn-tag" title="Most expensive minus cheapest supplier">gap {{ g.spread|peso }}</span>{% endif %}
         </td>
@@ -59,7 +59,7 @@
         <td class="num muted">{{ s.last.invoiced|peso }}{% if s.last.vat %} <span style="font-size:11px;">VAT</span>{% endif %}
           {% if s.last.unit_factor != 1 %}<div style="font-size:11px;">{{ s.last.unit_name }} ÷ {{ s.last.unit_factor|qty }}</div>{% endif %}</td>
         <td>{{ s.last.date.strftime('%b %d, %Y') if s.last.date else '—' }}
-          {% if s.last.ref %}<a class="btn-link" style="font-size:12px;" href="/purchases/{{ s.last.purchase_id }}">{{ s.last.ref }}</a>{% endif %}</td>
+          {% if s.last.ref %}<a class="btn-link" style="font-size:12px;" href="/purchases/{{ s.last.purchase_id }}?back={{ back_here() }}">{{ s.last.ref }}</a>{% endif %}</td>
         <td class="num">{{ s.lowest|peso }}</td>
         <td class="num">{{ s.buys }}</td>
       </tr>

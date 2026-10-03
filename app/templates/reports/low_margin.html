@@ -36,7 +36,7 @@
     <tbody>
       {% for r in rows %}
       <tr>
-        <td class="strong"><a href="/products/{{ r.product.id }}/edit">{{ r.product.name }}</a></td>
+        <td class="strong"><a href="/products/{{ r.product.id }}/edit?back={{ back_here() }}">{{ r.product.name }}</a></td>
         <td class="num">{{ r.cost|peso }}</td>
         <td class="num">{{ r.price|peso }}</td>
         <td class="num" style="color:var(--warn);font-weight:600;">{{ '%.1f'|format(r.margin_pct) }}%</td>

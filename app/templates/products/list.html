@@ -6,13 +6,14 @@
    the Add product button) so Back/Cancel/after-save returns here instead of
    dumping the user on an unfiltered page 1 and making them search again. #}
 {% set cur_url = '/products?page=' ~ page
-   ~ ('&q=' ~ q if q else '')
+   ~ ('&q=' ~ q|urlencode if q else '')
    ~ ('&alert=1' if alert else '')
    ~ ('&flag=' ~ flag if flag else '')
    ~ ('&mover=' ~ mover if mover else '')
    ~ ('&category_id=' ~ category_id if category_id else '')
    ~ ('&subcategory_id=' ~ subcategory_id if subcategory_id else '')
-   ~ ('&shelf_id=' ~ shelf_id if shelf_id else '') %}
+   ~ ('&shelf_id=' ~ shelf_id if shelf_id else '')
+   ~ ('&sort=' ~ sort ~ '&sort_dir=' ~ sort_dir if sort else '') %}
 <div class="page-head">
   <div>
     <h1 class="page-title">{{ 'Price Review Needed' if alert else 'Inventory' }}</h1>
@@ -25,6 +26,7 @@
     {# A cashier reads this page — what's in stock, where it sits, what it
        sells for. Everything that changes the catalogue is manager+. #}
     <form method="get" action="/products/price-list" style="display:flex;align-items:center;gap:6px;" title="Preview the price list — filter by category, or leave it on All categories">
+      <input type="hidden" name="back" value="{{ cur_url }}">
       <select name="category_id" style="padding:8px 10px;border:1px solid var(--line-2);border-radius:8px;font-size:13px;background:var(--surface);color:var(--ink);">
         <option value="0">All categories</option>
         {% for c in categories %}
@@ -34,12 +36,12 @@
       <button type="submit" class="btn-secondary">Price List</button>
     </form>
     {% if is_admin_user %}
-    <a class="btn-secondary" href="/products/export.xlsx?q={{ q }}&category_id={{ category_id }}&subcategory_id={{ subcategory_id }}&shelf_id={{ shelf_id }}&alert={{ 1 if alert else 0 }}&flag={{ flag }}&mover={{ mover }}&sort={{ sort }}&sort_dir={{ sort_dir }}">⬇ Export Excel</a>
+    <a class="btn-secondary" href="/products/export.xlsx?q={{ q|urlencode }}&category_id={{ category_id }}&subcategory_id={{ subcategory_id }}&shelf_id={{ shelf_id }}&alert={{ 1 if alert else 0 }}&flag={{ flag }}&mover={{ mover }}&sort={{ sort }}&sort_dir={{ sort_dir }}">⬇ Export Excel</a>
     <button type="button" class="btn-secondary" onclick="openMerge()">⇄ Merge Duplicates</button>
     <a class="btn-secondary" href="/products/duplicates">🔍 Find Duplicates</a>
-    <a class="btn-secondary" href="/products/archived">🗄 Archived</a>
+    <a class="btn-secondary" href="/products/archived?back={{ back_here() }}">🗄 Archived</a>
     {% endif %}
-    <a class="btn-secondary" href="/shelves">🗂 Shelves</a>
+    <a class="btn-secondary" href="/shelves?back={{ cur_url|urlencode }}">🗂 Shelves</a>
     {% if is_admin_user %}
     <a class="btn-secondary" href="/products/import">⬆ Import Excel</a>
     <a class="btn" href="/products/new?back={{ cur_url|urlencode }}">+ Add product</a>
@@ -71,6 +73,7 @@
   <strong>“{{ delete_blocked_name }}” can't be deleted</strong> — it already has sales, purchases, or stock
   activity recorded against it, and deleting it would break that history. Use
   <form method="post" action="/products/{{ delete_blocked }}/archive" style="display:inline;" onsubmit="return confirm('Archive {{ delete_blocked_name|e }}?');">
+    <input type="hidden" name="back" value="{{ cur_url }}">
     <button type="submit" class="btn-link" style="font-weight:700;">Archive</button>
   </form> instead — it hides the product the same way, and can be restored anytime from <a href="/products/archived">Archived</a>.
 </div>
@@ -85,35 +88,35 @@
 {% endif %}
 
 <div class="tabs">
-  <a class="tab {{ 'active' if not flag }}" href="/products">All Products</a>
-  <a class="tab {{ 'active' if flag == 'nostock' }}" href="/products?flag=nostock">No Stock{% if nostock_count %} <span class="warn-tag">{{ nostock_count }}</span>{% endif %}</a>
-  <a class="tab {{ 'active' if flag == 'lowstock' }}" href="/products?flag=lowstock"
+  <a class="tab {{ 'active' if not flag }}" href="/products{{ '?q=' ~ q|urlencode if q }}">All Products</a>
+  <a class="tab {{ 'active' if flag == 'nostock' }}" href="/products?flag=nostock{{ '&q=' ~ q|urlencode if q }}">No Stock{% if nostock_count %} <span class="warn-tag">{{ nostock_count }}</span>{% endif %}</a>
+  <a class="tab {{ 'active' if flag == 'lowstock' }}" href="/products?flag=lowstock{{ '&q=' ~ q|urlencode if q }}"
      title="Still in stock but running low: would sell out within the days set in Settings at its selling rate, or at/under its own Low Stock Alert At">Low Stock{% if lowstock_count %} <span class="warn-tag">{{ lowstock_count }}</span>{% endif %}</a>
   {% if norestock_count %}
-  <a class="tab {{ 'active' if flag == 'norestock' }}" href="/products?flag=norestock"
+  <a class="tab {{ 'active' if flag == 'norestock' }}" href="/products?flag=norestock{{ '&q=' ~ q|urlencode if q }}"
      title="Ticked “Don't restock / order on request” — left off No Stock and Low Stock">Don't Restock <span class="cat-pill-count">{{ norestock_count }}</span></a>
   {% endif %}
   {% if is_admin_user %}
   <a class="tab tab-big" href="/products/pricing">Selling Price{% if price_alert_count() %} <span class="warn-tag">{{ price_alert_count() }}</span>{% endif %}</a>
   {% if void_count %}
-  <a class="tab {{ 'active' if flag == 'void' }}" href="/products?flag=void">Void <span class="warn-tag">{{ void_count }}</span></a>
+  <a class="tab {{ 'active' if flag == 'void' }}" href="/products?flag=void{{ '&q=' ~ q|urlencode if q }}">Void <span class="warn-tag">{{ void_count }}</span></a>
   {% endif %}
   {% if conversion_count %}
-  <a class="tab {{ 'active' if flag == 'conversion' }}" href="/products?flag=conversion">Conversion Issues <span class="warn-tag">{{ conversion_count }}</span></a>
+  <a class="tab {{ 'active' if flag == 'conversion' }}" href="/products?flag=conversion{{ '&q=' ~ q|urlencode if q }}">Conversion Issues <span class="warn-tag">{{ conversion_count }}</span></a>
   {% endif %}
   {% if nocost_count %}
   {# Biggest quantity first: cost these and most of the missing valuation
      comes back for a fraction of the typing. #}
   <a class="tab {{ 'active' if flag == 'nocost' }}"
-     href="/products?flag=nocost&sort=total_qty&sort_dir=desc">No Cost <span class="warn-tag">{{ nocost_count }}</span></a>
+     href="/products?flag=nocost&sort=total_qty&sort_dir=desc{{ '&q=' ~ q|urlencode if q }}">No Cost <span class="warn-tag">{{ nocost_count }}</span></a>
   {% endif %}
   {% if adjustment_count %}
-  <a class="tab {{ 'active' if flag == 'adjustments' }}" href="/products?flag=adjustments">Manual Adjustments <span class="warn-tag">{{ adjustment_count }}</span></a>
+  <a class="tab {{ 'active' if flag == 'adjustments' }}" href="/products?flag=adjustments{{ '&q=' ~ q|urlencode if q }}">Manual Adjustments <span class="warn-tag">{{ adjustment_count }}</span></a>
   {% endif %}
   {% endif %}
 </div>
 
-{% set qs_base = ('q=' ~ q ~ '&' if q) ~ ('alert=1&' if alert) ~ ('flag=' ~ flag ~ '&' if flag) ~ ('mover=' ~ mover ~ '&' if mover) ~ ('sort=' ~ sort ~ '&sort_dir=' ~ sort_dir ~ '&' if sort) %}
+{% set qs_base = ('q=' ~ q|urlencode ~ '&' if q) ~ ('alert=1&' if alert) ~ ('flag=' ~ flag ~ '&' if flag) ~ ('mover=' ~ mover ~ '&' if mover) ~ ('sort=' ~ sort ~ '&sort_dir=' ~ sort_dir ~ '&' if sort) %}
 <div class="pill-filter-bar">
   {% if categories or no_category_count %}
   {% set current_cat = 'No category' if category_id == -1 else (categories|selectattr('id', 'equalto', category_id)|map(attribute='name')|first if category_id else None) %}
@@ -183,7 +186,7 @@
   {% endif %}
 
   <a class="cat-pill {{ 'active' if alert }}"
-     href="/products?{{ ('q=' ~ q ~ '&' if q) }}{{ ('category_id=' ~ category_id ~ '&' if category_id) }}{{ ('subcategory_id=' ~ subcategory_id ~ '&' if subcategory_id) }}{{ ('shelf_id=' ~ shelf_id ~ '&' if shelf_id) }}alert={{ 0 if alert else 1 }}"
+     href="/products?{{ ('q=' ~ q|urlencode ~ '&' if q) }}{{ ('category_id=' ~ category_id ~ '&' if category_id) }}{{ ('subcategory_id=' ~ subcategory_id ~ '&' if subcategory_id) }}{{ ('shelf_id=' ~ shelf_id ~ '&' if shelf_id) }}alert={{ 0 if alert else 1 }}"
      title="Selling price at or below cost — no price set, no margin, or a loss">
     ⚠ No margin / below cost
   </a>
@@ -192,7 +195,7 @@
 {% if mover_tab %}
 {# How often each item sold (days with a sale in the last 30) — the
    frequent ones are what must not run out. See products.apply_mover. #}
-{% set mover_qs = ('q=' ~ q ~ '&' if q) ~ 'flag=' ~ flag ~ '&' ~ ('category_id=' ~ category_id ~ '&' if category_id) ~ ('subcategory_id=' ~ subcategory_id ~ '&' if subcategory_id) ~ ('shelf_id=' ~ shelf_id ~ '&' if shelf_id) ~ ('sort=' ~ sort ~ '&sort_dir=' ~ sort_dir ~ '&' if sort) %}
+{% set mover_qs = ('q=' ~ q|urlencode ~ '&' if q) ~ 'flag=' ~ flag ~ '&' ~ ('category_id=' ~ category_id ~ '&' if category_id) ~ ('subcategory_id=' ~ subcategory_id ~ '&' if subcategory_id) ~ ('shelf_id=' ~ shelf_id ~ '&' if shelf_id) ~ ('sort=' ~ sort ~ '&sort_dir=' ~ sort_dir ~ '&' if sort) %}
 <div class="cat-pills mover-pills">
   <a class="cat-pill {{ 'active' if not mover }}" href="/products?{{ mover_qs }}">All
     <span class="cat-pill-count">{{ mover_counts.values()|sum - mover_counts.get('fr', 0) }}</span></a>
@@ -215,7 +218,8 @@
   {% if sort %}<input type="hidden" name="sort" value="{{ sort }}"><input type="hidden" name="sort_dir" value="{{ sort_dir }}">{% endif %}
   <input class="search" type="search" name="q" id="invSearch" value="{{ q }}" placeholder="Search product name or scan barcode…" autofocus>
   <button class="btn-secondary" type="submit">Search</button>
-  {% if q or category_id or subcategory_id or shelf_id %}<a class="btn-link" href="/products{{ '?alert=1' if alert }}">Clear</a>{% endif %}
+  {# Clears the search and category/shelf filters, but stays on this tab. #}
+  {% if q or category_id or subcategory_id or shelf_id %}<a class="btn-link" href="/products?{{ 'alert=1&' if alert }}{{ 'flag=' ~ flag ~ '&' if flag }}{{ 'mover=' ~ mover if mover }}">Clear</a>{% endif %}
 </form>
 <script>
   // Autofocus on a box that already has a value (after Enter reloads the page
@@ -249,6 +253,7 @@
 {% endif %}
 
 <form id="bulkForm" method="post">
+<input type="hidden" name="back" value="{{ cur_url }}">
 <div class="table-wrap">
   <table class="grid">
     <thead>
@@ -260,7 +265,7 @@
         <th>Unit Type</th>
         <th class="num">Cost of Sales</th>
         <th class="num">Selling Price</th>
-        {% set base_qs = 'q=' ~ q ~ '&category_id=' ~ category_id ~ '&subcategory_id=' ~ subcategory_id ~ '&shelf_id=' ~ shelf_id ~ '&alert=' ~ (1 if alert else 0) ~ ('&flag=' ~ flag if flag else '') ~ ('&mover=' ~ mover if mover else '') %}
+        {% set base_qs = 'q=' ~ q|urlencode ~ '&category_id=' ~ category_id ~ '&subcategory_id=' ~ subcategory_id ~ '&shelf_id=' ~ shelf_id ~ '&alert=' ~ (1 if alert else 0) ~ ('&flag=' ~ flag if flag else '') ~ ('&mover=' ~ mover if mover else '') %}
         {% set tot_next = 'desc' if (sort == 'total_qty' and sort_dir == 'asc') else 'asc' %}
         <th class="num"><a class="sort-th{{ ' sort-active' if sort == 'total_qty' }}" href="/products?{{ base_qs }}&sort=total_qty&sort_dir={{ tot_next }}">Total Qty{% if sort == 'total_qty' %}<span class="sort-arrow">{{ '▲' if sort_dir == 'asc' else '▼' }}</span>{% endif %}</a></th>
         <th></th>
@@ -373,7 +378,7 @@
    fields, which used to hit POST /products (Add Product) and looked like
    pressing Delete "added a product". Every row's action button posts through
    this single form via JS instead, well outside the table's own form. #}
-<form id="rowActionForm" method="post" style="display:none;"></form>
+<form id="rowActionForm" method="post" style="display:none;"><input type="hidden" name="back" value="{{ cur_url }}"></form>
 <script>
 function submitRowAction(action, confirmText) {
   if (!confirm(confirmText)) return;
@@ -386,9 +391,9 @@ function submitRowAction(action, confirmText) {
 {% if pages > 1 %}
 <div class="pager">
   {% set page_qs = ('&alert=1' if alert else '') ~ ('&flag=' ~ flag if flag else '') ~ ('&mover=' ~ mover if mover else '') ~ ('&category_id=' ~ category_id if category_id else '') ~ ('&subcategory_id=' ~ subcategory_id if subcategory_id else '') ~ ('&shelf_id=' ~ shelf_id if shelf_id else '') ~ ('&sort=' ~ sort ~ '&sort_dir=' ~ sort_dir if sort else '') %}
-  {% if page > 1 %}<a class="btn-secondary" href="/products?page={{ page - 1 }}&q={{ q }}{{ page_qs }}">← Prev</a>{% endif %}
+  {% if page > 1 %}<a class="btn-secondary" href="/products?page={{ page - 1 }}&q={{ q|urlencode }}{{ page_qs }}">← Prev</a>{% endif %}
   <span class="muted">Page {{ page }} of {{ pages }}</span>
-  {% if page < pages %}<a class="btn-secondary" href="/products?page={{ page + 1 }}&q={{ q }}{{ page_qs }}">Next →</a>{% endif %}
+  {% if page < pages %}<a class="btn-secondary" href="/products?page={{ page + 1 }}&q={{ q|urlencode }}{{ page_qs }}">Next →</a>{% endif %}
 </div>
 {% endif %}
 
@@ -667,6 +672,7 @@ function startUnitTypeEdit(id) {
 </div>
 
 <form id="mergeForm" method="post" action="/products/merge" style="display:none;">
+  <input type="hidden" name="back" value="{{ cur_url }}">
   <input type="hidden" name="keep_id" id="mergeKeepId">
   <input type="hidden" name="merge_id" id="mergeMergeId">
 </form>

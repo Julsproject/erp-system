@@ -7,7 +7,7 @@
     <p class="muted">Correcting a mistaken entry. Stock is reversed for the old items and re-applied for the
       corrected ones, and each product's cost is re-blended from the corrected figures.</p>
   </div>
-  <a class="btn-link" href="/purchases/{{ purchase.id }}">← Back to purchase</a>
+  <a class="btn-link" href="{{ view_url }}">← Back to purchase</a>
 </div>
 
 <div class="pos-grid">
@@ -41,7 +41,7 @@
 
       <div class="form-actions" style="margin-top:16px;">
         <button class="btn" id="saveBtn" onclick="saveEdit()">Save corrections</button>
-        <a class="btn-secondary" href="/purchases/{{ purchase.id }}">Cancel</a>
+        <a class="btn-secondary" href="{{ view_url }}">Cancel</a>
       </div>
     </div>
   </section>
@@ -279,7 +279,7 @@ async function saveEdit() {
   try {
     const res = await fetch('/purchases/' + purchaseId + '/edit-items', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
     const data = await res.json();
-    if (data.ok) { window.location = '/purchases/' + purchaseId; }
+    if (data.ok) { window.location = {{ view_url|tojson }}; }
     else { err.textContent = data.error || 'Could not save.'; err.style.display = 'block'; btn.disabled = false; btn.textContent = 'Save corrections'; }
   } catch (e) {
     err.textContent = 'Network error. Please try again.'; err.style.display = 'block'; btn.disabled = false; btn.textContent = 'Save corrections';

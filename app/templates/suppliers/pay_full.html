@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">Pay Full — {{ supplier.name }}</h1>
-  <a class="btn-link" href="/suppliers/{{ supplier.id }}/history">← Back to history</a>
+  <a class="btn-link" href="{{ back }}">← Back to history</a>
 </div>
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
@@ -32,6 +32,7 @@
 
 {% if owed %}
 <form class="card form" method="post" action="/suppliers/{{ supplier.id }}/pay-full" style="margin-top:16px;max-width:560px;" id="payFullForm">
+  <input type="hidden" name="back" value="{{ back }}">
   <label>Method
     <select name="method" id="method" onchange="toggleCheque()">
       {% for value, label in methods %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
@@ -51,7 +52,7 @@
 
   <div class="form-actions full">
     <button class="btn" type="submit" onclick="return confirm('Mark all {{ owed|length }} delivery(ies) totaling {{ total|peso }} as paid in full?');">Pay Full — {{ total|peso }}</button>
-    <a class="btn-secondary" href="/suppliers/{{ supplier.id }}/history">Cancel</a>
+    <a class="btn-secondary" href="{{ back }}">Cancel</a>
   </div>
 </form>
 {% endif %}

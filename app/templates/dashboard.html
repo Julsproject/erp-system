@@ -57,19 +57,19 @@
 <div class="head-actions no-print" style="margin-bottom:18px;">
   <a class="btn" href="/pos?mode=quotation" style="font-size:17px;font-weight:700;">📝 New Quotation</a>
   <a class="btn-secondary" href="/quotations" style="font-size:16px;font-weight:700;">Quotation List</a>
-  <a class="btn-secondary" href="/products/pricing" style="font-weight:700;">₱ Selling Price{% if price_alert_count() %} <span class="warn-tag">{{ price_alert_count() }}</span>{% endif %}</a>
+  <a class="btn-secondary" href="/products/pricing?back={{ back_here() }}" style="font-weight:700;">₱ Selling Price{% if price_alert_count() %} <span class="warn-tag">{{ price_alert_count() }}</span>{% endif %}</a>
   {# Come back to this same period/range after saving the expense. #}
   {% set cur_url = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') %}
   <a class="btn-secondary" href="/expenses/new?back={{ cur_url|urlencode }}">+ Log Expense</a>
   <a class="btn-secondary" href="/credits/collect">₱ Collect Payment</a>
-  <a class="btn-secondary" href="/purchases/new">+ Receive Delivery</a>
+  <a class="btn-secondary" href="/purchases/new?back={{ back_here() }}">+ Receive Delivery</a>
   <a class="btn-secondary" href="/reports/supplier-costs">Supplier Costs</a>
 </div>
 
 <!-- ============ SELLING PRICE LOOKUP (same search as the Selling Price page) ============ -->
 <section class="card no-print" style="margin-bottom:18px;">
   <h3 class="card-title" style="margin-bottom:10px;">₱ Selling Price lookup</h3>
-  <input id="dpSearch" class="search" type="search" placeholder="Type a product name or scan a barcode…" autocomplete="off" style="width:100%;max-width:none;">
+  <input id="dpSearch" data-remember="price" class="search" type="search" placeholder="Type a product name or scan a barcode…" autocomplete="off" style="width:100%;max-width:none;">
   <div class="table-wrap" id="dpWrap" style="display:none;margin-top:10px;">
     <table class="grid">
       <thead><tr><th>Product</th><th class="num">Selling Price</th><th class="num">Cost</th><th class="num">Profit</th><th></th></tr></thead>
@@ -101,7 +101,7 @@
         '<td class="num strong" style="font-size:16px;">' + (price > 0 ? money(price) : '<span class="muted">not set</span>') + '</td>' +
         '<td class="num">' + (cost > 0 ? money(cost) : '<span class="muted">not set</span>') + '</td>' +
         '<td class="num">' + profit + '</td>' +
-        '<td class="row-actions"><a class="btn-link" href="/products/pricing?product_id=' + p.id + '">Edit price</a></td></tr>';
+        '<td class="row-actions"><a class="btn-link" href="/products/pricing?product_id=' + p.id + '&back={{ back_here() }}">Edit price</a></td></tr>';
     }).join('');
     wrap.style.display = '';
     msg.textContent = (data.products || []).length > 10 ? 'Showing the first 10 — type more of the name to narrow it down.' : '';
@@ -460,12 +460,12 @@ function dcMarginPriceInput() {
       <span class="attn-label">Low stock</span>
     </a>
 
-    <a class="attn {{ 'bad' if price_alerts else 'ok' }}" href="/products/pricing?review=1">
+    <a class="attn {{ 'bad' if price_alerts else 'ok' }}" href="/products/pricing?review=1&back={{ back_here() }}">
       <span class="attn-num">{{ price_alerts }}</span>
       <span class="attn-label">Selling below cost</span>
     </a>
 
-    <a class="attn {{ 'warn' if no_cost else 'ok' }}" href="/products">
+    <a class="attn {{ 'warn' if no_cost else 'ok' }}" href="/products?flag=nocost&sort=total_qty&sort_dir=desc">
       <span class="attn-num">{{ no_cost }}</span>
       <span class="attn-label">No cost yet</span>
     </a>
@@ -506,7 +506,7 @@ function dcMarginPriceInput() {
             {% endif %}
           </td>
           <td class="num strong owed">{{ e.outstanding|peso }}</td>
-          <td class="row-actions"><a class="btn-link" href="/sales/receivables/{{ e.sale.id }}/pay">Collect</a></td>
+          <td class="row-actions"><a class="btn-link" href="/sales/receivables/{{ e.sale.id }}/pay?back={{ back_here() }}">Collect</a></td>
         </tr>
         {% endfor %}
       </tbody>
@@ -532,7 +532,7 @@ function dcMarginPriceInput() {
           <td class="num">{{ p.total_qty|qty }}</td>
           <td class="num">{{ p.reorder_level|qty if p.reorder_level > 0 else '—' }}</td>
           <td><span class="txn" style="background:#fee2e2;color:#b91c1c;">Out of stock</span></td>
-          <td class="row-actions"><a class="btn-link" href="/purchases/new">Reorder</a></td>
+          <td class="row-actions"><a class="btn-link" href="/purchases/new?back={{ back_here() }}">Reorder</a></td>
         </tr>
         {% endfor %}
         {% for p in low_stock[:5] %}
@@ -544,7 +544,7 @@ function dcMarginPriceInput() {
             {% else %}<span class="muted" title="No reorder level set — flagged by the shop-wide default low-stock %">auto</span>{% endif %}
           </td>
           <td><span class="txn" style="background:#fef3c7;color:#b45309;">Low stock</span></td>
-          <td class="row-actions"><a class="btn-link" href="/purchases/new">Reorder</a></td>
+          <td class="row-actions"><a class="btn-link" href="/purchases/new?back={{ back_here() }}">Reorder</a></td>
         </tr>
         {% endfor %}
       </tbody>
@@ -585,7 +585,7 @@ function dcMarginPriceInput() {
           <td class="strong">{{ p.ref_no }}</td>
           <td>{{ p.supplier.name if p.supplier else '—' }}</td>
           <td class="num strong">{{ p.total|peso }}</td>
-          <td class="row-actions"><a class="btn-link" href="/purchases/{{ p.id }}">View</a></td>
+          <td class="row-actions"><a class="btn-link" href="/purchases/{{ p.id }}?back={{ back_here() }}">View</a></td>
         </tr>
         {% endfor %}
       </tbody>
@@ -621,7 +621,7 @@ function dcMarginPriceInput() {
       <tbody>
         {% for s in recent %}
         <tr>
-          <td class="strong"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales">{{ s.invoice_no }}</a></td>
+          <td class="strong"><a class="btn-link" href="/pos/receipt/{{ s.id }}?back={{ back_here() }}">{{ s.invoice_no }}</a></td>
           <td><span class="txn txn-{{ s.txn_type }}">{{ s.txn_type|capitalize }}</span></td>
           <td>{{ s.customer_name or 'Walk-in' }}</td>
           <td class="num strong {{ 'neg' if s.total and s.total < 0 }}">{{ s.total|peso }}</td>

@@ -37,7 +37,7 @@
         <td class="strong">{{ p.name }}</td>
         <td>{{ p.category.name if p.category else '—' }}</td>
         <td class="num">{{ p.total_qty|whole_qty }}</td>
-        <td class="row-actions"><a class="btn-link" href="/products/{{ p.id }}/edit">Edit</a></td>
+        <td class="row-actions"><a class="btn-link" href="/products/{{ p.id }}/edit?back={{ back_here() }}">Edit</a></td>
       </tr>
       {% else %}
       <tr><td colspan="4" class="empty">Nothing assigned to this shelf yet.</td></tr>

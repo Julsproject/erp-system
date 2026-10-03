@@ -14,14 +14,14 @@ from decimal import Decimal
 
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from . import models
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_admin, safe_back_url, url_with
 from .templating import templates
 
 router = APIRouter()
@@ -141,7 +141,8 @@ def unmerged_log_ids(db: Session) -> set:
 
 
 @router.post("/audit/{log_id:int}/unmerge")
-def unmerge(log_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def unmerge(log_id: int, request: Request, back: str = Form(""),
+            db: Session = Depends(get_db), user=Depends(get_current_user)):
     """The Unmerge button on a merge entry — hands off to the product or
     customer module, which knows what that merge moved."""
     if not user:
@@ -151,8 +152,12 @@ def unmerge(log_id: int, request: Request, db: Session = Depends(get_db), user=D
     from .customers import unmerge_customer
     from .products import unmerge_product
 
+    # Back to the log as it was filtered, with only this outcome's notice on it.
+    back = safe_back_url(back, "/audit")
+
     def _back(key, msg):
-        return RedirectResponse(f"/audit?{key}={quote(msg)}", status_code=302)
+        notice = {"ok": None, "error": None, key: msg}
+        return RedirectResponse(url_with(back, **notice), status_code=302)
 
     log = db.get(models.AuditLog, log_id)
     undo = merge_undo_data(log)

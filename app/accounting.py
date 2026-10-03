@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from . import audit, models
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_admin, safe_back_url, url_with
 from .templating import templates
 
 router = APIRouter()
@@ -1026,7 +1026,7 @@ def coa_toggle(account_id: int, db: Session = Depends(get_db), user=Depends(get_
 # Accounting Setup (function -> account mapping)
 # --------------------------------------------------------------------------- #
 @router.get("/accounting/mappings", response_class=HTMLResponse)
-def mappings_list(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def mappings_list(request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
@@ -1039,12 +1039,16 @@ def mappings_list(request: Request, db: Session = Depends(get_db), user=Depends(
         "accounting/mappings.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "mappings": mappings, "accounts": accounts,
-         "expense_accounts": expense_accounts, "expense_categories": expense_categories},
+         "expense_accounts": expense_accounts, "expense_categories": expense_categories,
+         "back": safe_back_url(back, "/accounting/coa")},
     )
 
 
+# Both Save buttons return to the Setup page as it was opened (`back`: its
+# own URL, so its "← Back" link survives the save).
 @router.post("/accounting/expense-category-account/{category_id:int}")
-def expense_category_account_update(category_id: int, account_id: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
+def expense_category_account_update(category_id: int, account_id: str = Form(""), back: str = Form(""),
+                                    db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
@@ -1053,11 +1057,12 @@ def expense_category_account_update(category_id: int, account_id: str = Form("")
     if category:
         category.account_id = int(account_id) if account_id else None
         db.commit()
-    return RedirectResponse("/accounting/mappings", status_code=302)
+    return RedirectResponse(safe_back_url(back, "/accounting/mappings"), status_code=302)
 
 
 @router.post("/accounting/mappings/{mapping_id:int}")
-def mappings_update(mapping_id: int, account_id: int = Form(...), db: Session = Depends(get_db), user=Depends(get_current_user)):
+def mappings_update(mapping_id: int, account_id: int = Form(...), back: str = Form(""),
+                    db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
@@ -1067,7 +1072,7 @@ def mappings_update(mapping_id: int, account_id: int = Form(...), db: Session = 
     if mapping and account and account.is_active:
         mapping.account_id = account.id
         db.commit()
-    return RedirectResponse("/accounting/mappings", status_code=302)
+    return RedirectResponse(safe_back_url(back, "/accounting/mappings"), status_code=302)
 
 
 # --------------------------------------------------------------------------- #
@@ -1697,7 +1702,7 @@ def _vat_output_detail(db: Session, period_start: date, period_end: date):
                 invoice_no = sale.invoice_no or entry.description
                 customer_name = (sale.customer.name if sale.customer else None) or sale.customer_name or "Walk-in / Unspecified"
                 customer_tin = sale.customer.tin if sale.customer else ""
-                source_link = f"/pos/receipt/{sale.id}?from=sales"
+                source_link = f"/pos/receipt/{sale.id}"
                 net_of_vat, total_due = sale.net_amount, sale.total
         # See _vat_input_detail's comment: negate a reversal's net/total so
         # this row's own numbers stay internally consistent with its amount.
@@ -2078,7 +2083,7 @@ JOURNAL_TEMPLATES = {
 
 
 @router.get("/accounting/journal-entries/new", response_class=HTMLResponse)
-def journal_entry_new(request: Request, error: str = "", description: str = "", template: str = "",
+def journal_entry_new(request: Request, error: str = "", description: str = "", template: str = "", back: str = "",
                        db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -2096,7 +2101,8 @@ def journal_entry_new(request: Request, error: str = "", description: str = "", 
         "accounting/journal_entry_form.html",
         {"request": request, "app_name": request.app.title, "user": user, "accounts": accounts,
          "today": _today().isoformat(), "error": error, "prefill_description": description,
-         "template_lines": template_lines},
+         "template_lines": template_lines, "je_template": template,
+         "back": safe_back_url(back, "/accounting/journal-entries")},
     )
 
 
@@ -2109,12 +2115,15 @@ def journal_entry_create(
     side: list[str] = Form([]),
     amount: list[str] = Form([]),
     memo: list[str] = Form([]),
+    template: str = Form(""),
+    back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
+    back = safe_back_url(back, "")
     txn_date = _parse_date(txn_date) or _today()
     description = (description or "").strip()
     reference_no = (reference_no or "").strip() or None
@@ -2133,8 +2142,11 @@ def journal_entry_create(
             continue
         lines.append({"_account_id": int(account_id), "amount": amt, "side": side, "memo": (memo or "").strip() or None})
 
+    # An error re-opens the form with its starting template, description
+    # and back link (e.g. to Collect Payment) intact.
     if not description:
-        return RedirectResponse("/accounting/journal-entries/new?error=Description+is+required.", status_code=302)
+        return RedirectResponse(url_with("/accounting/journal-entries/new", error="Description is required.",
+                                         template=template, back=back), status_code=302)
 
     try:
         entry = post_journal(
@@ -2142,20 +2154,26 @@ def journal_entry_create(
             lines=lines, reference_no=reference_no, entered_by_id=user.id, status="draft",
         )
     except PostingError as e:
-        return RedirectResponse(f"/accounting/journal-entries/new?error={str(e)}", status_code=302)
+        return RedirectResponse(url_with("/accounting/journal-entries/new", error=str(e), template=template,
+                                         description=description, back=back), status_code=302)
     db.commit()
     return RedirectResponse(f"/accounting/journal-entries?created={entry.journal_no}", status_code=302)
 
 
 @router.get("/accounting/journal-entries/{entry_id:int}/view", response_class=HTMLResponse)
-def journal_entry_view(entry_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def journal_entry_view(entry_id: int, request: Request, back: str = "",
+                       db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
+    back = safe_back_url(back, "/accounting/journal-entries")
+    # Any entry opens here read-only — a reversal ("Reversed by …") or an
+    # inventory adjustment's entry links here too. Only a manual one gets
+    # Edit/Post/Delete/Reverse (the template and those handlers check).
     entry = db.get(models.JournalEntry, entry_id)
-    if not entry or entry.source_type != "manual":
-        return RedirectResponse("/accounting/journal-entries", status_code=302)
+    if not entry:
+        return RedirectResponse(back, status_code=302)
     reversal_of = db.get(models.JournalEntry, entry.is_reversal_of_id) if entry.is_reversal_of_id else None
     reversed_by = (
         db.query(models.JournalEntry)
@@ -2166,12 +2184,16 @@ def journal_entry_view(entry_id: int, request: Request, db: Session = Depends(ge
         "accounting/journal_entry_view.html",
         {"request": request, "app_name": request.app.title, "user": user, "entry": entry,
          "reversal_of": reversal_of, "reversed_by": reversed_by,
-         "editable": manual_entry_is_editable(entry)},
+         "editable": manual_entry_is_editable(entry), "back": back},
     )
 
 
+# Post/Delete/Reverse return to the page they were clicked on (`back`: the
+# list with its date range, or the entry itself) — minus an old "created"
+# notice, so it doesn't show again.
 @router.post("/accounting/journal-entries/{entry_id:int}/post")
-def journal_entry_post(entry_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def journal_entry_post(entry_id: int, back: str = Form(""),
+                       db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
@@ -2180,11 +2202,12 @@ def journal_entry_post(entry_id: int, db: Session = Depends(get_db), user=Depend
     if entry and entry.source_type == "manual":
         post_draft_entry(db, entry)
         db.commit()
-    return RedirectResponse("/accounting/journal-entries", status_code=302)
+    return RedirectResponse(url_with(safe_back_url(back, "/accounting/journal-entries"), created=None), status_code=302)
 
 
 @router.post("/accounting/journal-entries/{entry_id:int}/delete")
-def journal_entry_delete(entry_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def journal_entry_delete(entry_id: int, back: str = Form(""),
+                         db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
@@ -2193,11 +2216,11 @@ def journal_entry_delete(entry_id: int, db: Session = Depends(get_db), user=Depe
     if entry and entry.source_type == "manual":
         delete_draft_entry(db, entry)
         db.commit()
-    return RedirectResponse("/accounting/journal-entries", status_code=302)
+    return RedirectResponse(url_with(safe_back_url(back, "/accounting/journal-entries"), created=None), status_code=302)
 
 
 @router.get("/accounting/journal-entries/{entry_id:int}/edit", response_class=HTMLResponse)
-def journal_entry_edit_form(entry_id: int, request: Request, error: str = "",
+def journal_entry_edit_form(entry_id: int, request: Request, error: str = "", back: str = "",
                              db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -2205,12 +2228,13 @@ def journal_entry_edit_form(entry_id: int, request: Request, error: str = "",
         return RedirectResponse("/pos", status_code=302)
     entry = db.get(models.JournalEntry, entry_id)
     if not entry or not manual_entry_is_editable(entry):
-        return RedirectResponse("/accounting/journal-entries", status_code=302)
+        return RedirectResponse(safe_back_url(back, "/accounting/journal-entries"), status_code=302)
     accounts = db.query(models.Account).filter(models.Account.is_active.is_(True)).order_by(models.Account.code).all()
     return templates.TemplateResponse(
         "accounting/journal_entry_form.html",
         {"request": request, "app_name": request.app.title, "user": user, "accounts": accounts,
-         "today": _today().isoformat(), "error": error, "entry": entry},
+         "today": _today().isoformat(), "error": error, "entry": entry,
+         "back": safe_back_url(back, f"/accounting/journal-entries/{entry.id}/view")},
     )
 
 
@@ -2224,6 +2248,7 @@ def journal_entry_edit_submit(
     side: list[str] = Form([]),
     amount: list[str] = Form([]),
     memo: list[str] = Form([]),
+    back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -2232,13 +2257,15 @@ def journal_entry_edit_submit(
         return RedirectResponse("/pos", status_code=302)
     entry = db.get(models.JournalEntry, entry_id)
     if not entry or not manual_entry_is_editable(entry):
-        return RedirectResponse("/accounting/journal-entries", status_code=302)
+        return RedirectResponse(safe_back_url(back, "/accounting/journal-entries"), status_code=302)
+    back = safe_back_url(back, f"/accounting/journal-entries/{entry_id}/view")
 
     parsed_date = _parse_date(txn_date) or _today()
     description = (description or "").strip()
     reference_no = (reference_no or "").strip() or None
     if not description:
-        return RedirectResponse(f"/accounting/journal-entries/{entry_id}/edit?error=Description+is+required.", status_code=302)
+        return RedirectResponse(url_with(f"/accounting/journal-entries/{entry_id}/edit",
+                                         error="Description is required.", back=back), status_code=302)
 
     lines = []
     for aid, sd, amt, mm in zip(account_id, side, amount, memo):
@@ -2249,13 +2276,15 @@ def journal_entry_edit_submit(
     try:
         update_manual_entry(db, entry, txn_date=parsed_date, description=description, reference_no=reference_no, lines=lines)
     except PostingError as e:
-        return RedirectResponse(f"/accounting/journal-entries/{entry_id}/edit?error={str(e)}", status_code=302)
+        return RedirectResponse(url_with(f"/accounting/journal-entries/{entry_id}/edit", error=str(e), back=back),
+                                status_code=302)
     db.commit()
-    return RedirectResponse(f"/accounting/journal-entries/{entry_id}/view", status_code=302)
+    return RedirectResponse(url_with(back, created=None), status_code=302)
 
 
 @router.post("/accounting/journal-entries/{entry_id:int}/reverse")
-def journal_entry_reverse(entry_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def journal_entry_reverse(entry_id: int, back: str = Form(""),
+                          db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
@@ -2268,7 +2297,7 @@ def journal_entry_reverse(entry_id: int, db: Session = Depends(get_db), user=Dep
         # period the reversal happens to be clicked in.
         reverse_journal(db, entry, reason="Manual reversal", entered_by_id=user.id, txn_date=entry.txn_date)
         db.commit()
-    return RedirectResponse("/accounting/journal-entries", status_code=302)
+    return RedirectResponse(url_with(safe_back_url(back, "/accounting/journal-entries"), created=None), status_code=302)
 
 
 # --------------------------------------------------------------------------- #
@@ -2424,7 +2453,7 @@ def reconcile_sales(
 
 
 @router.post("/accounting/reconcile-sales/true-up")
-def reconcile_true_up(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def reconcile_true_up(request: Request, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Book whatever is left between the ledger's Inventory and stock on
     hand x cost to INV_TRUE_UP (Inventory Corrections by default)."""
     from . import stock_books
@@ -2436,18 +2465,19 @@ def reconcile_true_up(request: Request, db: Session = Depends(get_db), user=Depe
         entry, diff = stock_books.post_true_up(db, entered_by_id=user.id)
     except PostingError as e:
         db.rollback()
-        return RedirectResponse(f"/accounting/reconcile-sales?cogs_msg={quote('Could not post: ' + str(e))}", status_code=302)
+        return RedirectResponse(url_with(safe_back_url(back, "/accounting/reconcile-sales"),
+                                         cogs_msg="Could not post: " + str(e)), status_code=302)
     if entry:
         audit.record(db, user=user, request=request, action="create", entity_type="journal_entry",
                      entity_id=entry.id, entity_label=entry.journal_no,
                      summary=f"Inventory true-up {entry.journal_no}: ₱{diff:,.2f}")
     db.commit()
     msg = f"Posted {entry.journal_no}: inventory trued up by ₱{diff:,.2f}." if entry else "Already in step — nothing to post."
-    return RedirectResponse(f"/accounting/reconcile-sales?cogs_msg={quote(msg)}", status_code=302)
+    return RedirectResponse(url_with(safe_back_url(back, "/accounting/reconcile-sales"), cogs_msg=msg), status_code=302)
 
 
 @router.post("/accounting/reconcile-sales/post-stock")
-def reconcile_post_unbooked_stock(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def reconcile_post_unbooked_stock(request: Request, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Catch-up for stock count / bulk import movements whose posting failed."""
     from .inventory_adjustments import book_unbooked_stock_movements
     if not user:
@@ -2458,16 +2488,17 @@ def reconcile_post_unbooked_stock(request: Request, db: Session = Depends(get_db
         entries = book_unbooked_stock_movements(db, entered_by_id=user.id)
     except PostingError as e:
         db.rollback()
-        return RedirectResponse(f"/accounting/reconcile-sales?cogs_msg={quote('Could not post: ' + str(e))}", status_code=302)
+        return RedirectResponse(url_with(safe_back_url(back, "/accounting/reconcile-sales"),
+                                         cogs_msg="Could not post: " + str(e)), status_code=302)
     audit.record(db, user=user, request=request, action="create", entity_type="journal_entry",
                  summary=f"Booked unposted stock counts / imports: {len(entries)} entr(ies)")
     db.commit()
     msg = f"Booked {len(entries)} stock count / import entr{'y' if len(entries) == 1 else 'ies'}."
-    return RedirectResponse(f"/accounting/reconcile-sales?cogs_msg={quote(msg)}", status_code=302)
+    return RedirectResponse(url_with(safe_back_url(back, "/accounting/reconcile-sales"), cogs_msg=msg), status_code=302)
 
 
 @router.post("/accounting/reconcile-sales/post-cogs")
-def reconcile_post_missing_cogs(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def reconcile_post_missing_cogs(request: Request, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Catch-up for sales posted before COGS went inline (and any other
     mismatch): one "sale_cogs" entry per sale, dated the sale's own date,
     for exactly the difference. Safe to run again — a sale already right
@@ -2484,11 +2515,12 @@ def reconcile_post_missing_cogs(request: Request, db: Session = Depends(get_db),
             total += should - have
     except PostingError as e:
         db.rollback()
-        return RedirectResponse(f"/accounting/reconcile-sales?cogs_msg={quote('Could not post: ' + str(e))}", status_code=302)
+        return RedirectResponse(url_with(safe_back_url(back, "/accounting/reconcile-sales"),
+                                         cogs_msg="Could not post: " + str(e)), status_code=302)
     audit.record(
         db, user=user, request=request, action="create", entity_type="journal_entry",
         summary=f"Posted missing cost of sales for {len(missing)} sale(s), net ₱{total:,.2f}",
     )
     db.commit()
     msg = f"Posted cost of sales for {len(missing)} sale(s), net ₱{total:,.2f}."
-    return RedirectResponse(f"/accounting/reconcile-sales?cogs_msg={quote(msg)}", status_code=302)
+    return RedirectResponse(url_with(safe_back_url(back, "/accounting/reconcile-sales"), cogs_msg=msg), status_code=302)

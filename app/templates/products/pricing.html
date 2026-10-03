@@ -6,6 +6,7 @@
     <h1 class="page-title">Selling Price</h1>
     <p class="muted">Search or browse on the left, edit cost and pricing on the right — saves instantly.</p>
   </div>
+  {% if back %}<a class="btn-link" href="{{ back }}">← Back</a>{% endif %}
 </div>
 
 <div class="tabs">
@@ -96,6 +97,7 @@ let peProducts = [];
 let peSelectedId = null;
 let peReviewOnly = {{ 'true' if initial_review else 'false' }};
 let peInitialProductId = {{ initial_product_id or 'null' }};
+const PRICING_BACK = {{ back|tojson }};  // where this page's "← Back" goes ('' = none)
 
 const peSearchBox = document.getElementById('priceSearch');
 let peTimer = null;
@@ -201,7 +203,8 @@ function peSelectProduct(id, skipScroll) {
   const stockCard = document.getElementById('peStockCard');
   if (stockCard) {
     stockCard.href = '/products/' + id + '/stock-card?back='
-      + encodeURIComponent('/products/pricing?product_id=' + id);
+      + encodeURIComponent('/products/pricing?product_id=' + id
+          + (PRICING_BACK ? '&back=' + encodeURIComponent(PRICING_BACK) : ''));
   }
 
   document.getElementById('peCost').value = (p.cost_price || 0).toFixed(2);
@@ -438,7 +441,9 @@ async function peSave() {
   msg.style.display = 'block';
 }
 
-const savedPriceSearch = localStorage.getItem('pricing_last_search');
+// Opened for one product (?product_id=…): the list shows just that product,
+// so don't put an unrelated old search back in the box.
+const savedPriceSearch = peInitialProductId ? null : localStorage.getItem('pricing_last_search');
 if (savedPriceSearch) peSearchBox.value = savedPriceSearch;
 peLoadList();
 </script>

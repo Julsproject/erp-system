@@ -8,6 +8,7 @@
   </div>
   {% if view == 'active' and unread %}
   <form method="post" action="/notifications/read-all" style="margin:0;">
+    <input type="hidden" name="back" value="{{ request.url.path ~ ('?' ~ request.url.query if request.url.query else '') }}">
     <button class="btn-secondary" type="submit">Mark all read</button>
   </form>
   {% endif %}
@@ -35,11 +36,12 @@
         {% else %}
           <span>Raised {{ n.created_at.strftime('%b %d, %Y %I:%M %p') if n.created_at else '' }}</span>
         {% endif %}
-        {% if n.link and not n.is_resolved %}<a class="btn-link" href="{{ n.link }}">View →</a>{% endif %}
+        {% if n.link and not n.is_resolved %}<a class="btn-link" href="{{ n.link }}{{ '&' if '?' in n.link else '?' }}back={{ back_here() }}">View →</a>{% endif %}
       </div>
     </div>
     {% if not n.is_read and not n.is_resolved %}
     <form method="post" action="/notifications/{{ n.id }}/read" style="margin:0;">
+      <input type="hidden" name="back" value="{{ request.url.path ~ ('?' ~ request.url.query if request.url.query else '') }}">
       <button class="notif-read" type="submit" title="Mark as read">Mark read</button>
     </form>
     {% endif %}

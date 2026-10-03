@@ -10,14 +10,14 @@
 </div>
 
 <div class="tabs" style="margin-bottom:18px;">
-  <a class="tab {{ 'active' if not status_filter }}" href="/deliveries">All <span class="muted">({{ counts.values()|sum }})</span></a>
+  <a class="tab {{ 'active' if not status_filter }}" href="/deliveries{{ '?q=' ~ q|urlencode if q }}">All <span class="muted">({{ counts.values()|sum }})</span></a>
   {% for s, label in labels.items() %}
-  <a class="tab {{ 'active' if status_filter == s }}" href="/deliveries?status_filter={{ s }}">{{ label }} <span class="muted">({{ counts.get(s, 0) }})</span></a>
+  <a class="tab {{ 'active' if status_filter == s }}" href="/deliveries?status_filter={{ s }}{{ '&q=' ~ q|urlencode if q }}">{{ label }} <span class="muted">({{ counts.get(s, 0) }})</span></a>
   {% endfor %}
 </div>
 
 {% set qs = '&status_filter=' ~ status_filter if status_filter else '' %}
-{% set qs = qs ~ ('&q=' ~ q if q else '') %}
+{% set qs = qs ~ ('&q=' ~ q|urlencode if q else '') %}
 {% set qs = qs ~ ('&date_from=' ~ date_from if date_from else '') %}
 {% set qs = qs ~ ('&date_to=' ~ date_to if date_to else '') %}
 {% set filter_count = (1 if date_from else 0) + (1 if date_to else 0) %}
@@ -72,7 +72,7 @@
           <span class="txn" style="background:#f1f5f9;color:#64748b;">Cancelled</span>
           {% endif %}
         </td>
-        <td class="row-actions"><a class="btn-link" href="/deliveries/{{ d.id }}">View</a></td>
+        <td class="row-actions"><a class="btn-link" href="/deliveries/{{ d.id }}?back={{ back_here() }}">View</a></td>
       </tr>
       {% else %}
       <tr><td colspan="7" class="empty">No deliveries {{ 'match that filter' if (status_filter or q or date_from or date_to) else 'yet' }}.</td></tr>

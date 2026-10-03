@@ -6,8 +6,10 @@
     <h1 class="page-title">{{ entry.journal_no }}</h1>
     <p class="muted">{{ entry.txn_date.strftime('%b %d, %Y') }}{% if entry.reference_no %} · Ref: {{ entry.reference_no }}{% endif %}</p>
   </div>
-  <a class="btn-link" href="/accounting/journal-entries">← Manual Journal Entries</a>
+  <a class="btn-link" href="{{ back }}">← Back</a>
 </div>
+{% set cur_url = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') %}
+{% set is_manual = entry.source_type == 'manual' %}
 
 <div class="card" style="max-width:720px;">
   <p style="margin:0 0 4px;"><strong>Description:</strong> {{ entry.description }}</p>
@@ -18,10 +20,13 @@
     {% else %}<span style="background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:4px;font-size:12px;">Posted</span>{% endif %}
   </p>
   {% if reversal_of %}
-  <p class="muted" style="margin:0 0 4px;">This reverses <a href="/accounting/journal-entries/{{ reversal_of.id }}/view">{{ reversal_of.journal_no }}</a>.</p>
+  <p class="muted" style="margin:0 0 4px;">This reverses <a href="/accounting/journal-entries/{{ reversal_of.id }}/view?back={{ back_here() }}">{{ reversal_of.journal_no }}</a>.</p>
   {% endif %}
   {% if reversed_by %}
-  <p class="muted" style="margin:0 0 4px;">Reversed by <a href="/accounting/journal-entries/{{ reversed_by.id }}/view">{{ reversed_by.journal_no }}</a>.</p>
+  <p class="muted" style="margin:0 0 4px;">Reversed by <a href="/accounting/journal-entries/{{ reversed_by.id }}/view?back={{ back_here() }}">{{ reversed_by.journal_no }}</a>.</p>
+  {% endif %}
+  {% if not is_manual %}
+  <p class="muted" style="margin:0 0 4px;">Source: {{ entry.source_type|replace('_', ' ') }} — view only.</p>
   {% endif %}
 
   <div class="table-wrap" style="margin-top:14px;">
@@ -47,26 +52,33 @@
     </table>
   </div>
 
+  {% if is_manual %}
+  {# Post/Reverse stay on this entry; Delete goes back to where it was opened from. #}
   <div class="form-actions" style="margin-top:16px;">
     {% if editable %}
-    <a class="btn-secondary" href="/accounting/journal-entries/{{ entry.id }}/edit">Edit</a>
+    <a class="btn-secondary" href="/accounting/journal-entries/{{ entry.id }}/edit?back={{ back_here() }}">Edit</a>
     {% endif %}
     {% if entry.status == 'draft' %}
     <form method="post" action="/accounting/journal-entries/{{ entry.id }}/post" style="display:inline;">
+      <input type="hidden" name="back" value="{{ cur_url }}">
       <button class="btn" type="submit" onclick="return confirm('Post this entry? It will start affecting every report immediately.')">Post</button>
     </form>
     <form method="post" action="/accounting/journal-entries/{{ entry.id }}/delete" style="display:inline;">
+      <input type="hidden" name="back" value="{{ back }}">
       <button class="btn-secondary" type="submit" onclick="return confirm('Delete this draft?')">Delete</button>
     </form>
     {% elif entry.status == 'posted' and editable %}
     <form method="post" action="/accounting/journal-entries/{{ entry.id }}/delete" style="display:inline;">
+      <input type="hidden" name="back" value="{{ back }}">
       <button class="btn-secondary" type="submit" onclick="return confirm('Delete this entry? Since it was posted today, this removes it outright with no trace — past today, use Reverse instead.')">Delete</button>
     </form>
     {% elif entry.status == 'posted' %}
     <form method="post" action="/accounting/journal-entries/{{ entry.id }}/reverse" style="display:inline;">
+      <input type="hidden" name="back" value="{{ cur_url }}">
       <button class="btn-secondary" type="submit" onclick="return confirm('Reverse this entry? A mirror-image entry will be posted; this one will never be edited or deleted.')">Reverse</button>
     </form>
     {% endif %}
   </div>
+  {% endif %}
 </div>
 {% endblock %}

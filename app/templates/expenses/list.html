@@ -17,7 +17,7 @@
   <div class="mini-stat owed"><span class="mini-num">{{ total_amount|peso }}</span><span>Total (this filter)</span></div>
 </div>
 
-{% set qs = '&q=' ~ q if q else '' %}
+{% set qs = '&q=' ~ q|urlencode if q else '' %}
 {% set qs = qs ~ ('&category_id=' ~ category_id if category_id else '') %}
 {% set qs = qs ~ ('&date_from=' ~ date_from if date_from else '') %}
 {% set qs = qs ~ ('&date_to=' ~ date_to if date_to else '') %}

@@ -3,11 +3,13 @@
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">{{ 'Edit product' if product else 'Add product' }}</h1>
-  <a class="btn-link" href="{{ back }}" onclick="try { localStorage.removeItem('last_product_view'); } catch (e) {}">← Back to inventory</a>
+  <a class="btn-link" href="{{ back }}" onclick="try { localStorage.removeItem('last_product_view'); } catch (e) {}">← Back</a>
 </div>
 {% if product %}
 <script>
-try { localStorage.setItem('last_product_view', window.location.pathname + window.location.search); } catch (e) {}
+{# The edit page's own address with its back — not window.location, which
+   after a refused save is the bare /products/<id> save address. #}
+try { localStorage.setItem('last_product_view', {{ ('/products/' ~ product.id ~ '/edit?back=' ~ back|urlencode)|tojson }}); } catch (e) {}
 </script>
 {% endif %}
 
@@ -15,7 +17,8 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
 {% set is_admin_user = (user.role or '')|lower in ('admin', 'manager') %}
 
 <form class="card form" method="post" novalidate
-      action="{{ '/products/' ~ product.id if product else '/products' }}">
+      action="{{ '/products/' ~ product.id if product else '/products' }}"
+      onsubmit="try { localStorage.removeItem('last_product_view'); } catch (e) {}">
   {# Carries the filtered list the user came from through the save, so their
      search/page isn't lost the moment they edit one row. #}
   <input type="hidden" name="back" value="{{ back }}">
@@ -57,7 +60,7 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
     </datalist>
     <small class="hint">This is the base unit for the ladder below.
       {% if product %}To switch an item that already has stock or history (e.g. Kg → Box), use
-      <a href="/products/{{ product.id }}/change-unit">Change base unit</a> so its quantities convert too.{% endif %}</small>
+      <a href="/products/{{ product.id }}/change-unit?back={{ back|urlencode }}">Change base unit</a> so its quantities convert too.{% endif %}</small>
   </label>
 
   <label>Shelf
@@ -115,7 +118,7 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
     <p class="hint" id="priceHint">Markup and margin are calculated from the Cost of Sales above — enter a cost for them to work.</p>
   </div>
   {% elif is_admin_user %}
-  <p class="full hint" style="margin:-8px 0 4px;">Selling price is set from the <a class="btn-link" href="/products/pricing?product_id={{ product.id }}">Selling Price</a> tab.</p>
+  <p class="full hint" style="margin:-8px 0 4px;">Selling price is set from the <a class="btn-link" href="/products/pricing?product_id={{ product.id }}&back={{ ('/products/' ~ product.id ~ '/edit?back=' ~ back|urlencode)|urlencode }}">Selling Price</a> tab.</p>
   {% endif %}
 
   <label>Actual Beginning Stocks
@@ -531,6 +534,7 @@ try { localStorage.setItem('last_product_view', window.location.pathname + windo
     if (name === null) return;
     const fd = new FormData();
     fd.append('name', name);
+    fd.append('back', {{ back|tojson }});
     const res = await fetch('/products/{{ product.id if product else 0 }}/create-open-counterpart', { method: 'POST', body: fd });
     if (res.redirected) window.location = res.url;
   }

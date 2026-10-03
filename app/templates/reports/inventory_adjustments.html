@@ -20,7 +20,7 @@
   <div class="mini-stat"><span class="mini-num">{{ correction_total|peso }}</span><span>Corrections (equity, not P&amp;L)</span></div>
 </div>
 
-<p class="hint" style="margin:-6px 0 16px;">The net P&amp;L figure also appears as "Inventory Shrinkage / Gain" on the <a href="/reports/profit-loss">Profit &amp; Loss</a> report for the same period. Rows marked <em>equity</em> are encoding, opening-balance or cost corrections: they're booked to Inventory Corrections and don't count as profit or loss.</p>
+<p class="hint" style="margin:-6px 0 16px;">The net P&amp;L figure also appears as "Inventory Shrinkage / Gain" on the <a href="/reports/profit-loss?{{ qs[1:] }}">Profit &amp; Loss</a> report for the same period. Rows marked <em>equity</em> are encoding, opening-balance or cost corrections: they're booked to Inventory Corrections and don't count as profit or loss.</p>
 
 <div class="table-wrap">
   <table class="grid">
@@ -34,7 +34,7 @@
         <td class="strong">{{ r.product_name }}</td>
         <td>{{ r.reason }}{% if r.books == 'equity' %} <span class="warn-tag" style="background:#eff6ff;color:#1d4ed8;">equity</span>{% endif %}</td>
         <td>{{ r.note }}</td>
-        <td>{% if r.adjustment_id %}<a class="btn-link" href="/inventory-adjustments/{{ r.adjustment_id }}">{{ r.ref }}</a>{% else %}<span class="muted">{{ r.ref }}</span>{% endif %}</td>
+        <td>{% if r.adjustment_id %}<a class="btn-link" href="/inventory-adjustments/{{ r.adjustment_id }}?back={{ back_here() }}">{{ r.ref }}</a>{% else %}<span class="muted">{{ r.ref }}</span>{% endif %}</td>
         <td class="num {{ 'neg' if r.qty_base < 0 }}">{{ r.qty_base|qty }}</td>
         <td class="num">{{ r.unit_cost|peso }}</td>
         <td class="num {{ 'neg' if r.value < 0 }}">{{ r.value|peso }}</td>

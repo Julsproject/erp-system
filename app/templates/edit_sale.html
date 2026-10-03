@@ -7,7 +7,7 @@
     <p class="muted">Correcting a same-day mistake. Stock is reversed for the old items and re-applied for the
       corrected ones; the single payment on this sale is auto-adjusted to match the new total.</p>
   </div>
-  <a class="btn-link" href="/pos/receipt/{{ sale.id }}?from=sales">← Back to receipt</a>
+  <a class="btn-link" href="{{ receipt_url }}">← Back to receipt</a>
 </div>
 
 <div class="pos-grid">
@@ -58,7 +58,7 @@
 
       <div class="form-actions" style="margin-top:16px;">
         <button class="btn" id="saveBtn" onclick="saveEdit()">Save corrections</button>
-        <a class="btn-secondary" href="/pos/receipt/{{ sale.id }}?from=sales">Cancel</a>
+        <a class="btn-secondary" href="{{ receipt_url }}">Cancel</a>
       </div>
     </div>
   </section>
@@ -233,7 +233,7 @@ async function saveEdit() {
   try {
     const res = await fetch('/pos/receipt/' + saleId + '/edit', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
     const data = await res.json();
-    if (data.ok) { window.location = '/pos/receipt/' + saleId + '?from=sales'; }
+    if (data.ok) { window.location = {{ receipt_url|tojson }}; }
     else { err.textContent = data.error || 'Could not save.'; err.style.display = 'block'; btn.disabled = false; btn.textContent = 'Save corrections'; }
   } catch (e) {
     err.textContent = 'Network error. Please try again.'; err.style.display = 'block'; btn.disabled = false; btn.textContent = 'Save corrections';

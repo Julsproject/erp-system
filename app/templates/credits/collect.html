@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">Collect Payment</h1>
-  {% if customer %}<a class="btn-link" href="/credits/collect">← Search another customer</a>{% endif %}
+  {% if customer %}<a class="btn-link" href="/credits/collect{{ '?q=' ~ q|urlencode if q }}">← Search another customer</a>{% endif %}
 </div>
 
 {% if not customer %}
@@ -19,7 +19,7 @@
     <tbody>
       {% for c in matches %}
       <tr>
-        <td><a href="/credits/collect?customer_id={{ c.id }}">{{ c.name }}</a></td>
+        <td><a href="/credits/collect?customer_id={{ c.id }}{{ '&q=' ~ q|urlencode if q }}">{{ c.name }}</a></td>
         <td class="num owed">{{ match_totals.get(c.id, 0)|peso }}</td>
       </tr>
       {% else %}
@@ -42,9 +42,9 @@
 {% else %}
 <h3 style="margin:0 0 2px;">{{ customer.name }}</h3>
 <p class="muted" style="margin:0 0 16px;font-size:12.5px;">
-  <a class="btn-link" href="/credits/{{ customer.id }}">View full statement →</a>
+  <a class="btn-link" href="/credits/{{ customer.id }}?back={{ back_here() }}">View full statement →</a>
   {% if is_admin %}
-  · <a class="btn-link" href="/accounting/journal-entries/new?template=customer_payment&description={{ ('Payment received from ' ~ customer.name)|urlencode }}">+ New Entry</a>
+  · <a class="btn-link" href="/accounting/journal-entries/new?template=customer_payment&description={{ ('Payment received from ' ~ customer.name)|urlencode }}&back={{ back_here() }}">+ New Entry</a>
   <span class="muted">— no matching invoice below? Record the payment directly as a journal entry instead.</span>
   {% endif %}
 </p>
@@ -65,7 +65,7 @@
 {% if si_eligible_ids %}<form method="post" action="/credits/{{ customer.id }}/issue-si" id="issueSiForm"></form>{% endif %}
 
 <div style="max-width:680px;margin-bottom:10px;">
-  <input class="search" type="search" id="invoiceSearch" placeholder="Search invoice #…" oninput="filterInvoices()" style="width:100%;">
+  <input class="search" type="search" id="invoiceSearch" data-remember="inv-{{ customer.id }}" placeholder="Search invoice #…" oninput="filterInvoices()" style="width:100%;">
 </div>
 
 <div class="table-wrap" style="max-width:680px;">

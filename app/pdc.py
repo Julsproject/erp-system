@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from . import accounting, audit, models
 from .credits import _outstanding_sales
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_staff, safe_back_url, url_with
 from .sales import _resolve_settlement_datetime
 from .suppliers import _outstanding_purchases
 from .templating import templates
@@ -124,23 +124,33 @@ def list_pdc(
 
 
 @router.get("/pdc/{pdc_id:int}", response_class=HTMLResponse)
-def view_pdc(pdc_id: int, request: Request, delete_error: int = 0, unclear_error: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def view_pdc(pdc_id: int, request: Request, delete_error: int = 0, unclear_error: int = 0, back: str = "",
+             db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
+    back = safe_back_url(back, "/pdc")
     pdc = db.get(models.PostDatedCheque, pdc_id)
     if not pdc:
-        return RedirectResponse("/pdc", status_code=302)
+        return RedirectResponse(back, status_code=302)
     return templates.TemplateResponse(
         "pdc/view.html",
         {"request": request, "app_name": request.app.title, "user": user, "pdc": pdc, "today": _today(),
-         "delete_error": delete_error, "unclear_error": unclear_error},
+         "delete_error": delete_error, "unclear_error": unclear_error, "back": back},
     )
 
 
+def _view_url(pdc_id: int, back: str, **params) -> str:
+    """The cheque's own page after an action on it, keeping where it was
+    opened from (`back`: the filtered register, the due list, a booklet...)
+    so its "Back" still goes there."""
+    return url_with(f"/pdc/{pdc_id}", back=safe_back_url(back, ""), **params)
+
+
 @router.post("/pdc/{pdc_id:int}/deposit")
-def deposit_pdc(pdc_id: int, request: Request, deposit_date: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+def deposit_pdc(pdc_id: int, request: Request, deposit_date: str = "", back: str = Form(""),
+                db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Handed to the bank teller — a physical-custody marker only, no
     financial posting yet (same limbo as pending). Optional step; clear/
     bounce both still work directly from pending too."""
@@ -150,7 +160,7 @@ def deposit_pdc(pdc_id: int, request: Request, deposit_date: str = "", db: Sessi
         return RedirectResponse("/pos", status_code=302)
     pdc = db.get(models.PostDatedCheque, pdc_id)
     if not pdc or pdc.status != "pending":
-        return RedirectResponse(f"/pdc/{pdc_id}", status_code=302)
+        return RedirectResponse(_view_url(pdc_id, back), status_code=302)
     try:
         pdc.deposit_date = date.fromisoformat(deposit_date) if deposit_date else _today()
     except ValueError:
@@ -162,7 +172,7 @@ def deposit_pdc(pdc_id: int, request: Request, deposit_date: str = "", db: Sessi
         summary=f"Marked cheque {pdc.cheque_no or pdc.id} as deposited ({pdc.bank or 'bank'}, {pdc.amount})",
     )
     db.commit()
-    return RedirectResponse(f"/pdc/{pdc_id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(_view_url(pdc_id, back), status_code=status.HTTP_302_FOUND)
 
 
 def _apply_clearing(db: Session, pdc: models.PostDatedCheque, clear_dt, user) -> None:
@@ -358,7 +368,8 @@ def auto_clear_due_cheques(db: Session) -> int:
 
 
 @router.post("/pdc/{pdc_id:int}/clear")
-def clear_pdc(pdc_id: int, request: Request, clear_date: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
+def clear_pdc(pdc_id: int, request: Request, clear_date: str = Form(""), back: str = Form(""),
+              db: Session = Depends(get_db), user=Depends(get_current_user)):
     """The bank honored it: apply the payment it represents, only now.
     `clear_date` backdates the resulting settlement (and its posting) to
     when the cheque actually cleared, for a cheque that's only being marked
@@ -369,7 +380,7 @@ def clear_pdc(pdc_id: int, request: Request, clear_date: str = Form(""), db: Ses
         return RedirectResponse("/pos", status_code=302)
     pdc = db.get(models.PostDatedCheque, pdc_id)
     if not pdc or pdc.status not in ("pending", "deposited"):
-        return RedirectResponse(f"/pdc/{pdc_id}", status_code=302)
+        return RedirectResponse(_view_url(pdc_id, back), status_code=302)
     # Lenient like deposit_pdc's own date handling above — an invalid or
     # future date just falls back to live 'now' rather than blocking the
     # whole action over a date field.
@@ -382,12 +393,12 @@ def clear_pdc(pdc_id: int, request: Request, clear_date: str = Form(""), db: Ses
         summary=f"Cleared cheque {pdc.cheque_no or pdc.id} — {pdc.amount}",
     )
     db.commit()
-    return RedirectResponse(f"/pdc/{pdc_id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(_view_url(pdc_id, back), status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/pdc/{pdc_id:int}/bounce")
 def bounce_pdc(pdc_id: int, request: Request, notes: str = Form(""), bounce_date: str = Form(""),
-               db: Session = Depends(get_db), user=Depends(get_current_user)):
+               back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     """The bank rejected it — also after it was marked cleared (cheques now
     clear themselves on their date). A cleared one has its clearing undone
     first, so the invoice is owed again. An issued cheque for a delivery
@@ -398,7 +409,7 @@ def bounce_pdc(pdc_id: int, request: Request, notes: str = Form(""), bounce_date
         return RedirectResponse("/pos", status_code=302)
     pdc = db.get(models.PostDatedCheque, pdc_id)
     if not pdc or pdc.status not in ("pending", "deposited", "cleared"):
-        return RedirectResponse(f"/pdc/{pdc_id}", status_code=302)
+        return RedirectResponse(_view_url(pdc_id, back), status_code=302)
 
     label = pdc.cheque_no or f"PDC-{pdc.id}"
     bounce_dt, _ = _resolve_settlement_datetime(bounce_date)
@@ -409,7 +420,7 @@ def bounce_pdc(pdc_id: int, request: Request, notes: str = Form(""), bounce_date
     if was_cleared:
         reversed_n = _undo_clearing(db, pdc, user, reason=reason, on_date=on_date)
         if reversed_n is None:
-            return RedirectResponse(f"/pdc/{pdc_id}?unclear_error=1", status_code=status.HTTP_302_FOUND)
+            return RedirectResponse(_view_url(pdc_id, back, unclear_error=1), status_code=status.HTTP_302_FOUND)
     try:
         reopened = _reopen_paid_on_receipt(db, pdc, user, on_date=on_date, reason=reason)
     except accounting.PostingError:
@@ -429,11 +440,12 @@ def bounce_pdc(pdc_id: int, request: Request, notes: str = Form(""), bounce_date
                  + (f" ({note})" if note else "")),
     )
     db.commit()
-    return RedirectResponse(f"/pdc/{pdc_id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(_view_url(pdc_id, back), status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/pdc/{pdc_id:int}/cancel")
-def cancel_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def cancel_pdc(pdc_id: int, request: Request, back: str = Form(""),
+               db: Session = Depends(get_db), user=Depends(get_current_user)):
     """The cheque was returned/replaced before ever being deposited."""
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -449,11 +461,12 @@ def cancel_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), use
             summary=f"Cancelled cheque {pdc.cheque_no or pdc.id} — {pdc.amount}",
         )
         db.commit()
-    return RedirectResponse(f"/pdc/{pdc_id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(_view_url(pdc_id, back), status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/pdc/{pdc_id:int}/delete")
-def delete_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def delete_pdc(pdc_id: int, request: Request, back: str = Form(""),
+               db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Removes a pending cheque entirely — for a genuine data-entry mistake
     (e.g. the same cheque logged 2-3 times), not a real transaction worth
     keeping a "cancelled" record of. Only allowed while still pending: a
@@ -468,9 +481,9 @@ def delete_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), use
         return RedirectResponse("/pos", status_code=302)
     pdc = db.get(models.PostDatedCheque, pdc_id)
     if not pdc:
-        return RedirectResponse("/pdc", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(safe_back_url(back, "/pdc"), status_code=status.HTTP_302_FOUND)
     if pdc.status != "pending":
-        return RedirectResponse(f"/pdc/{pdc_id}?delete_error=1", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(_view_url(pdc_id, back, delete_error=1), status_code=status.HTTP_302_FOUND)
 
     audit.record(
         db, user=user, request=request, action="delete", entity_type="post_dated_cheque",
@@ -479,7 +492,7 @@ def delete_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), use
     )
     db.delete(pdc)
     db.commit()
-    return RedirectResponse("/pdc?deleted=1", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url_with(safe_back_url(back, "/pdc"), deleted=1), status_code=status.HTTP_302_FOUND)
 
 
 # --------------------------------------------------------------------------- #
@@ -644,7 +657,7 @@ def due_worklist(
 
 @router.post("/pdc/due/clear")
 def bulk_clear(
-    request: Request, clear_date: str = Form(""), pdc_id: list[str] = Form([]),
+    request: Request, clear_date: str = Form(""), pdc_id: list[str] = Form([]), direction: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """Clear every ticked cheque, all on one clearing date.
@@ -682,7 +695,8 @@ def bulk_clear(
         done += 1
 
     db.commit()
-    return RedirectResponse(f"/pdc/due?cleared={done}", status_code=status.HTTP_302_FOUND)
+    direction = direction if direction in ("received", "issued") else ""
+    return RedirectResponse(url_with("/pdc/due", direction=direction, cleared=done), status_code=status.HTTP_302_FOUND)
 
 
 def _undo_clearing(db: Session, pdc: models.PostDatedCheque, user, *, reason: str, on_date=None):
@@ -784,7 +798,8 @@ def _reopen_paid_on_receipt(db: Session, pdc: models.PostDatedCheque, user, *, o
 
 
 @router.post("/pdc/{pdc_id:int}/unclear")
-def unclear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def unclear_pdc(pdc_id: int, request: Request, back: str = Form(""),
+                db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Undo a clearing that shouldn't have happened — the cheque goes back to
     pending and everything the clearing did is reversed.
 
@@ -805,13 +820,13 @@ def unclear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), us
         return RedirectResponse("/pos", status_code=302)
     pdc = db.get(models.PostDatedCheque, pdc_id)
     if not pdc or pdc.status != "cleared":
-        return RedirectResponse(f"/pdc/{pdc_id}", status_code=302)
+        return RedirectResponse(_view_url(pdc_id, back), status_code=302)
 
     label = pdc.cheque_no or f"PDC-{pdc.id}"
     n = _undo_clearing(db, pdc, user, reason=f"Un-cleared cheque {label}")
     if n is None:
         # Legacy clearing with no trail — see the docstring.
-        return RedirectResponse(f"/pdc/{pdc_id}?unclear_error=1", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(_view_url(pdc_id, back, unclear_error=1), status_code=status.HTTP_302_FOUND)
 
     # Back to limbo, exactly where it was before someone said it cleared.
     pdc.status = "pending"
@@ -822,4 +837,4 @@ def unclear_pdc(pdc_id: int, request: Request, db: Session = Depends(get_db), us
         summary=f"Un-cleared cheque {label} — reversed {n} settlement(s), {pdc.amount}",
     )
     db.commit()
-    return RedirectResponse(f"/pdc/{pdc_id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(_view_url(pdc_id, back), status_code=status.HTTP_302_FOUND)

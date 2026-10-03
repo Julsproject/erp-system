@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from . import accounting, audit, models
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_staff, safe_back_url, url_with
 from .templating import templates
 
 router = APIRouter()
@@ -264,6 +264,7 @@ def new_transaction(
     request: Request,
     txn_type: str = "deposit",
     error: str = "",
+    back: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -282,7 +283,7 @@ def new_transaction(
         {
             "request": request, "app_name": request.app.title, "user": user,
             "account": account, "txn_type": txn_type, "today": date.today().isoformat(), "error": error,
-            "contra_accounts": contra_accounts,
+            "contra_accounts": contra_accounts, "back": safe_back_url(back, f"/banking/accounts/{account_id}"),
         },
     )
 
@@ -292,6 +293,7 @@ def create_transaction(
     account_id: int, request: Request,
     txn_type: str = Form(""), amount: str = Form(""), contra_account_id: str = Form(""),
     txn_date: str = Form(""), description: str = Form(""), reference_no: str = Form(""),
+    back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -304,10 +306,12 @@ def create_transaction(
     txn_type = (txn_type or "").strip().lower()
     if txn_type not in TXN_LABELS:
         txn_type = "deposit"
+    back = safe_back_url(back, f"/banking/accounts/{account_id}")
     amount = _dec(amount)
     if amount <= 0:
         return RedirectResponse(
-            f"/banking/accounts/{account_id}/transactions/new?txn_type={txn_type}&error=Enter+an+amount+greater+than+zero.",
+            url_with(f"/banking/accounts/{account_id}/transactions/new", txn_type=txn_type,
+                     error="Enter an amount greater than zero.", back=back),
             status_code=302,
         )
     contra_account_id = (contra_account_id or "").strip()
@@ -333,11 +337,12 @@ def create_transaction(
         summary=f"{TXN_LABELS[txn_type]} of {amount} on “{account.name}”",
     )
     db.commit()
-    return RedirectResponse(f"/banking/accounts/{account_id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(back, status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/banking/transactions/{txn_id:int}/void")
-def void_transaction(txn_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def void_transaction(txn_id: int, request: Request, back: str = Form(""),
+                     db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -354,12 +359,12 @@ def void_transaction(txn_id: int, request: Request, db: Session = Depends(get_db
         summary=f"Voided {TXN_LABELS.get(txn.txn_type, txn.txn_type)} of {txn.amount}",
     )
     db.commit()
-    return RedirectResponse(f"/banking/accounts/{account_id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(safe_back_url(back, f"/banking/accounts/{account_id}"), status_code=status.HTTP_302_FOUND)
 
 
 @router.get("/banking/accounts/{account_id:int}/reconcile", response_class=HTMLResponse)
 def reconcile_account(
-    account_id: int, request: Request, statement_balance: str = "",
+    account_id: int, request: Request, statement_balance: str = "", back: str = "",
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -403,14 +408,14 @@ def reconcile_account(
          "unreconciled": unreconciled, "outstanding_checks": outstanding_checks,
          "outstanding_deposits": outstanding_deposits, "reconciled": reconciled,
          "statement_balance": statement_balance, "stmt_balance": stmt_balance, "diff": diff,
-         "labels": TXN_LABELS},
+         "labels": TXN_LABELS, "back": safe_back_url(back, f"/banking/accounts/{account_id}")},
     )
 
 
 @router.post("/banking/accounts/{account_id:int}/reconcile")
 def reconcile_submit(
     account_id: int, request: Request,
-    txn_id: list[str] = Form([]), statement_balance: str = Form(""),
+    txn_id: list[str] = Form([]), statement_balance: str = Form(""), back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -436,7 +441,9 @@ def reconcile_submit(
         )
         db.commit()
     return RedirectResponse(
-        f"/banking/accounts/{account_id}/reconcile?statement_balance={statement_balance}", status_code=status.HTTP_302_FOUND
+        url_with(f"/banking/accounts/{account_id}/reconcile", statement_balance=statement_balance,
+                 back=safe_back_url(back, "")),
+        status_code=status.HTTP_302_FOUND,
     )
 
 
@@ -528,6 +535,7 @@ def _find_col(fieldnames, candidates):
 @router.post("/banking/accounts/{account_id:int}/reconcile/import", response_class=HTMLResponse)
 def import_statement(
     account_id: int, request: Request, statement_file: UploadFile,
+    statement_balance: str = Form(""), back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -537,6 +545,7 @@ def import_statement(
     account = db.get(models.BankAccount, account_id)
     if not account:
         return RedirectResponse("/banking", status_code=302)
+    back = safe_back_url(back, "")
 
     raw = statement_file.file.read().decode("utf-8-sig", errors="replace")
     reader = csv.DictReader(io.StringIO(raw))
@@ -554,7 +563,8 @@ def import_statement(
             {"request": request, "app_name": request.app.title, "user": user, "account": account,
              "error": f"Couldn't find a Date column and an Amount/Debit/Credit column in this file. "
                       f"Columns found: {', '.join(fieldnames) or '(none — is this a CSV?)'}",
-             "matched": [], "unmatched_rows": [], "detected": {}},
+             "matched": [], "unmatched_rows": [], "detected": {},
+             "statement_balance": statement_balance, "back": back},
         )
 
     statement_rows = []
@@ -613,12 +623,14 @@ def import_statement(
         {"request": request, "app_name": request.app.title, "user": user, "account": account,
          "error": None, "matched": matched, "unmatched_rows": unmatched_rows,
          "detected": {"date": date_col, "description": desc_col, "debit": debit_col,
-                      "credit": credit_col, "amount": amount_col, "reference": ref_col}},
+                      "credit": credit_col, "amount": amount_col, "reference": ref_col},
+         "statement_balance": statement_balance, "back": back},
     )
 
 
 @router.post("/banking/transactions/{txn_id:int}/unreconcile")
-def unreconcile_transaction(txn_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def unreconcile_transaction(txn_id: int, statement_balance: str = Form(""), back: str = Form(""),
+                            db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -630,4 +642,8 @@ def unreconcile_transaction(txn_id: int, db: Session = Depends(get_db), user=Dep
     txn.reconciled_at = None
     txn.reconciled_by_id = None
     db.commit()
-    return RedirectResponse(f"/banking/accounts/{account_id}/reconcile", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(
+        url_with(f"/banking/accounts/{account_id}/reconcile", statement_balance=statement_balance,
+                 back=safe_back_url(back, "")),
+        status_code=status.HTTP_302_FOUND,
+    )

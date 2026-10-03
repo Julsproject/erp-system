@@ -7,7 +7,10 @@
     <p class="muted">Log a DRS/DRB/SI number that was spoiled, mis-written, or otherwise never used for a sale —
       keeps the booklet's number sequence fully accounted for.</p>
   </div>
-  <a class="btn-secondary" href="/pos/invoice-gaps">🔍 Find Missing Numbers</a>
+  <div class="head-actions">
+    {% if back %}<a class="btn-secondary" href="{{ back }}">← Back</a>{% endif %}
+    <a class="btn-secondary" href="/pos/invoice-gaps">🔍 Find Missing Numbers</a>
+  </div>
 </div>
 
 {% if request.query_params.get('error') %}
@@ -17,13 +20,16 @@
 <div class="card" style="max-width:520px;margin-bottom:18px;">
   <h3 style="margin:0 0 12px;font-size:15px;">Log a cancelled receipt</h3>
   <form class="form" method="post" action="/pos/cancelled-receipts">
+    {# Where "Log it" returns to: the page that sent us here (Find Missing
+       Numbers), else this list as it's filtered now. #}
+    <input type="hidden" name="back" value="{{ back or (request.url.path ~ ('?' ~ request.url.query if request.url.query else '')) }}">
     <label>Receipt Type
       <select name="receipt_type">
-        {% for rt in receipt_types %}<option value="{{ rt }}">{{ rt }}</option>{% endfor %}
+        {% for rt in receipt_types %}<option value="{{ rt }}" {{ 'selected' if rt == log_type }}>{{ rt }}</option>{% endfor %}
       </select>
     </label>
     <label>Invoice #
-      <input type="text" name="invoice_no" placeholder="e.g. 000145" required>
+      <input type="text" name="invoice_no" value="{{ log_no }}" placeholder="e.g. 000145" required>
     </label>
     <label>Date
       <input type="date" name="cancelled_date" value="{{ today }}">
@@ -62,7 +68,7 @@
         <td>{{ r.reason or '—' }}</td>
         <td class="muted">{{ r.recorded_by.full_name or r.recorded_by.username if r.recorded_by else '—' }}</td>
         <td class="row-actions">
-          <form method="post" action="/pos/cancelled-receipts/{{ r.id }}/delete" onsubmit="return confirm('Remove this log entry?');">
+          <form method="post" action="/pos/cancelled-receipts/{{ r.id }}/delete" onsubmit="return confirm('Remove this log entry?');"><input type="hidden" name="back" value="{{ request.url.path ~ ('?' ~ request.url.query if request.url.query else '') }}">
             <button class="btn-link" type="submit">Remove</button>
           </form>
         </td>

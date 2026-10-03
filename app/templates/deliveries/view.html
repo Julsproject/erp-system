@@ -13,7 +13,7 @@
       {% if delivery.is_cod %}<span class="txn cod-pill">COD</span>{% endif %}
     </p>
   </div>
-  <a class="btn-secondary" href="/deliveries">← Back to Deliveries</a>
+  <a class="btn-secondary" href="{{ back }}">← {{ 'Back to Deliveries' if back.startswith('/deliveries') else 'Back' }}</a>
 </div>
 
 {% if error %}<div class="alert" style="max-width:640px;">{{ error }}</div>{% endif %}
@@ -30,7 +30,7 @@
 <div class="card" style="padding:24px;max-width:640px;">
   <div class="r-meta" style="display:flex;justify-content:space-between;font-size:13.5px;color:var(--muted);margin-bottom:16px;">
     <span>Invoice:
-      {% if delivery.sale %}<a href="/pos/receipt/{{ delivery.sale.id }}?from=sales">{{ delivery.sale.invoice_no }}</a>{% else %}—{% endif %}
+      {% if delivery.sale %}<a href="/pos/receipt/{{ delivery.sale.id }}?back={{ back_here() }}">{{ delivery.sale.invoice_no }}</a>{% else %}—{% endif %}
     </span>
     <span>Created {{ delivery.created_at.strftime('%b %d, %Y %I:%M %p') if delivery.created_at else '' }}</span>
   </div>
@@ -70,8 +70,8 @@
 
 {% if delivery.status != 'cancelled' %}
 <div class="pos-actions" style="justify-content:flex-start;max-width:640px;">
-  <a class="btn-secondary" href="/deliveries/{{ delivery.id }}/edit">Edit details</a>
-  <form method="post" action="/deliveries/{{ delivery.id }}/cancel" onsubmit="return confirm('Cancel this delivery?');"><button class="btn-link danger" type="submit">Cancel delivery</button></form>
+  <a class="btn-secondary" href="/deliveries/{{ delivery.id }}/edit?back={{ back|urlencode }}">Edit details</a>
+  <form method="post" action="/deliveries/{{ delivery.id }}/cancel" onsubmit="return confirm('Cancel this delivery?');"><input type="hidden" name="back" value="{{ back }}"><button class="btn-link danger" type="submit">Cancel delivery</button></form>
 </div>
 {% endif %}
 {% endblock %}

@@ -5,7 +5,7 @@
   <h1 class="page-title">Credits</h1>
   <div style="display:flex;gap:10px;">
     <a class="btn" href="/credits/collect">₱ Collect Payment</a>
-    <a class="btn-secondary" href="/credits/references">📋 Payment References</a>
+    <a class="btn-secondary" href="/credits/references?back={{ back_here() }}">📋 Payment References</a>
   </div>
 </div>
 
@@ -47,8 +47,8 @@
         <td>{{ c.address or '—' }}</td>
         <td class="num {{ 'owed' if outstanding.get(c.id, 0) > 0 }}">{{ outstanding.get(c.id, 0)|peso }}</td>
         <td class="row-actions">
-          <a class="btn-pay" href="/credits/{{ c.id }}">View statement</a>
-          {% if outstanding.get(c.id, 0) > 0 %}<a class="btn-pay" href="/credits/{{ c.id }}/pay-full">Pay Full</a>{% endif %}
+          <a class="btn-pay" href="/credits/{{ c.id }}?back={{ back_here() }}">View statement</a>
+          {% if outstanding.get(c.id, 0) > 0 %}<a class="btn-pay" href="/credits/{{ c.id }}/pay-full?back={{ back_here() }}">Pay Full</a>{% endif %}
         </td>
       </tr>
       {% else %}
@@ -60,9 +60,9 @@
 
 {% if pages > 1 %}
 <div class="pager">
-  {% if page > 1 %}<a class="btn-secondary" href="/credits?page={{ page - 1 }}&q={{ q }}">← Prev</a>{% endif %}
+  {% if page > 1 %}<a class="btn-secondary" href="/credits?page={{ page - 1 }}&q={{ q|urlencode }}">← Prev</a>{% endif %}
   <span class="muted">Page {{ page }} of {{ pages }}</span>
-  {% if page < pages %}<a class="btn-secondary" href="/credits?page={{ page + 1 }}&q={{ q }}">Next →</a>{% endif %}
+  {% if page < pages %}<a class="btn-secondary" href="/credits?page={{ page + 1 }}&q={{ q|urlencode }}">Next →</a>{% endif %}
 </div>
 {% endif %}
 {% endblock %}

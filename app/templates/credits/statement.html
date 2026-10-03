@@ -92,7 +92,7 @@
           <td class="num">{{ r.orig|peso }}</td>
           <td class="num">{{ r.paid|peso }}</td>
           <td class="num {{ 'owed' if r.outstanding > 0 }}" data-outstanding="{{ r.outstanding }}">{{ r.outstanding|peso }}</td>
-          <td class="no-print">{% if r.outstanding > 0 %}<a class="pay-link" href="/sales/receivables/{{ r.sale.id }}/pay?from_page=credits">Collect payment</a>{% endif %}</td>
+          <td class="no-print">{% if r.outstanding > 0 %}<a class="pay-link" href="/sales/receivables/{{ r.sale.id }}/pay?from_page=credits&back={{ back_here() }}">Collect payment</a>{% endif %}</td>
         </tr>
         {% else %}
         <tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px;">No credit transactions.</td></tr>
@@ -149,6 +149,7 @@
           <td class="no-print">
             {% if undoable.get(st.id) %}
             <form method="post" action="/credits/settlements/{{ st.id }}/undo" onsubmit="return confirm('Undo this {{ st.amount|peso }} payment on Invoice {{ st.sale.invoice_no }}? The invoice goes back to outstanding.');" style="display:inline;">
+              <input type="hidden" name="back" value="{{ request.url.path ~ ('?' ~ request.url.query if request.url.query else '') }}">
               <button type="submit" class="pay-link" style="background:none;border:none;cursor:pointer;color:#b91c1c;">Undo</button>
             </form>
             {% endif %}
@@ -163,8 +164,8 @@
   </div>
 
   <div class="actions">
-    <a class="btn back" href="/credits">← Back</a>
-    {% if out_total > 0 %}<a class="btn back" href="/credits/{{ customer.id }}/pay-full">Pay Full</a>{% endif %}
+    <a class="btn back" href="{{ back }}">← Back</a>
+    {% if out_total > 0 %}<a class="btn back" href="/credits/{{ customer.id }}/pay-full?back={{ back_here() }}">Pay Full</a>{% endif %}
     <button class="btn print" onclick="window.print()">🖨 Print</button>
     <a class="btn back" href="/credits/{{ customer.id }}/pdf">⬇ Download PDF</a>
   </div>
@@ -222,7 +223,7 @@
     function goPaySelected() {
       const ids = Array.from(document.querySelectorAll('.payChk:checked')).map(c => 'sale_ids=' + c.value);
       if (!ids.length) return;
-      window.location.href = '/credits/{{ customer.id }}/pay-selected?' + ids.join('&');
+      window.location.href = '/credits/{{ customer.id }}/pay-selected?back={{ back_here() }}&' + ids.join('&');
     }
 
     restoreSelection();

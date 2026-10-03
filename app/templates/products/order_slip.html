@@ -63,7 +63,7 @@
 <body class="show-cost">
   <div class="toolbar">
     <div class="grp">
-      <a href="/products?flag=nostock" onclick="if (/\/(products|purchases|suppliers|payments)/.test(document.referrer)) { history.back(); return false; }">← Back</a>
+      <a href="/products?flag=nostock" onclick="if (/\/(products|purchases|suppliers|payments)/.test(document.referrer) && history.length > 1) { history.back(); return false; }">← Back</a>
       <span class="muted">Tick more items there and click <strong>📝 Order slip</strong> again to add them.</span>
     </div>
     <div class="grp">
@@ -285,7 +285,7 @@
   function receiveAsPurchase() {
     if (!draft.rows.length) { alert('Add items to the slip first.'); return; }
     save();
-    location.href = '/purchases/new?from_slip=1';
+    location.href = '/purchases/new?from_slip=1&back=' + encodeURIComponent(location.pathname + location.search);
   }
 
   // PDF copy — built server-side from the slip exactly as it is on screen.

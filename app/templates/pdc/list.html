@@ -91,9 +91,10 @@
           {% endif %}
         </td>
         <td class="row-actions">
-          <a class="btn-link" href="/pdc/{{ p.id }}">View</a>
+          <a class="btn-link" href="/pdc/{{ p.id }}?back={{ back_here() }}">View</a>
           {% if p.status == 'pending' %}
           <form method="post" action="/pdc/{{ p.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete this cheque entry? Use this only for a duplicate or data-entry mistake — this cannot be undone.');">
+            <input type="hidden" name="back" value="{{ request.url.path ~ ('?' ~ request.url.query if request.url.query else '') }}">
             <button type="submit" class="btn-link danger">Delete</button>
           </form>
           {% endif %}

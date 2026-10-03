@@ -4,24 +4,27 @@
 <div class="page-head">
   <div>
     <h1 class="page-title">Price List</h1>
-    <p class="muted">{{ products|length }} product{{ '' if products|length == 1 else 's' }}{{ ' — preview before downloading' }}</p>
+    <p class="muted">{{ total }} product{{ '' if total == 1 else 's' }}{{ ' matching "' ~ q ~ '"' if q }} — preview before downloading</p>
   </div>
   <div class="head-actions">
-    <a class="btn-secondary" href="/products">← Inventory</a>
+    <a class="btn-secondary" href="{{ back }}">← Inventory</a>
     <a class="btn" href="/products/price-list.xlsx?category_id={{ category_id }}">⬇ Download Excel</a>
   </div>
 </div>
 
 <div class="toolbar" style="margin-bottom:14px;">
-  <form method="get" action="/products/price-list" style="display:flex;align-items:center;gap:8px;">
+  <form method="get" action="/products/price-list" style="display:flex;align-items:center;gap:8px;flex:1;flex-wrap:wrap;">
+    <input type="hidden" name="back" value="{{ back }}">
     <select name="category_id" onchange="this.form.submit()" style="padding:8px 10px;border:1px solid var(--line-2);border-radius:8px;font-size:13px;background:var(--surface);color:var(--ink);">
       <option value="0">All categories</option>
       {% for c in categories %}
       <option value="{{ c.id }}" {{ 'selected' if c.id == category_id }}>{{ c.name }}</option>
       {% endfor %}
     </select>
+    <input class="search" type="search" name="q" id="plSearch" value="{{ q }}" placeholder="Search product or category…" style="margin-left:auto;">
+    <button class="btn-secondary" type="submit">Search</button>
+    {% if q %}<a class="btn-link" href="/products/price-list?category_id={{ category_id }}&back={{ back|urlencode }}">Clear</a>{% endif %}
   </form>
-  <input class="search" type="search" id="plSearch" placeholder="Search this list…" oninput="plFilter()" style="margin-left:auto;">
 </div>
 
 <div class="table-wrap">
@@ -38,25 +41,30 @@
         <td class="num">{{ p.selling_price|peso }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="4" class="empty">No products in this category.</td></tr>
+      <tr><td colspan="4" class="empty">{{ 'No products match your search.' if q else 'No products in this category.' }}</td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
-<p class="muted" id="plCount" style="margin-top:8px;font-size:12.5px;"></p>
+{% if pages > 1 %}
+<div class="pager">
+  {% set page_qs = '&category_id=' ~ category_id ~ ('&q=' ~ q|urlencode if q) ~ '&back=' ~ back|urlencode %}
+  {% if page > 1 %}<a class="btn-secondary" href="/products/price-list?page={{ page - 1 }}{{ page_qs }}">← Prev</a>{% endif %}
+  <span class="muted">Page {{ page }} of {{ pages }}</span>
+  {% if page < pages %}<a class="btn-secondary" href="/products/price-list?page={{ page + 1 }}{{ page_qs }}">Next →</a>{% endif %}
+</div>
+{% endif %}
 
 <script>
-function plFilter() {
-  var q = document.getElementById('plSearch').value.trim().toLowerCase();
-  var rows = document.querySelectorAll('#plTable tbody tr');
-  var shown = 0;
-  rows.forEach(function (row) {
-    var match = !q || row.textContent.toLowerCase().indexOf(q) !== -1;
-    row.hidden = !match;
-    if (match) shown++;
-  });
-  var countEl = document.getElementById('plCount');
-  countEl.textContent = q ? (shown + ' of ' + rows.length + ' shown') : '';
-}
+  // Same caret fix as the Inventory search box (products/list.html): after a
+  // search reloads the page, keep typing at the end of what's already there.
+  (function() {
+    var box = document.getElementById('plSearch');
+    if (box && box.value) {
+      box.focus();
+      var end = box.value.length;
+      box.setSelectionRange(end, end);
+    }
+  })();
 </script>
 {% endblock %}

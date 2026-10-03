@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from . import audit, models, pricing
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_staff, safe_back_url, url_with
 from .templating import templates
 
 router = APIRouter()
@@ -170,8 +170,11 @@ def change_base_unit(db: Session, product: models.Product, *, new_unit_name: str
 
 
 @router.get("/products/{product_id:int}/change-unit", response_class=HTMLResponse)
-def change_unit_form(product_id: int, request: Request, error: str = "",
+def change_unit_form(product_id: int, request: Request, error: str = "", back: str = "",
                      db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """`back` is the product form's own back (where the product was opened
+    from) — carried through so "Back to product" and the Stock Card it lands
+    on afterwards still return there."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -184,13 +187,14 @@ def change_unit_form(product_id: int, request: Request, error: str = "",
     return templates.TemplateResponse("products/change_unit.html", {
         "request": request, "app_name": request.app.title, "user": user,
         "product": product, "counterpart": counterpart, "unit_types": unit_types, "error": error,
+        "back": safe_back_url(back, ""),
     })
 
 
 @router.post("/products/{product_id:int}/change-unit")
 def change_unit_submit(product_id: int, request: Request, new_unit: str = Form(""), factor: str = Form(""),
-                       db: Session = Depends(get_db), user=Depends(get_current_user)):
-    from urllib.parse import quote
+                       back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
+    back = safe_back_url(back, "")
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -204,11 +208,11 @@ def change_unit_submit(product_id: int, request: Request, new_unit: str = Form("
         f = Decimal("0")
     old = product.unit_type.name if product.unit_type else ""
     if (new_unit or "").strip().lower() == old.lower():
-        return RedirectResponse(f"/products/{product_id}/change-unit?error={quote('That is already its base unit.')}", status_code=302)
+        return RedirectResponse(url_with(f"/products/{product_id}/change-unit", error="That is already its base unit.", back=back), status_code=302)
     try:
         change_base_unit(db, product, new_unit_name=new_unit, factor=f, user=user, request=request)
     except ValueError as e:
         db.rollback()
-        return RedirectResponse(f"/products/{product_id}/change-unit?error={quote(str(e))}", status_code=302)
+        return RedirectResponse(url_with(f"/products/{product_id}/change-unit", error=str(e), back=back), status_code=302)
     db.commit()
-    return RedirectResponse(f"/products/{product_id}/stock-card", status_code=302)
+    return RedirectResponse(url_with(f"/products/{product_id}/stock-card", back=back), status_code=302)

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from . import audit, models
 from .database import get_db
-from .deps import get_current_user, is_floor_staff, is_staff
+from .deps import get_current_user, is_floor_staff, is_staff, safe_back_url, url_with
 from .products import _get_or_create_shelf
 from .templating import templates
 
@@ -21,7 +21,7 @@ router = APIRouter()
 @router.get("/shelves", response_class=HTMLResponse)
 def shelves_list(
     request: Request, db: Session = Depends(get_db), user=Depends(get_current_user),
-    error: str = "", name: str = "", merged: str = "",
+    error: str = "", name: str = "", merged: str = "", back: str = "",
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -39,7 +39,9 @@ def shelves_list(
     return templates.TemplateResponse(
         "shelves/list.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "shelves": shelves, "counts": counts, "error": error_msg, "merged": merged},
+         "shelves": shelves, "counts": counts, "error": error_msg, "merged": merged,
+         # the (filtered) Inventory list it was opened from
+         "back": safe_back_url(back, "/products")},
     )
 
 
@@ -70,7 +72,7 @@ def merge_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_cu
 
 @router.post("/shelves/merge")
 def merge_shelves(
-    request: Request, keep_id: int = Form(...), merge_id: int = Form(...),
+    request: Request, keep_id: int = Form(...), merge_id: int = Form(...), back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """Combine two shelves into one: every product on the losing shelf moves
@@ -83,12 +85,15 @@ def merge_shelves(
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
+    # `back`: the Inventory list the Shelves page was opened from — kept so
+    # its "← Back to inventory" still returns there after the merge.
+    back = safe_back_url(back, "")
     if keep_id == merge_id:
-        return RedirectResponse("/shelves?error=samepick", status_code=302)
+        return RedirectResponse(url_with("/shelves", error="samepick", back=back), status_code=302)
     keep = db.get(models.Shelf, keep_id)
     dup = db.get(models.Shelf, merge_id)
     if not keep or not dup:
-        return RedirectResponse("/shelves?error=notfound", status_code=302)
+        return RedirectResponse(url_with("/shelves", error="notfound", back=back), status_code=302)
 
     moved = (
         db.query(models.Product)
@@ -103,18 +108,19 @@ def merge_shelves(
         summary=f"Merged shelf “{dup_name}” into “{keep.name}” — moved {moved} product(s)",
     )
     db.commit()
-    return RedirectResponse(f"/shelves?merged={quote(keep.name)}", status_code=302)
+    return RedirectResponse(url_with("/shelves", merged=keep.name, back=back), status_code=302)
 
 
 @router.post("/shelves")
-def create_shelf(request: Request, name: str = Form(...), db: Session = Depends(get_db), user=Depends(get_current_user)):
+def create_shelf(request: Request, name: str = Form(...), back: str = Form(""),
+                 db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     _get_or_create_shelf(db, name)
     db.commit()
-    return RedirectResponse("/shelves", status_code=302)
+    return RedirectResponse(url_with("/shelves", back=safe_back_url(back, "")), status_code=302)
 
 
 @router.get("/shelves/{shelf_id:int}", response_class=HTMLResponse)

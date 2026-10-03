@@ -38,7 +38,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from . import accounting, audit, models
 from .database import get_db
-from .deps import get_current_user, is_floor_staff, is_staff
+from .deps import get_current_user, is_floor_staff, is_staff, safe_back_url, url_with
 from .pos import MANILA, _apply_stock_count_correction
 from .stock_count import qty_dated_after
 from .stock_dates import latest_count_date, on_date
@@ -550,7 +550,7 @@ def adjustment_list(request: Request, status: str = "", q: str = "", page: int =
 
 @router.post("/inventory-adjustments/new")
 def adjustment_create(request: Request, adj_date: str = Form(""), reason: str = Form(""), notes: str = Form(""),
-                      product_id: int = Form(0), move: int = Form(0),
+                      product_id: int = Form(0), move: int = Form(0), back: str = Form(""),
                       db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -561,11 +561,12 @@ def adjustment_create(request: Request, adj_date: str = Form(""), reason: str = 
         reason = "encoding_correction"
     adj = _new_adjustment(db, adj_date=min(d, _today()), reason=reason, notes=notes.strip()[:255] or None, user=user)
     db.commit()
+    params = {}
     if product_id:
-        suffix = f"?move_from={product_id}" if move else f"?add={product_id}"
-    else:
-        suffix = ""
-    return RedirectResponse(f"/inventory-adjustments/{adj.id}{suffix}", status_code=302)
+        params["move_from" if move else "add"] = product_id
+    # `back`: the page the adjustment was started from (a Stock Card, the
+    # list) — the new adjustment's own Back returns there.
+    return RedirectResponse(_view_url(adj.id, back, **params), status_code=302)
 
 
 def _product_payload(p: models.Product, db: Session = None) -> dict:
@@ -625,14 +626,18 @@ def adjustment_product_search(q: str = "", id: int = 0, db: Session = Depends(ge
 
 @router.get("/inventory-adjustments/{adj_id:int}", response_class=HTMLResponse)
 def adjustment_view(adj_id: int, request: Request, error: str = "", add: int = 0, move_from: int = 0,
-                    db: Session = Depends(get_db), user=Depends(get_current_user)):
+                    back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """`back` is the page the adjustment was opened from (a filtered list,
+    the Adjustments report, a Stock Card); every form here carries it so a
+    save lands back on this page with its Back link intact."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
+    back = safe_back_url(back, "/inventory-adjustments")
     adj = db.get(models.InventoryAdjustment, adj_id)
     if not adj:
-        return RedirectResponse("/inventory-adjustments", status_code=302)
+        return RedirectResponse(back, status_code=302)
 
     rows, computed = [], []
     for line in adj.lines:
@@ -672,34 +677,38 @@ def adjustment_view(adj_id: int, request: Request, error: str = "", add: int = 0
         move_product = _product_payload(p, db) if p else None
     return _render(request, "inventory_adjustments/view.html", user, adj=adj, rows=rows, je_preview=je_preview,
                    total_value=total_value, error=error, today=_today(), add_product=add_product,
-                   move_product=move_product, can_post=is_staff(user))
+                   move_product=move_product, can_post=is_staff(user), back=back)
 
 
-def _draft_or_redirect(db, adj_id):
+def _view_url(adj_id, back="", **params):
+    """The adjustment's page, keeping the page it was opened from (`back`)."""
+    return url_with(f"/inventory-adjustments/{adj_id}", back=safe_back_url(back, ""), **params)
+
+
+def _draft_or_redirect(db, adj_id, back=""):
     adj = db.get(models.InventoryAdjustment, adj_id)
     if not adj or adj.status != "draft":
-        return None, RedirectResponse(f"/inventory-adjustments/{adj_id}", status_code=302)
+        return None, RedirectResponse(_view_url(adj_id, back), status_code=302)
     return adj, None
 
 
-def _err(adj_id, msg):
-    from urllib.parse import quote
-    return RedirectResponse(f"/inventory-adjustments/{adj_id}?error={quote(msg)}", status_code=302)
+def _err(adj_id, msg, back=""):
+    return RedirectResponse(_view_url(adj_id, back, error=msg), status_code=302)
 
 
 @router.post("/inventory-adjustments/{adj_id:int}/header")
 def adjustment_header(adj_id: int, adj_date: str = Form(""), reason: str = Form(""), notes: str = Form(""),
-                      db: Session = Depends(get_db), user=Depends(get_current_user)):
+                      back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user or not is_floor_staff(user):
         return RedirectResponse("/login", status_code=302)
-    adj, redirect = _draft_or_redirect(db, adj_id)
+    adj, redirect = _draft_or_redirect(db, adj_id, back)
     if redirect:
         return redirect
     d = _parse_date(adj_date)
     if not d:
-        return _err(adj_id, "Enter a valid date.")
+        return _err(adj_id, "Enter a valid date.", back)
     if d > _today():
-        return _err(adj_id, "The adjustment date can't be in the future.")
+        return _err(adj_id, "The adjustment date can't be in the future.", back)
     adj.adj_date = d
     if reason in REASON_LABELS:
         adj.reason = reason
@@ -707,35 +716,35 @@ def adjustment_header(adj_id: int, adj_date: str = Form(""), reason: str = Form(
         if any(l.is_move or l.mode == "set" for l in adj.lines):
             db.rollback()
             return _err(adj_id, f"“{REASON_LABELS[adj.reason]}” only takes items out — remove the move / "
-                                "counted-qty lines first, or keep the other reason.")
+                                "counted-qty lines first, or keep the other reason.", back)
         for l in adj.lines:  # lines added under another reason: same "taken out" rule
             if l.qty_input is not None:
                 l.qty_input = -abs(l.qty_input)
     adj.notes = notes.strip()[:255] or None
     db.commit()
-    return RedirectResponse(f"/inventory-adjustments/{adj_id}", status_code=302)
+    return RedirectResponse(_view_url(adj_id, back), status_code=302)
 
 
 @router.post("/inventory-adjustments/{adj_id:int}/lines")
 def adjustment_add_line(adj_id: int, product_id: int = Form(...), unit_name: str = Form(""),
                         mode: str = Form("delta"), qty: str = Form(""), new_cost: str = Form(""), note: str = Form(""),
-                        db: Session = Depends(get_db), user=Depends(get_current_user)):
+                        back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user or not is_floor_staff(user):
         return RedirectResponse("/login", status_code=302)
-    adj, redirect = _draft_or_redirect(db, adj_id)
+    adj, redirect = _draft_or_redirect(db, adj_id, back)
     if redirect:
         return redirect
     product = db.get(models.Product, product_id)
     if not product:
-        return _err(adj_id, "Pick an item first.")
+        return _err(adj_id, "Pick an item first.", back)
     if any(l.product_id == product.id for l in adj.lines):
-        return _err(adj_id, f"“{product.name}” is already on this adjustment — remove that line first to change it.")
+        return _err(adj_id, f"“{product.name}” is already on this adjustment — remove that line first to change it.", back)
     base = product.unit_type.name if product.unit_type else "Unit"
     factor = Decimal("1")
     if unit_name and unit_name != base:
         unit = next((u for u in product.units if u.name == unit_name), None)
         if not unit or not unit.factor_to_base or unit.factor_to_base <= 0:
-            return _err(adj_id, f"“{unit_name}” isn't a unit of {product.name}.")
+            return _err(adj_id, f"“{unit_name}” isn't a unit of {product.name}.", back)
         factor = Decimal(str(unit.factor_to_base))
     else:
         unit_name = base
@@ -743,7 +752,7 @@ def adjustment_add_line(adj_id: int, product_id: int = Form(...), unit_name: str
         qty_val = _dec(qty) if (qty or "").strip() else None
         cost_val = _dec(new_cost) if (new_cost or "").strip() else None
     except AdjustmentError as e:
-        return _err(adj_id, str(e))
+        return _err(adj_id, str(e), back)
     mode = "set" if mode == "set" else "delta"
     if adj.reason in REASON_CONTRA:
         # Freebie / owner's use only ever take stock out: the qty typed is how
@@ -752,21 +761,21 @@ def adjustment_add_line(adj_id: int, product_id: int = Form(...), unit_name: str
         if qty_val is not None:
             qty_val = -abs(qty_val)
     if qty_val is not None and mode == "set" and qty_val < 0:
-        return _err(adj_id, "A counted quantity can't be negative.")
+        return _err(adj_id, "A counted quantity can't be negative.", back)
     if qty_val is not None and mode == "delta" and qty_val == 0:
         qty_val = None
     if cost_val is not None:
         if cost_val <= 0:
-            return _err(adj_id, "The new cost must be more than ₱0.")
+            return _err(adj_id, "The new cost must be more than ₱0.", back)
         cost_val = (cost_val / factor).quantize(CENT)  # typed per the chosen unit; stored per base unit
     if qty_val is None and cost_val is None:
-        return _err(adj_id, "Enter a quantity, a new cost, or both.")
+        return _err(adj_id, "Enter a quantity, a new cost, or both.", back)
     adj.lines.append(models.InventoryAdjustmentLine(
         product_id=product.id, product_name=product.name, unit_name=unit_name, unit_factor=factor,
         mode=mode, qty_input=qty_val, new_cost=cost_val, note=note.strip()[:255] or None,
     ))
     db.commit()
-    return RedirectResponse(f"/inventory-adjustments/{adj_id}", status_code=302)
+    return RedirectResponse(_view_url(adj_id, back), status_code=302)
 
 
 def _unit_factor(product: models.Product, unit_name: str):
@@ -782,41 +791,41 @@ def _unit_factor(product: models.Product, unit_name: str):
 @router.post("/inventory-adjustments/{adj_id:int}/move")
 def adjustment_add_move(adj_id: int, from_id: int = Form(0), from_unit: str = Form(""), from_qty: str = Form(""),
                         to_id: int = Form(0), to_unit: str = Form(""), to_qty: str = Form(""), note: str = Form(""),
-                        db: Session = Depends(get_db), user=Depends(get_current_user)):
+                        back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Stock recorded on the wrong item: take it off one and put it on the
     other, as a pair of lines. Valued at each item's own cost; any
     difference between the two is a correction (equity), never P&L."""
     if not user or not is_floor_staff(user):
         return RedirectResponse("/login", status_code=302)
-    adj, redirect = _draft_or_redirect(db, adj_id)
+    adj, redirect = _draft_or_redirect(db, adj_id, back)
     if redirect:
         return redirect
     if adj.reason in REASON_CONTRA:
-        return _err(adj_id, f"A move between items can't go on a “{REASON_LABELS[adj.reason]}” adjustment — start a separate one for it.")
+        return _err(adj_id, f"A move between items can't go on a “{REASON_LABELS[adj.reason]}” adjustment — start a separate one for it.", back)
     src, dst = db.get(models.Product, from_id), db.get(models.Product, to_id)
     if not src or not dst:
-        return _err(adj_id, "Pick both the item to move from and the item to move to.")
+        return _err(adj_id, "Pick both the item to move from and the item to move to.", back)
     if src.id == dst.id:
-        return _err(adj_id, "Pick two different items.")
+        return _err(adj_id, "Pick two different items.", back)
     for p in (src, dst):
         if any(l.product_id == p.id for l in adj.lines):
-            return _err(adj_id, f"“{p.name}” is already on this adjustment — remove that line first, or start a new adjustment.")
+            return _err(adj_id, f"“{p.name}” is already on this adjustment — remove that line first, or start a new adjustment.", back)
     try:
         src_unit, src_factor = _unit_factor(src, from_unit)
         dst_unit, dst_factor = _unit_factor(dst, to_unit)
         out_qty = _dec(from_qty)
         in_qty = _dec(to_qty) if (to_qty or "").strip() else None
     except AdjustmentError as e:
-        return _err(adj_id, str(e))
+        return _err(adj_id, str(e), back)
     if out_qty <= 0:
-        return _err(adj_id, "Enter how much to move.")
+        return _err(adj_id, "Enter how much to move.", back)
     if in_qty is None:
         ratio = base_ratio(src, dst)
         if ratio is None:
-            return _err(adj_id, f"Enter how much that is in {dst.name} — the two items aren't linked, so it can't be worked out.")
+            return _err(adj_id, f"Enter how much that is in {dst.name} — the two items aren't linked, so it can't be worked out.", back)
         in_qty = (out_qty * src_factor * ratio / dst_factor).quantize(Decimal("0.000001"))
     if in_qty <= 0:
-        return _err(adj_id, "The quantity going in must be more than 0.")
+        return _err(adj_id, "The quantity going in must be more than 0.", back)
     note = note.strip()
     adj.lines.append(models.InventoryAdjustmentLine(
         product_id=src.id, product_name=src.name, unit_name=src_unit, unit_factor=src_factor, mode="delta",
@@ -827,14 +836,15 @@ def adjustment_add_move(adj_id: int, from_id: int = Form(0), from_unit: str = Fo
         qty_input=in_qty, is_move=True, note=(f"Moved from {src.name}" + (f" — {note}" if note else ""))[:255],
     ))
     db.commit()
-    return RedirectResponse(f"/inventory-adjustments/{adj_id}", status_code=302)
+    return RedirectResponse(_view_url(adj_id, back), status_code=302)
 
 
 @router.post("/inventory-adjustments/{adj_id:int}/lines/{line_id:int}/delete")
-def adjustment_delete_line(adj_id: int, line_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def adjustment_delete_line(adj_id: int, line_id: int, back: str = Form(""),
+                           db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user or not is_floor_staff(user):
         return RedirectResponse("/login", status_code=302)
-    adj, redirect = _draft_or_redirect(db, adj_id)
+    adj, redirect = _draft_or_redirect(db, adj_id, back)
     if redirect:
         return redirect
     line = next((l for l in adj.lines if l.id == line_id), None)
@@ -847,56 +857,57 @@ def adjustment_delete_line(adj_id: int, line_id: int, db: Session = Depends(get_
                 adj.lines.remove(partner)
         adj.lines.remove(line)
         db.commit()
-    return RedirectResponse(f"/inventory-adjustments/{adj_id}", status_code=302)
+    return RedirectResponse(_view_url(adj_id, back), status_code=302)
 
 
 @router.post("/inventory-adjustments/{adj_id:int}/delete")
-def adjustment_delete_draft(adj_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def adjustment_delete_draft(adj_id: int, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     """A draft never touched stock or the books, so it can simply go."""
     if not user or not is_floor_staff(user):
         return RedirectResponse("/login", status_code=302)
-    adj, redirect = _draft_or_redirect(db, adj_id)
+    adj, redirect = _draft_or_redirect(db, adj_id, back)
     if redirect:
         return redirect
     db.delete(adj)
     db.commit()
-    return RedirectResponse("/inventory-adjustments", status_code=302)
+    return RedirectResponse(safe_back_url(back, "/inventory-adjustments"), status_code=302)
 
 
 @router.post("/inventory-adjustments/{adj_id:int}/post")
-def adjustment_post(adj_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def adjustment_post(adj_id: int, request: Request, back: str = Form(""),
+                    db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
-        return _err(adj_id, "Only a manager or admin can post an adjustment.")
-    adj, redirect = _draft_or_redirect(db, adj_id)
+        return _err(adj_id, "Only a manager or admin can post an adjustment.", back)
+    adj, redirect = _draft_or_redirect(db, adj_id, back)
     if redirect:
         return redirect
     try:
         post_adjustment(db, adj, user=user, request=request)
     except AdjustmentError as e:
         db.rollback()
-        return _err(adj_id, str(e))
+        return _err(adj_id, str(e), back)
     db.commit()
-    return RedirectResponse(f"/inventory-adjustments/{adj_id}", status_code=302)
+    return RedirectResponse(_view_url(adj_id, back), status_code=302)
 
 
 @router.post("/inventory-adjustments/{adj_id:int}/cancel")
-def adjustment_cancel(adj_id: int, request: Request, reason: str = Form(""),
+def adjustment_cancel(adj_id: int, request: Request, reason: str = Form(""), back: str = Form(""),
                       db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
-        return _err(adj_id, "Only a manager or admin can cancel an adjustment.")
+        return _err(adj_id, "Only a manager or admin can cancel an adjustment.", back)
     adj = db.get(models.InventoryAdjustment, adj_id)
     if not adj:
-        return RedirectResponse("/inventory-adjustments", status_code=302)
+        return RedirectResponse(safe_back_url(back, "/inventory-adjustments"), status_code=302)
     if not (reason or "").strip():
-        return _err(adj_id, "Give a reason for cancelling.")
+        return _err(adj_id, "Give a reason for cancelling.", back)
     try:
         cancel_adjustment(db, adj, user=user, reason=reason, request=request)
     except AdjustmentError as e:
         db.rollback()
-        return _err(adj_id, str(e))
+        return _err(adj_id, str(e), back)
     db.commit()
-    return RedirectResponse(f"/inventory-adjustments/{adj_id}", status_code=302)
+    return RedirectResponse(_view_url(adj_id, back), status_code=302)

@@ -31,7 +31,7 @@
 <p class="muted" style="margin:-6px 0 16px;">Fully-paid transactions only. Sales with outstanding credit appear under <a href="/sales/receivables">Receivables</a>.</p>
 {% endif %}
 
-{% set qs = '&q=' ~ q if q else '' %}
+{% set qs = '&q=' ~ q|urlencode if q else '' %}
 {% set qs = qs ~ ('&type_filter=' ~ type_filter if type_filter else '') %}
 {% set qs = qs ~ ('&date_from=' ~ date_from if date_from else '') %}
 {% set qs = qs ~ ('&date_to=' ~ date_to if date_to else '') %}
@@ -123,7 +123,7 @@
         {% endif %}
         {% set disp_total = row_totals.get(s.id, s.total) %}
         <td class="num strong {{ 'neg' if disp_total and disp_total < 0 }}">{{ disp_total|peso }}</td>
-        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales">Receipt</a></td>
+        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales&back={{ back_here() }}">Receipt</a></td>
       </tr>
       {% else %}
       <tr><td colspan="{{ 10 if search_all else 9 }}" class="empty">{{ 'No invoices' if search_all else 'No fully-paid sales' }} {{ 'match that filter' if (q or type_filter or date_from or date_to) else 'yet' }}.</td></tr>

@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">Import count sheet — {{ count.ref_no }}</h1>
-  <a class="btn-link" href="/stock-count/{{ count.id }}">← Back to count</a>
+  <a class="btn-link" href="{{ count_url }}">← Back to count</a>
 </div>
 
 {% if result and result.error %}
@@ -63,9 +63,9 @@
     </div>
     {% endif %}
     <div class="form-actions" style="margin-top:18px;">
-      <a class="btn" href="/stock-count/{{ count.id }}">View count</a>
-      <a class="btn-secondary" href="/stock-count/{{ count.id }}/import">Import another file</a>
-      <a class="btn-secondary" href="/stock-count/items?scope=all&count_id={{ count.id }}">📋 Include / exclude items</a>
+      <a class="btn" href="{{ count_url }}">View count</a>
+      <a class="btn-secondary" href="/stock-count/{{ count.id }}/import?back={{ back|urlencode }}">Import another file</a>
+      <a class="btn-secondary" href="/stock-count/items?scope=all&count_id={{ count.id }}&back={{ count_url|urlencode }}">📋 Include / exclude items</a>
     </div>
   </div>
 {% else %}
@@ -102,6 +102,7 @@
         <p class="muted">Accepts <strong>.xlsx</strong> or <strong>.csv</strong>. Only rows with a Counted Qty filled in are applied —
           leave a row blank to skip it. Uploading again for a product already in this count overwrites its counted quantity.</p>
         <form method="post" action="/stock-count/{{ count.id }}/import" enctype="multipart/form-data" class="upload-form" style="flex-wrap:wrap;">
+          <input type="hidden" name="back" value="{{ back }}">
           <input type="file" name="file" accept=".xlsx,.xlsm,.csv" required>
           {% if shelves %}
           <label style="margin:0;font-size:12.5px;color:var(--muted);">Assign counted items with no shelf yet to

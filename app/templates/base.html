@@ -62,7 +62,7 @@
     {% set finance_active = path.startswith('/pdc') or path.startswith('/payments') or path.startswith('/cheques') or path.startswith('/expenses') or path.startswith('/banking') or path.startswith('/reports') %}
     {# Settings is its own nav-item, not an Admin submenu row — it must not
        auto-open (or highlight as active) the Admin dropdown when visited. #}
-    {% set admin_active = path.startswith('/backup') or path.startswith('/users') or path.startswith('/audit') %}
+    {% set admin_active = path.startswith('/pos/cancelled-receipts') or path.startswith('/accounting') or path.startswith('/audit') or path.startswith('/encoders') or path.startswith('/backup') or path.startswith('/users') %}
     {% set notif_unread = notif_unread_count() if is_staff else 0 %}
     <div class="global-search-wrap" style="position:relative;padding:0 14px 10px;">
       <input id="globalSearch" class="search" type="search" placeholder="Go to… (e.g. New Purchase, POS)" autocomplete="off" style="width:100%;box-sizing:border-box;">
@@ -234,7 +234,7 @@
         <span>Inventory</span>
         {% if price_alerts %}<span class="nav-badge" title="{{ price_alerts }} item(s) selling at or below cost">{{ price_alerts }}</span>{% endif %}
       </a>
-      <a class="nav-item {{ 'active' if path.startswith('/pos') }}" href="/pos">
+      <a class="nav-item {{ 'active' if path.startswith('/pos') and not admin_active }}" href="/pos">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 3h3l2.4 12.3a1.5 1.5 0 0 0 1.5 1.2h8.2a1.5 1.5 0 0 0 1.5-1.2L22 7H6"/></svg>
         <span>POS</span>
       </a>
@@ -411,6 +411,22 @@
       if (!d.contains(e.target)) d.removeAttribute('open');
     });
   });
+</script>
+<script>
+  // Search/filter boxes marked data-remember="<key>" keep what was typed for
+  // this tab (sessionStorage, per page), so opening a result and coming back
+  // doesn't mean typing the search again. Server-side searches don't need
+  // this — their text is already in the URL.
+  (function () {
+    document.querySelectorAll('input[data-remember]').forEach(function (el) {
+      var key = 'remember:' + location.pathname + ':' + el.dataset.remember;
+      try { var s = sessionStorage.getItem(key); if (s && !el.value) el.value = s; } catch (e) {}
+      if (el.value) el.dispatchEvent(new Event('input', {bubbles: true}));
+      el.addEventListener('input', function () {
+        try { el.value ? sessionStorage.setItem(key, el.value) : sessionStorage.removeItem(key); } catch (e) {}
+      });
+    });
+  })();
 </script>
 </body>
 </html>

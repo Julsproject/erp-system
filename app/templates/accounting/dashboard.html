@@ -9,16 +9,18 @@
   {% set pp_url = "/accounting/dashboard" %}{% set pp_keep = {} %}{% include "_period_picker.html" %}
 </div>
 {% include "accounting/_subnav.html" %}
+{# Drill-downs open on this same period. #}
+{% set pq = ({"date_from": date_from, "date_to": date_to} if custom else {"days": days})|urlencode %}
 
 <div class="card" style="margin-bottom:18px; border-color:{{ '#15803d' if balanced else '#b91c1c' }};">
   <strong style="color:{{ '#15803d' if balanced else '#b91c1c' }};">
     {{ 'Books are balanced ✓' if balanced else 'OUT OF BALANCE — investigate immediately' }}
   </strong>
   <span class="muted">— Trial Balance: {{ total_debit|peso }} debit vs {{ total_credit|peso }} credit.
-    <a href="/accounting/trial-balance">View Trial Balance</a></span>
+    <a href="/accounting/trial-balance?{{ pq }}">View Trial Balance</a></span>
 </div>
 
-<h3>Balance Sheet snapshot <a class="btn-link" href="/accounting/balance-sheet">Full report →</a></h3>
+<h3>Balance Sheet snapshot <a class="btn-link" href="/accounting/balance-sheet?{{ pq }}">Full report →</a></h3>
 <div class="stat-row" style="margin-bottom:18px;">
   <div class="mini-stat"><span class="mini-num">{{ total_assets|peso }}</span><span>Total Assets</span></div>
   <div class="mini-stat"><span class="mini-num">{{ total_liabilities|peso }}</span><span>Total Liabilities</span></div>
@@ -26,7 +28,7 @@
   <div class="mini-stat"><span class="mini-num">{{ cash_total|peso }}</span><span>Cash + Bank on hand</span></div>
 </div>
 
-<h3>Profit &amp; Loss, this period <a class="btn-link" href="/accounting/profit-loss">Full report →</a></h3>
+<h3>Profit &amp; Loss, this period <a class="btn-link" href="/accounting/profit-loss?{{ pq }}">Full report →</a></h3>
 <div class="stat-row" style="margin-bottom:18px;">
   <div class="mini-stat"><span class="mini-num">{{ pl_period.revenue|peso }}</span><span>Revenue</span></div>
   <div class="mini-stat"><span class="mini-num">{{ pl_period.gross_profit|peso }}</span><span>Gross Profit</span></div>
@@ -36,8 +38,8 @@
 
 <h3>Receivables, Payables &amp; VAT</h3>
 <div class="stat-row" style="margin-bottom:18px;">
-  <div class="mini-stat"><span class="mini-num">{{ ar_total|peso }}</span><span>Total Receivable <a class="btn-link" href="/accounting/ar-subledger">→</a></span></div>
-  <div class="mini-stat"><span class="mini-num">{{ ap_total|peso }}</span><span>Total Payable <a class="btn-link" href="/accounting/ap-subledger">→</a></span></div>
-  <div class="mini-stat"><span class="mini-num">{{ vat_payable|peso }}</span><span>VAT Payable, this period <a class="btn-link" href="/accounting/vat-report">→</a></span></div>
+  <div class="mini-stat"><span class="mini-num">{{ ar_total|peso }}</span><span>Total Receivable <a class="btn-link" href="/accounting/ar-subledger?{{ pq }}">→</a></span></div>
+  <div class="mini-stat"><span class="mini-num">{{ ap_total|peso }}</span><span>Total Payable <a class="btn-link" href="/accounting/ap-subledger?{{ pq }}">→</a></span></div>
+  <div class="mini-stat"><span class="mini-num">{{ vat_payable|peso }}</span><span>VAT Payable, this period <a class="btn-link" href="/accounting/vat-report?{{ pq }}">→</a></span></div>
 </div>
 {% endblock %}

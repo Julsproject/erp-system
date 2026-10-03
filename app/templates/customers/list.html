@@ -8,8 +8,8 @@
   </div>
   <div class="head-actions">
     {% if is_staff_user %}<button type="button" class="btn-secondary" onclick="openMerge()">⇄ Merge Duplicates</button>
-    <a class="btn-secondary" href="/customers/archived">🗄 Archived</a>{% endif %}
-    <a class="btn" href="/customers/new">+ Add customer</a>
+    <a class="btn-secondary" href="/customers/archived?back={{ back_here() }}">🗄 Archived</a>{% endif %}
+    <a class="btn" href="/customers/new?back={{ back_here() }}">+ Add customer</a>
   </div>
 </div>
 
@@ -54,7 +54,7 @@
 
 {# This exact view — search and page — so Back/Cancel/after-save returns
    here rather than an unfiltered page 1. #}
-{% set cur_url = '/customers?page=' ~ page ~ ('&q=' ~ q if q else '') %}
+{% set cur_url = '/customers?page=' ~ page ~ ('&q=' ~ q|urlencode if q else '') %}
 <form class="toolbar" method="get" action="/customers">
   <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search name…">
   <button class="btn-secondary" type="submit">Search</button>
@@ -73,7 +73,7 @@
         <td>{{ c.tin or '—' }}</td>
         <td>{{ c.address or '—' }}</td>
         <td class="row-actions">
-          <a class="btn-link" href="/customers/{{ c.id }}/history">History</a>
+          <a class="btn-link" href="/customers/{{ c.id }}/history?back={{ cur_url|urlencode }}">History</a>
           <a class="btn-link" href="/customers/{{ c.id }}/edit?back={{ cur_url|urlencode }}">Edit</a>
           {% if is_staff_user %}
           <form method="post" action="/customers/{{ c.id }}/delete?back={{ cur_url|urlencode }}" style="display:inline;"
@@ -94,9 +94,9 @@ If they have sales on file they are archived (history kept), not deleted.');">
 
 {% if pages > 1 %}
 <div class="pager">
-  {% if page > 1 %}<a class="btn-secondary" href="/customers?page={{ page - 1 }}&q={{ q }}">← Prev</a>{% endif %}
+  {% if page > 1 %}<a class="btn-secondary" href="/customers?page={{ page - 1 }}&q={{ q|urlencode }}">← Prev</a>{% endif %}
   <span class="muted">Page {{ page }} of {{ pages }}</span>
-  {% if page < pages %}<a class="btn-secondary" href="/customers?page={{ page + 1 }}&q={{ q }}">Next →</a>{% endif %}
+  {% if page < pages %}<a class="btn-secondary" href="/customers?page={{ page + 1 }}&q={{ q|urlencode }}">Next →</a>{% endif %}
 </div>
 {% endif %}
 {% if is_staff_user %}
@@ -133,6 +133,7 @@ If they have sales on file they are archived (history kept), not deleted.');">
 </div>
 
 <form id="mergeForm" method="post" action="/customers/merge" style="display:none;">
+  <input type="hidden" name="back" value="{{ cur_url }}">
   <input type="hidden" name="keep_id" id="mergeKeepId">
   <input type="hidden" name="merge_id" id="mergeMergeId">
 </form>

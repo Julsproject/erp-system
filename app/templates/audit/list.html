@@ -11,7 +11,7 @@
 {% if ok %}<div class="alert" style="background:#f0fdf4;border-color:#bbf7d0;color:#15803d;">{{ ok }}</div>{% endif %}
 {% if error %}<div class="alert" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;">{{ error }}</div>{% endif %}
 
-{% set qs = '&q=' ~ q if q else '' %}
+{% set qs = '&q=' ~ q|urlencode if q else '' %}
 {% set qs = qs ~ ('&action=' ~ action if action else '') %}
 {% set qs = qs ~ ('&entity_type=' ~ entity_type if entity_type else '') %}
 {% set qs = qs ~ ('&user_id=' ~ user_id if user_id else '') %}
@@ -87,6 +87,7 @@
           {% if e.unmerge == 'ready' %}
           <form method="post" action="/audit/{{ r.id }}/unmerge" style="margin-top:6px;"
                 onsubmit="return confirm('Unmerge these two products? The archived one comes back as its own product with its own sales, purchases, stock movements, counts, stock and units. Anything done to the kept product after the merge stays on it.');">
+            <input type="hidden" name="back" value="{{ request.url.path ~ ('?' ~ request.url.query if request.url.query else '') }}">
             <button class="btn-secondary" type="submit" style="padding:4px 10px;font-size:12px;">Unmerge</button>
           </form>
           {% elif e.unmerge == 'done' %}

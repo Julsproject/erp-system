@@ -1,4 +1,6 @@
 """Shared FastAPI dependencies."""
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
 from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
@@ -72,6 +74,18 @@ def safe_back_url(raw: str, fallback: str) -> str:
     crafted link could turn our own redirect into a way off the site.
     """
     raw = (raw or "").strip()
-    if raw.startswith("/") and not raw.startswith("//"):
+    # "/\evil.com" too: browsers read a backslash there as "//".
+    if raw.startswith("/") and not raw.startswith(("//", "/\\")):
         return raw
     return fallback
+
+
+def url_with(url: str, **params) -> str:
+    """`url` with these query params set — replacing any already there, so a
+    back URL that comes round again doesn't pile up "undone=1&undone=1" —
+    and a param given as None/"" removed. For redirecting to a back URL
+    with a notice on it: url_with(back, undone=1)."""
+    parts = urlsplit(url)
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k not in params]
+    query += [(k, v) for k, v in params.items() if v not in (None, "")]
+    return urlunsplit(("", "", parts.path, urlencode(query), parts.fragment))

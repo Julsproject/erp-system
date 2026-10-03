@@ -3,10 +3,11 @@
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">Edit {{ delivery.delivery_no }}</h1>
-  <a class="btn-link" href="/deliveries/{{ delivery.id }}">← Back</a>
+  <a class="btn-link" href="{{ view_url }}">← Back</a>
 </div>
 
 <form class="card form" method="post" action="/deliveries/{{ delivery.id }}">
+  <input type="hidden" name="back" value="{{ back }}">
   <div class="full" style="background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:13.5px;">
     Invoice <strong>{{ delivery.sale.invoice_no if delivery.sale else '—' }}</strong>
   </div>
@@ -35,7 +36,7 @@
 
   <div class="form-actions full">
     <button class="btn" type="submit">Save changes</button>
-    <a class="btn-secondary" href="/deliveries/{{ delivery.id }}">Cancel</a>
+    <a class="btn-secondary" href="{{ view_url }}">Cancel</a>
   </div>
 </form>
 {% endblock %}

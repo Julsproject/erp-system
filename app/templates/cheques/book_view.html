@@ -55,7 +55,7 @@
           <span class="txn" style="background:#e0f2fe;color:#0369a1;">{{ labels.get(r.pdc.status, r.pdc.status) }}</span>
           {% endif %}
         </td>
-        <td class="row-actions"><a class="btn-link" href="/pdc/{{ r.pdc.id }}">View →</a></td>
+        <td class="row-actions"><a class="btn-link" href="/pdc/{{ r.pdc.id }}?back={{ back_here() }}">View →</a></td>
         {% elif r.state == 'gap' %}
         <td colspan="4"><strong style="color:#b91c1c;">⚠ Unaccounted for</strong>
           <span class="muted">— a later cheque was already issued, so this leaf is gone.</span></td>

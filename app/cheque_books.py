@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from . import audit, models
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_staff, safe_back_url
 from .templating import templates
 
 router = APIRouter()
@@ -139,7 +139,8 @@ def active_books_for(db: Session, bank_account_id: int):
 # Register
 # --------------------------------------------------------------------------- #
 @router.get("/cheques/books", response_class=HTMLResponse)
-def list_books(request: Request, error: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+def list_books(request: Request, error: str = "", back: str = "",
+               db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -162,7 +163,10 @@ def list_books(request: Request, error: str = "", db: Session = Depends(get_db),
         "cheques/books.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "rows": rows, "total_gaps": total_gaps, "accounts": accounts,
-         "fmt": format_cheque_no, "error": error},
+         "fmt": format_cheque_no, "error": error,
+         # Only when opened from a page with a link here (Supplier Payments);
+         # from the sidebar there's nothing to go back to.
+         "back": safe_back_url(back, "")},
     )
 
 

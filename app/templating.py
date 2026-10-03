@@ -1,7 +1,9 @@
 """Shared Jinja2 templates instance and view helpers."""
 from decimal import Decimal, InvalidOperation, ROUND_FLOOR, ROUND_HALF_UP
+from urllib.parse import quote
 
 from fastapi.templating import Jinja2Templates
+from jinja2 import pass_context
 
 templates = Jinja2Templates(directory="app/templates")
 
@@ -249,6 +251,17 @@ def period_presets() -> dict:
             "last_month_start": last_month_end.replace(day=1).isoformat(), "last_month_end": last_month_end.isoformat()}
 
 
+@pass_context
+def back_here(context) -> str:
+    """This page's own URL — path plus query, so its filters, search and page
+    survive — encoded for a `back=` param: `href="/x?back={{ back_here() }}"`.
+    The page it opens sends the user back here (via deps.safe_back_url)
+    instead of to a fixed list. Same value as the older per-template
+    `cur_url|urlencode`."""
+    url = context["request"].url
+    return quote(url.path + (f"?{url.query}" if url.query else ""), safe="")
+
+
 templates.env.filters["peso"] = peso
 templates.env.filters["qty"] = qty
 templates.env.filters["qty_input"] = qty_input
@@ -263,3 +276,4 @@ templates.env.globals["notif_unread_count"] = notif_unread_count
 templates.env.globals["business_info"] = business_info
 templates.env.globals["min_margin_pct"] = min_margin_pct
 templates.env.globals["period_presets"] = period_presets
+templates.env.globals["back_here"] = back_here

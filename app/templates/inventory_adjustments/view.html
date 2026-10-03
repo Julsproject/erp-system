@@ -17,7 +17,7 @@
     </p>
   </div>
   <div class="head-actions">
-    <a class="btn-link" href="/inventory-adjustments">← All adjustments</a>
+    <a class="btn-link" href="{{ back }}">← Back</a>
   </div>
 </div>
 
@@ -26,13 +26,14 @@
 {% if adj.status == 'cancelled' %}
 <div class="alert" style="background:#f8fafc;border-color:#e2e8f0;color:#475569;">
   Cancelled {{ adj.cancelled_at.strftime('%b %d, %Y %I:%M %p') if adj.cancelled_at }}{% if adj.canceller %} by {{ adj.canceller.username }}{% endif %}{% if adj.cancel_reason %}: {{ adj.cancel_reason }}{% endif %}.
-  Stock, cost and the books were reversed on the adjustment's own date{% if adj.cancel_journal_entry %} (<a href="/accounting/journal-entries/{{ adj.cancel_journal_entry.id }}/view">{{ adj.cancel_journal_entry.journal_no }}</a>){% endif %}.
+  Stock, cost and the books were reversed on the adjustment's own date{% if adj.cancel_journal_entry %} (<a href="/accounting/journal-entries/{{ adj.cancel_journal_entry.id }}/view?back={{ back_here() }}">{{ adj.cancel_journal_entry.journal_no }}</a>){% endif %}.
 </div>
 {% endif %}
 
 <section class="card" style="margin-bottom:18px;">
   {% if draft %}
   <form method="post" action="/inventory-adjustments/{{ adj.id }}/header" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+    <input type="hidden" name="back" value="{{ back }}">
     <label style="margin:0;">Adjustment date
       <input type="date" name="adj_date" value="{{ adj.adj_date.isoformat() }}" max="{{ today.isoformat() }}" required>
     </label>
@@ -53,7 +54,7 @@
     <div><span class="muted" style="font-size:12.5px;">Date</span><br><strong>{{ adj.adj_date.strftime('%b %d, %Y') }}</strong></div>
     <div><span class="muted" style="font-size:12.5px;">Reason</span><br><strong>{{ reason_labels.get(adj.reason, adj.reason) }}</strong></div>
     <div><span class="muted" style="font-size:12.5px;">Books</span><br><strong>{{ {'freebie': 'P&L — Promotions & Freebies', 'owner_use': "Owner's Drawings (equity)"}.get(adj.reason) or ('Inventory Corrections (equity)' if equity else 'P&L — shrinkage / gain') }}</strong></div>
-    {% if adj.journal_entry %}<div><span class="muted" style="font-size:12.5px;">Journal entry</span><br><a class="btn-link" href="/accounting/journal-entries/{{ adj.journal_entry.id }}/view">{{ adj.journal_entry.journal_no }}</a></div>{% endif %}
+    {% if adj.journal_entry %}<div><span class="muted" style="font-size:12.5px;">Journal entry</span><br><a class="btn-link" href="/accounting/journal-entries/{{ adj.journal_entry.id }}/view?back={{ back_here() }}">{{ adj.journal_entry.journal_no }}</a></div>{% endif %}
     {% if adj.notes %}<div style="flex:1;min-width:200px;"><span class="muted" style="font-size:12.5px;">Notes</span><br>{{ adj.notes }}</div>{% endif %}
   </div>
   {% endif %}
@@ -79,6 +80,7 @@
     <div id="adjChoices" class="pos-results" style="display:none;position:absolute;left:0;right:0;z-index:20;max-height:320px;overflow:auto;"></div>
   </div>
   <form id="lineForm" method="post" action="/inventory-adjustments/{{ adj.id }}/lines" style="display:none;margin-top:14px;">
+    <input type="hidden" name="back" value="{{ back }}">
     <input type="hidden" name="product_id" id="lfProduct">
     <p style="margin:0 0 10px;"><strong id="lfName"></strong> <span class="muted" id="lfInfo"></span></p>
     <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
@@ -121,6 +123,7 @@
   <p class="hint" style="margin:0 0 12px;">Stock sitting on the wrong item, like a box recorded on the Open/Retail item. This takes it off one item and puts it on the other.
     It's a correction, so it stays off the P&amp;L. Each side is valued at its own item's cost.</p>
   <form method="post" action="/inventory-adjustments/{{ adj.id }}/move" id="moveForm">
+    <input type="hidden" name="back" value="{{ back }}">
     <input type="hidden" name="from_id" id="mvFromId">
     <input type="hidden" name="to_id" id="mvToId">
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;">
@@ -173,7 +176,7 @@
       {% set l = r.line %}{% set c = r.c %}{% set f = c.factor %}
       {% set u = l.unit_name or 'unit' %}
       <tr>
-        <td class="strong"><a class="btn-link" href="/products/{{ l.product_id }}/stock-card">{{ l.product_name }}</a>
+        <td class="strong"><a class="btn-link" href="/products/{{ l.product_id }}/stock-card?back={{ back_here() }}">{{ l.product_name }}</a>
           {% if l.is_move %}<span class="warn-tag" style="background:#eff6ff;color:#1d4ed8;">move</span>{% endif %}
           {% if l.note %}<div class="mv-note">{{ l.note }}</div>{% endif %}
           {% if draft and l.mode == 'set' %}<div class="mv-note">Counted {{ l.qty_input|qty }} {{ u }} as of {{ adj.adj_date.strftime('%b %d') }}{% if c.on_hand_at_date is not none %}; the system had {{ (c.on_hand_at_date / f)|qty }} then{% endif %}</div>{% endif %}
@@ -192,6 +195,7 @@
         {% if draft %}
         <td class="row-actions">
           <form method="post" action="/inventory-adjustments/{{ adj.id }}/lines/{{ l.id }}/delete" style="display:inline;">
+            <input type="hidden" name="back" value="{{ back }}">
             <button class="btn-link" type="submit" style="color:var(--danger);">Remove</button>
           </form>
         </td>
@@ -230,10 +234,12 @@
 
 <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap;">
   <form method="post" action="/inventory-adjustments/{{ adj.id }}/delete" onsubmit="return confirm('Delete this draft? Nothing has been posted yet.');">
+    <input type="hidden" name="back" value="{{ back }}">
     <button class="btn-secondary" type="submit">Delete draft</button>
   </form>
   {% if can_post %}
   <form method="post" action="/inventory-adjustments/{{ adj.id }}/post" onsubmit="return confirm('Post {{ adj.ref_no }}? Stock, cost and the books will be updated.');">
+    <input type="hidden" name="back" value="{{ back }}">
     <button class="btn" type="submit" {{ 'disabled' if not rows }}>Post adjustment</button>
   </form>
   {% else %}
@@ -246,6 +252,7 @@
   <p class="hint" style="margin:0 0 10px;">Reverses the stock, the cost and the journal entry on {{ adj.adj_date.strftime('%b %d, %Y') }}. Nothing is deleted, and you can post a corrected adjustment afterwards.</p>
   <form method="post" action="/inventory-adjustments/{{ adj.id }}/cancel" style="display:flex;gap:10px;flex-wrap:wrap;"
         onsubmit="return confirm('Cancel {{ adj.ref_no }} and reverse it?');">
+    <input type="hidden" name="back" value="{{ back }}">
     <input type="text" name="reason" required maxlength="255" placeholder="Why is it being cancelled?" style="flex:1;min-width:240px;">
     <button class="btn-secondary" type="submit" style="color:var(--danger);">Cancel adjustment</button>
   </form>

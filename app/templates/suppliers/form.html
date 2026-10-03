@@ -3,13 +3,14 @@
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">{{ 'Edit supplier' if supplier else 'Add supplier' }}</h1>
-  <a class="btn-link" href="/suppliers">← Back to suppliers</a>
+  <a class="btn-link" href="{{ back }}">← Back to suppliers</a>
 </div>
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
 
 <form class="card form" method="post" novalidate
       action="{{ '/suppliers/' ~ supplier.id if supplier else '/suppliers' }}">
+  <input type="hidden" name="back" value="{{ back }}">
 
   <label>Supplier Code
     <input name="code" value="{{ supplier.code if supplier else '' }}" placeholder="auto (SUP-0001)">
@@ -68,7 +69,7 @@
 
   <div class="form-actions full">
     <button class="btn" type="submit">{{ 'Save changes' if supplier else 'Save supplier' }}</button>
-    <a class="btn-secondary" href="/suppliers">Cancel</a>
+    <a class="btn-secondary" href="{{ back }}">Cancel</a>
   </div>
 </form>
 {% endblock %}

@@ -8,9 +8,9 @@
   </div>
   <div class="head-actions">
     <a class="btn-secondary" href="/banking">← Back</a>
-    <a class="btn-secondary" href="/banking/accounts/{{ account.id }}/reconcile">⚖ Reconcile</a>
-    <a class="btn-secondary" href="/banking/accounts/{{ account.id }}/transactions/new?txn_type=withdrawal">− Withdrawal</a>
-    <a class="btn" href="/banking/accounts/{{ account.id }}/transactions/new?txn_type=deposit">+ Deposit</a>
+    <a class="btn-secondary" href="/banking/accounts/{{ account.id }}/reconcile?back={{ back_here() }}">⚖ Reconcile</a>
+    <a class="btn-secondary" href="/banking/accounts/{{ account.id }}/transactions/new?txn_type=withdrawal&back={{ back_here() }}">− Withdrawal</a>
+    <a class="btn" href="/banking/accounts/{{ account.id }}/transactions/new?txn_type=deposit&back={{ back_here() }}">+ Deposit</a>
   </div>
 </div>
 
@@ -75,6 +75,7 @@
         <td class="num strong {{ 'neg' if t.txn_type == 'withdrawal' }}">{{ '− ' if t.txn_type == 'withdrawal' else '' }}{{ t.amount|peso }}</td>
         <td class="row-actions">
           <form method="post" action="/banking/transactions/{{ t.id }}/void" onsubmit="return confirm('Void this transaction?');">
+            <input type="hidden" name="back" value="{{ request.url.path ~ ('?' ~ request.url.query if request.url.query else '') }}">
             <button class="btn-link danger" type="submit">Void</button>
           </form>
         </td>

@@ -45,7 +45,7 @@
         <td>From manual stock edits &amp; stock counts</td>
         <td class="num {{ 'neg' if inventory_adjustment_total < 0 }}">{{ inventory_adjustment_total|peso }}</td>
       </tr>
-      <tr><td class="muted" style="padding-left:18px;"><a href="/reports/inventory-adjustments">See breakdown →</a></td><td></td></tr>
+      <tr><td class="muted" style="padding-left:18px;"><a href="/reports/inventory-adjustments?{{ 'date_from=' ~ date_from ~ '&date_to=' ~ date_to if custom else 'days=' ~ days }}">See breakdown →</a></td><td></td></tr>
     </tbody>
   </table>
 

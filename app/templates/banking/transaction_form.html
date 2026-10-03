@@ -3,13 +3,14 @@
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">{{ 'Add Deposit' if txn_type == 'deposit' else 'Add Withdrawal' }}</h1>
-  <a class="btn-link" href="/banking/accounts/{{ account.id }}">← Back to {{ account.name }}</a>
+  <a class="btn-link" href="{{ back }}">← Back to {{ account.name }}</a>
 </div>
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
 
 <form class="card form" method="post" novalidate action="/banking/accounts/{{ account.id }}/transactions">
   <input type="hidden" name="txn_type" value="{{ txn_type }}">
+  <input type="hidden" name="back" value="{{ back }}">
 
   <label>Type
     <select name="txn_type_display" disabled>
@@ -46,7 +47,7 @@
 
   <div class="form-actions full">
     <button class="btn" type="submit">Save {{ 'deposit' if txn_type == 'deposit' else 'withdrawal' }}</button>
-    <a class="btn-secondary" href="/banking/accounts/{{ account.id }}">Cancel</a>
+    <a class="btn-secondary" href="{{ back }}">Cancel</a>
   </div>
 </form>
 {% endblock %}

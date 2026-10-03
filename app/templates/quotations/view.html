@@ -7,7 +7,7 @@
     <p class="muted">{{ quote.created_at.strftime('%b %d, %Y %I:%M %p') if quote.created_at else '' }}</p>
   </div>
   <div class="head-actions">
-    <a class="btn-secondary" href="/quotations">← Back to Quotations</a>
+    <a class="btn-secondary" href="{{ back }}">← {{ 'Back to Quotations' if back.startswith('/quotations') else 'Back' }}</a>
     <button class="btn-secondary" type="button" onclick="window.print()">🖨 Print</button>
     <a class="btn-secondary" href="/quotations/{{ quote.id }}/pdf">⬇ Download PDF</a>
   </div>
@@ -26,7 +26,7 @@
 {% elif quote.status == 'paid' %}
 <div class="quo-status-banner paid">
   <strong>Paid.</strong> Converted to Sale
-  {% if quote.converted_sale %}<a href="/pos/receipt/{{ quote.converted_sale.id }}?from=quotation&quote={{ quote.id }}">{{ quote.converted_sale.invoice_no }}</a>{% endif %}
+  {% if quote.converted_sale %}<a href="/pos/receipt/{{ quote.converted_sale.id }}?from=quotation&quote={{ quote.id }}&back={{ back_here() }}">{{ quote.converted_sale.invoice_no }}</a>{% endif %}
   on {{ quote.paid_at.strftime('%b %d, %Y %I:%M %p') if quote.paid_at else '' }}.
 </div>
 {% else %}
@@ -96,8 +96,8 @@
 <div class="no-print" style="margin-top:18px;">
   {% if quote.status == 'pending' %}
   <div class="pos-actions" style="justify-content:flex-start;">
-    <form method="post" action="/quotations/{{ quote.id }}/confirm"><button class="btn" type="submit">✓ Customer confirmed — proceed</button></form>
-    <form method="post" action="/quotations/{{ quote.id }}/cancel" onsubmit="return confirm('Cancel this quotation?');"><button class="btn-secondary" type="submit">Cancel quotation</button></form>
+    <form method="post" action="/quotations/{{ quote.id }}/confirm"><input type="hidden" name="back" value="{{ back }}"><button class="btn" type="submit">✓ Customer confirmed — proceed</button></form>
+    <form method="post" action="/quotations/{{ quote.id }}/cancel" onsubmit="return confirm('Cancel this quotation?');"><input type="hidden" name="back" value="{{ back }}"><button class="btn-secondary" type="submit">Cancel quotation</button></form>
   </div>
 
   <script>
@@ -291,6 +291,7 @@
     <div id="qcError" class="alert" style="display:none;margin-top:14px;"></div>
 
     <form method="post" action="/quotations/{{ quote.id }}/cancel" style="margin-top:14px;" onsubmit="return confirm('Cancel this quotation?');">
+      <input type="hidden" name="back" value="{{ back }}">
       <button class="btn-link danger" type="submit">Cancel this quotation instead</button>
     </form>
   </section>
@@ -424,7 +425,7 @@
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
         });
         const data = await res.json();
-        if (data.ok) { window.location = '/pos/receipt/' + data.sale_id + '?from=quotation&quote=' + QUOTE_ID; }
+        if (data.ok) { window.location = '/pos/receipt/' + data.sale_id + '?from=quotation&quote=' + QUOTE_ID + '&back=' + encodeURIComponent(location.pathname + location.search); }
         else { qcShowError(data.error || 'Conversion failed.'); btn.disabled = false; btn.textContent = 'Complete Sale'; }
       } catch (e) {
         qcShowError('Network error. Please try again.'); btn.disabled = false; btn.textContent = 'Complete Sale';
@@ -437,6 +438,7 @@
   </script>
   {% elif quote.status == 'cancelled' %}
   <form method="post" action="/quotations/{{ quote.id }}/reopen">
+    <input type="hidden" name="back" value="{{ back }}">
     <button class="btn-secondary" type="submit">↺ Reopen as pending</button>
   </form>
   {% endif %}

@@ -166,6 +166,7 @@
     {% if can_edit_payment and not sale.is_voided and (is_credit_sale or sale.payments|length == 1) %}
     <form id="editPaymentForm" method="post" action="/pos/receipt/{{ sale.id }}/edit-payment"
           style="display:none;margin:0 0 12px;padding:9px 11px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:12px;">
+      <input type="hidden" name="ctx" value="{{ receipt_ctx }}">
       <label style="color:var(--ink);">Correct the payment method
         <select name="new_method" id="editPaymentMethod" onchange="toggleEditPaymentCustomer()" style="display:block;margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;">
           {% if is_credit_sale %}
@@ -197,6 +198,7 @@
     {% if can_edit_customer and not sale.is_voided %}
     <form id="editCustomerForm" method="post" action="/pos/receipt/{{ sale.id }}/edit-customer"
           style="display:none;margin:0 0 12px;padding:9px 11px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:12px;">
+      <input type="hidden" name="ctx" value="{{ receipt_ctx }}">
       <label style="color:var(--ink);">Correct the customer
         <input type="text" name="new_customer_name" value="{{ sale.customer_name or '' }}" list="receiptCustomerNames"
                placeholder="Leave blank for Walk-in" autocomplete="off"
@@ -219,6 +221,7 @@
     {% if can_edit_invoice and not sale.is_voided %}
     <form id="editInvoiceForm" method="post" action="/pos/receipt/{{ sale.id }}/edit-invoice"
           style="display:none;margin:0 0 12px;padding:9px 11px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:12px;">
+      <input type="hidden" name="ctx" value="{{ receipt_ctx }}">
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
         {% if sale.receipt_type in ('DRS', 'DRB') %}
         <label style="color:var(--ink);">Booklet
@@ -246,6 +249,7 @@
     {% if can_edit_date and not sale.is_voided %}
     <form id="editDateForm" method="post" action="/pos/receipt/{{ sale.id }}/edit-date"
           style="display:none;margin:0 0 12px;padding:9px 11px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:12px;">
+      <input type="hidden" name="ctx" value="{{ receipt_ctx }}">
       <label style="color:var(--ink);">Correct the transaction date
         <input type="date" name="new_date" value="{{ sale.created_at.strftime('%Y-%m-%d') if sale.created_at else '' }}"
                max="{{ today_iso }}" style="display:block;margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;">
@@ -271,7 +275,7 @@
     {% if original %}
     <div class="r-link {{ 'refund' if sale.txn_type == 'refund' else 'exchange' }}">
       {{ '↩ Refund of' if sale.txn_type == 'refund' else '⇄ Exchange from' }} Invoice
-      <a href="/pos/receipt/{{ original.id }}?from=sales">{{ (original.receipt_type ~ original.invoice_no) if (original.receipt_type and original.invoice_no) else original.invoice_no }}</a>
+      <a href="/pos/receipt/{{ original.id }}{{ '?' ~ receipt_ctx_full if receipt_ctx_full }}">{{ (original.receipt_type ~ original.invoice_no) if (original.receipt_type and original.invoice_no) else original.invoice_no }}</a>
     </div>
     {% elif sale.no_invoice_return %}
     <div class="r-link refund" style="background:#fffbeb;border-color:#fcd34d;color:#92400e;">
@@ -281,20 +285,20 @@
     {% for lt in linked %}
     <div class="r-link {{ 'refund' if lt.txn_type == 'refund' else 'exchange' }}">
       ⚠ This invoice has {{ 'a refund' if lt.txn_type == 'refund' else 'an exchange' }}:
-      <a href="/pos/receipt/{{ lt.id }}?from=sales">{{ (lt.receipt_type ~ lt.invoice_no) if (lt.receipt_type and lt.invoice_no) else lt.invoice_no }}</a> · {{ lt.total|peso }}
+      <a href="/pos/receipt/{{ lt.id }}{{ '?' ~ receipt_ctx_full if receipt_ctx_full }}">{{ (lt.receipt_type ~ lt.invoice_no) if (lt.receipt_type and lt.invoice_no) else lt.invoice_no }}</a> · {{ lt.total|peso }}
     </div>
     {% endfor %}
 
     {% if si_covers %}
     <div class="r-link exchange">
       📄 This SI documents Output VAT for {{ si_covers|length }} Delivery Receipt{{ '' if si_covers|length == 1 else 's' }}:
-      {% for dr in si_covers %}<a href="/pos/receipt/{{ dr.id }}?from=sales">{{ (dr.receipt_type ~ dr.invoice_no) if (dr.receipt_type and dr.invoice_no) else dr.invoice_no }}</a>{{ ', ' if not loop.last }}{% endfor %}
+      {% for dr in si_covers %}<a href="/pos/receipt/{{ dr.id }}{{ '?' ~ receipt_ctx_full if receipt_ctx_full }}">{{ (dr.receipt_type ~ dr.invoice_no) if (dr.receipt_type and dr.invoice_no) else dr.invoice_no }}</a>{{ ', ' if not loop.last }}{% endfor %}
     </div>
     {% endif %}
     {% if si_covered_by %}
     <div class="r-link exchange">
       ✓ Output VAT recognized via SI
-      <a href="/pos/receipt/{{ si_covered_by.id }}?from=sales">{{ (si_covered_by.receipt_type ~ si_covered_by.invoice_no) if (si_covered_by.receipt_type and si_covered_by.invoice_no) else si_covered_by.invoice_no }}</a>
+      <a href="/pos/receipt/{{ si_covered_by.id }}{{ '?' ~ receipt_ctx_full if receipt_ctx_full }}">{{ (si_covered_by.receipt_type ~ si_covered_by.invoice_no) if (si_covered_by.receipt_type and si_covered_by.invoice_no) else si_covered_by.invoice_no }}</a>
     </div>
     {% endif %}
 
@@ -390,7 +394,7 @@
         <div class="row" style="color:#15803d;"><span>Credit</span><b>Paid in full</b></div>
         {% endif %}
         {% if sale.customer_id %}
-        <div class="row"><span></span><a href="/credits/{{ sale.customer_id }}" style="color:inherit;font-size:11.5px;">View full payment history →</a></div>
+        <div class="row"><span></span><a href="/credits/{{ sale.customer_id }}?back={{ back_here() }}" style="color:inherit;font-size:11.5px;">View full payment history →</a></div>
         {% endif %}
       {% endif %}
     </div>
@@ -401,7 +405,14 @@
   </div>
 
   <div class="actions">
-    {% if from == 'sales' %}
+    {# `back` is the exact page the receipt was opened from (filters, page
+       and all), so it wins whenever the opening link passed one; `from`
+       only names it. The fixed targets below are for older links that
+       pass `from` alone. #}
+    {% set back_labels = {'sales': 'Back to Sales', 'receivables': 'Back to Receivables', 'price_overrides': 'Back to Price Overrides', 'customer': 'Back to History', 'quotation': 'Back to Quotation', 'stock_card': 'Back to Stock Card'} %}
+    {% if back %}
+    <a class="btn back" href="{{ back }}">← {{ back_labels.get(from, 'Back') }}</a>
+    {% elif from == 'sales' %}
     <a class="btn back" href="/sales">← Back to Sales</a>
     {% elif from == 'price_overrides' %}
     <a class="btn back" href="/reports/price-overrides">← Back to Price Overrides</a>
@@ -409,20 +420,18 @@
     <a class="btn back" href="/customers/{{ cust }}/history">← Back to History</a>
     {% elif from == 'quotation' and quote %}
     <a class="btn back" href="/quotations/{{ quote }}">← Back to Quotation</a>
-    {% elif from == 'stock_card' and back %}
-    <a class="btn back" href="{{ back }}">← Back to Stock Card</a>
     {% else %}
     <a class="btn back" href="/pos">← New sale</a>
     {% endif %}
     {% if thermal %}
-    <a class="btn back" href="/pos/receipt/{{ sale.id }}?from={{ from }}&back={{ back|urlencode }}&cust={{ cust }}&quote={{ quote }}">🧾 Full-page view</a>
+    <a class="btn back" href="/pos/receipt/{{ sale.id }}{{ '?' ~ receipt_ctx_full if receipt_ctx_full }}">🧾 Full-page view</a>
     {% else %}
-    <a class="btn back" href="/pos/receipt/{{ sale.id }}?from={{ from }}&back={{ back|urlencode }}&cust={{ cust }}&quote={{ quote }}&thermal=1">🧾 Thermal receipt</a>
+    <a class="btn back" href="/pos/receipt/{{ sale.id }}?{{ receipt_ctx_full ~ '&' if receipt_ctx_full }}thermal=1">🧾 Thermal receipt</a>
     {% endif %}
     <button class="btn print" onclick="window.print()">🖨 Print</button>
     <a class="btn back" href="/pos/receipt/{{ sale.id }}/pdf">⬇ Download PDF</a>
     {% if can_edit_items %}
-    <a class="btn back" href="/pos/receipt/{{ sale.id }}/edit">✎ Edit items</a>
+    <a class="btn back" href="/pos/receipt/{{ sale.id }}/edit{{ '?' ~ receipt_ctx_full if receipt_ctx_full }}">✎ Edit items</a>
     {% endif %}
     {% if can_void and not sale.is_voided and sale.txn_type == 'sale' %}
     <button class="btn void" onclick="voidSale()">⊘ Void this sale</button>
@@ -436,6 +445,7 @@
   {% if can_void and not sale.is_voided and sale.txn_type == 'sale' %}
   <form id="voidForm" method="post" action="/pos/receipt/{{ sale.id }}/void" style="display:none;">
     <input type="hidden" name="reason" id="voidReason">
+    <input type="hidden" name="ctx" value="{{ receipt_ctx }}">
   </form>
   <script>
     function voidSale() {
@@ -449,7 +459,7 @@
   {% endif %}
 
   {% if can_unvoid and sale.is_voided and sale.txn_type == 'sale' %}
-  <form id="unvoidForm" method="post" action="/pos/receipt/{{ sale.id }}/unvoid" style="display:none;"></form>
+  <form id="unvoidForm" method="post" action="/pos/receipt/{{ sale.id }}/unvoid" style="display:none;"><input type="hidden" name="ctx" value="{{ receipt_ctx }}"></form>
   <script>
     function unvoidSale() {
       if (!confirm("Restore invoice {{ display_invoice }}? This re-applies its stock deduction and payment, and un-does the void everywhere in the system.")) return;

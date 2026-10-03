@@ -13,6 +13,7 @@
 
 <section class="card" style="margin-bottom:18px;">
   <form method="post" action="/inventory-adjustments/new" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+    <input type="hidden" name="back" value="{{ request.url.path ~ ('?' ~ request.url.query if request.url.query else '') }}">
     <label style="margin:0;">Adjustment date
       <input type="date" name="adj_date" value="{{ today.isoformat() }}" max="{{ today.isoformat() }}" required>
     </label>
@@ -74,7 +75,7 @@
           {% elif a.status == 'draft' %}<span class="txn" style="background:#fffbeb;color:#92400e;">draft</span>
           {% else %}<span class="txn" style="background:#f1f5f9;color:#64748b;">cancelled</span>{% endif %}
         </td>
-        <td class="row-actions"><a class="btn-link" href="/inventory-adjustments/{{ a.id }}">{{ 'Continue' if a.status == 'draft' else 'View' }}</a></td>
+        <td class="row-actions"><a class="btn-link" href="/inventory-adjustments/{{ a.id }}?back={{ back_here() }}">{{ 'Continue' if a.status == 'draft' else 'View' }}</a></td>
       </tr>
       {% else %}
       <tr><td colspan="8" class="empty">No adjustments{{ ' match' if q or status else ' yet' }}.</td></tr>

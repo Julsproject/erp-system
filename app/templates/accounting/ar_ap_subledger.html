@@ -24,7 +24,7 @@
       <tbody>
         {% for r in summary_rows %}
         <tr class="{{ 'active' if r.id == (selected_party.id if selected_party else -1) }}">
-          <td><a href="{{ route }}?party_id={{ r.id or 0 }}&days={{ days }}">{{ r.name }}</a></td>
+          <td><a href="{{ route }}?party_id={{ r.id or 0 }}&days={{ days }}{{ ('&' ~ {'date_from': date_from, 'date_to': date_to}|urlencode) if custom }}">{{ r.name }}</a></td>
           <td class="num">{{ r.balance|peso }}</td>
         </tr>
         {% else %}

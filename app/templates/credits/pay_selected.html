@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">Pay Selected — {{ customer.name }}</h1>
-  <a class="btn-link" href="/credits/{{ customer.id }}">← Back to statement</a>
+  <a class="btn-link" href="{{ back }}">← Back</a>
 </div>
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
@@ -29,6 +29,7 @@
 </div>
 
 <form class="card form" method="post" action="/credits/{{ customer.id }}/pay-selected" style="margin-top:16px;max-width:560px;" id="paySelectedForm">
+  <input type="hidden" name="back" value="{{ back }}">
   {% for sale, outstanding in owed %}
   <input type="hidden" name="sale_ids" value="{{ sale.id }}">
   {% endfor %}
@@ -58,7 +59,7 @@
 
   <div class="form-actions full">
     <button class="btn" type="submit">Pay {{ owed|length }} Invoice{{ '' if owed|length == 1 else 's' }} — {{ total|peso }}</button>
-    <a class="btn-secondary" href="/credits/{{ customer.id }}" onclick="clearDraft()">Cancel</a>
+    <a class="btn-secondary" href="{{ back }}" onclick="clearDraft()">Cancel</a>
   </div>
 </form>
 

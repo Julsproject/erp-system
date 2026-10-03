@@ -57,7 +57,7 @@
       {% for m in r.missing %}
       <tr>
         <td class="strong">{{ r.receipt_type }}{{ m }}</td>
-        <td class="row-actions"><a class="btn-link" href="/pos/cancelled-receipts">Log as cancelled</a></td>
+        <td class="row-actions"><a class="btn-link" href="/pos/cancelled-receipts?log_type={{ r.receipt_type|urlencode }}&log_no={{ m|urlencode }}&back={{ back_here() }}">Log as cancelled</a></td>
       </tr>
       {% endfor %}
     </tbody>

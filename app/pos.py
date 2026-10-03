@@ -8,6 +8,7 @@ Deferred: customers/receivable, split payments, open-container display, returns.
 """
 import json
 import re
+from urllib.parse import parse_qsl, urlencode
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
@@ -20,7 +21,7 @@ from sqlalchemy.orm import Session
 from . import accounting, audit, models, settings_store, stock_books, stock_dates
 from .customers import get_or_create_customer
 from .database import get_db
-from .deps import get_current_user, is_floor_staff, is_staff, safe_back_url
+from .deps import get_current_user, is_floor_staff, is_staff, safe_back_url, url_with
 from .products import _get_or_create_category, _get_or_create_subcategory, _get_or_create_unit_type
 from .templating import templates
 
@@ -1362,8 +1363,13 @@ def invoice_gaps(
 @router.get("/pos/cancelled-receipts", response_class=HTMLResponse)
 def cancelled_receipts_list(
     request: Request, receipt_type: str = "", page: int = 1,
+    log_type: str = "", log_no: str = "", back: str = "",
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
+    """`log_type`/`log_no` pre-fill the "Log a cancelled receipt" form and
+    `back` is where logging it returns to — both set by Find Missing
+    Numbers' "Log as cancelled", so logging a gap lands back on the gap
+    results instead of here."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -1383,14 +1389,16 @@ def cancelled_receipts_list(
         "pos/cancelled_receipts.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "rows": rows, "receipt_type": receipt_type, "receipt_types": RECEIPT_TYPES,
-         "page": page, "pages": pages, "total": total, "today": datetime.now(MANILA).date().isoformat()},
+         "page": page, "pages": pages, "total": total, "today": datetime.now(MANILA).date().isoformat(),
+         "log_type": (log_type or "").strip().upper(), "log_no": (log_no or "").strip(),
+         "back": safe_back_url(back, "")},
     )
 
 
 @router.post("/pos/cancelled-receipts")
 def cancelled_receipts_create(
     request: Request, receipt_type: str = Form(...), invoice_no: str = Form(...),
-    cancelled_date: str = Form(""), reason: str = Form(""),
+    cancelled_date: str = Form(""), reason: str = Form(""), back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -1400,7 +1408,8 @@ def cancelled_receipts_create(
     receipt_type = (receipt_type or "").strip().upper()
     invoice_no = (invoice_no or "").strip()
     if not receipt_type or not invoice_no:
-        return RedirectResponse("/pos/cancelled-receipts?error=Receipt+type+and+invoice+%23+are+required.", status_code=302)
+        return RedirectResponse(url_with("/pos/cancelled-receipts", error="Receipt type and invoice # are required.",
+                                         back=safe_back_url(back, "")), status_code=302)
     try:
         c_date = date.fromisoformat(cancelled_date) if cancelled_date else datetime.now(MANILA).date()
     except ValueError:
@@ -1418,11 +1427,11 @@ def cancelled_receipts_create(
         summary=f"Logged cancelled/unused receipt {receipt_type} #{invoice_no}" + (f" — {row.reason}" if row.reason else ""),
     )
     db.commit()
-    return RedirectResponse("/pos/cancelled-receipts", status_code=302)
+    return RedirectResponse(safe_back_url(back, "/pos/cancelled-receipts"), status_code=302)
 
 
 @router.post("/pos/cancelled-receipts/{row_id:int}/delete")
-def cancelled_receipts_delete(row_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def cancelled_receipts_delete(row_id: int, request: Request, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -1436,7 +1445,7 @@ def cancelled_receipts_delete(row_id: int, request: Request, db: Session = Depen
         )
         db.delete(row)
         db.commit()
-    return RedirectResponse("/pos/cancelled-receipts", status_code=302)
+    return RedirectResponse(safe_back_url(back, "/pos/cancelled-receipts"), status_code=302)
 
 
 @router.get("/pos/lookup")
@@ -1867,6 +1876,35 @@ def pos_exchange(data: dict, db: Session = Depends(get_db), user=Depends(get_cur
     return {"ok": True, "sale_id": ex.id, "invoice_no": ex.invoice_no}
 
 
+def _receipt_ctx(from_: str = "", back: str = "", cust=0, quote=0, thermal=0) -> str:
+    """Where a receipt was opened from — the from/back/cust/quote that pick
+    receipt.html's "← Back" button — as a query string. Every action taken
+    on the receipt (void, the ✎ edits, Edit items, the linked-receipt links)
+    carries it along, so coming back to the receipt still offers the way
+    back to where the user started (POS, Sales, a customer's history, ...)
+    instead of always falling back to Sales."""
+    try:
+        cust, quote, thermal = int(cust or 0), int(quote or 0), int(thermal or 0)
+    except (TypeError, ValueError):
+        cust = quote = thermal = 0
+    params = [("from", (from_ or "").strip()), ("back", safe_back_url(back, "")),
+              ("cust", cust or ""), ("quote", quote or ""), ("thermal", 1 if thermal else "")]
+    return urlencode([(k, v) for k, v in params if v])
+
+
+def _receipt_ctx_from_form(ctx: str) -> str:
+    """The `ctx` hidden field a receipt form posts back, re-validated through
+    _receipt_ctx rather than trusted as-is."""
+    fields = dict(parse_qsl(ctx or ""))
+    return _receipt_ctx(fields.get("from", ""), fields.get("back", ""), fields.get("cust", 0),
+                        fields.get("quote", 0), fields.get("thermal", 0))
+
+
+def _receipt_url(sale_id: int, ctx: str = "", **extra) -> str:
+    qs = "&".join(part for part in (ctx, urlencode({k: v for k, v in extra.items() if v})) if part)
+    return f"/pos/receipt/{sale_id}" + (f"?{qs}" if qs else "")
+
+
 @router.get("/pos/receipt/{sale_id:int}", response_class=HTMLResponse)
 def pos_receipt(
     sale_id: int,
@@ -1947,6 +1985,10 @@ def pos_receipt(
         "receipt.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "sale": sale, "from": from_, "back": safe_back_url(back, ""), "cust": cust, "quote": quote, "thermal": thermal,
+         "receipt_ctx": _receipt_ctx(from_, back, cust, quote, thermal),
+         # Same origin without the thermal flag — for the full-page/thermal
+         # toggle and the Edit items page, which is never thermal.
+         "receipt_ctx_full": _receipt_ctx(from_, back, cust, quote),
          "linked": linked, "original": original, "credit_outstanding": credit_outstanding,
          "si_covers": si_covers, "si_covered_by": si_covered_by,
          "can_void": _can_void_sale(user), "void_error": VOID_ERRORS.get(void_error),
@@ -2113,6 +2155,7 @@ def void_sale(
     sale_id: int,
     request: Request,
     reason: str = Form(""),
+    ctx: str = Form(""),
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -2123,8 +2166,7 @@ def void_sale(
         return RedirectResponse("/pos", status_code=302)
 
     def _back(err=None):
-        suffix = f"&void_error={err}" if err else ""
-        return RedirectResponse(f"/pos/receipt/{sale_id}?from=sales{suffix}", status_code=302)
+        return RedirectResponse(_receipt_url(sale_id, _receipt_ctx_from_form(ctx), void_error=err), status_code=302)
 
     if not _can_void_sale(user):
         return _back("denied")
@@ -2213,6 +2255,7 @@ def void_sale(
 def unvoid_sale(
     sale_id: int,
     request: Request,
+    ctx: str = Form(""),
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -2237,8 +2280,7 @@ def unvoid_sale(
         return RedirectResponse("/pos", status_code=302)
 
     def _back(err=None):
-        suffix = f"&unvoid_error={err}" if err else ""
-        return RedirectResponse(f"/pos/receipt/{sale_id}?from=sales{suffix}", status_code=302)
+        return RedirectResponse(_receipt_url(sale_id, _receipt_ctx_from_form(ctx), unvoid_error=err), status_code=302)
 
     if not is_staff(user):
         return _back("denied")
@@ -2316,6 +2358,7 @@ def edit_sale_invoice(
     request: Request,
     new_invoice_no: str = Form(""),
     new_receipt_type: str = Form(""),
+    ctx: str = Form(""),
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -2337,8 +2380,7 @@ def edit_sale_invoice(
         return RedirectResponse("/pos", status_code=302)
 
     def _back(err=None):
-        suffix = f"&edit_invoice_error={err}" if err else ""
-        return RedirectResponse(f"/pos/receipt/{sale_id}?from=sales{suffix}", status_code=302)
+        return RedirectResponse(_receipt_url(sale_id, _receipt_ctx_from_form(ctx), edit_invoice_error=err), status_code=302)
 
     if not is_staff(user):
         return _back("denied")
@@ -2436,6 +2478,7 @@ def edit_sale_customer(
     sale_id: int,
     request: Request,
     new_customer_name: str = Form(""),
+    ctx: str = Form(""),
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -2457,8 +2500,7 @@ def edit_sale_customer(
         return RedirectResponse("/pos", status_code=302)
 
     def _back(err=None):
-        suffix = f"&edit_customer_error={err}" if err else ""
-        return RedirectResponse(f"/pos/receipt/{sale_id}?from=sales{suffix}", status_code=302)
+        return RedirectResponse(_receipt_url(sale_id, _receipt_ctx_from_form(ctx), edit_customer_error=err), status_code=302)
 
     if not is_staff(user):
         return _back("denied")
@@ -2505,6 +2547,7 @@ def edit_sale_date(
     sale_id: int,
     request: Request,
     new_date: str = Form(""),
+    ctx: str = Form(""),
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -2523,8 +2566,7 @@ def edit_sale_date(
         return RedirectResponse("/pos", status_code=302)
 
     def _back(err=None):
-        suffix = f"&edit_date_error={err}" if err else ""
-        return RedirectResponse(f"/pos/receipt/{sale_id}?from=sales{suffix}", status_code=302)
+        return RedirectResponse(_receipt_url(sale_id, _receipt_ctx_from_form(ctx), edit_date_error=err), status_code=302)
 
     if not is_staff(user):
         return _back("denied")
@@ -2610,6 +2652,7 @@ def edit_sale_payment_method(
     sale_id: int, request: Request,
     new_method: str = Form(""),
     customer_name: str = Form(""),
+    ctx: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """Correct the payment method on an already-finalized sale — e.g. the
@@ -2642,8 +2685,7 @@ def edit_sale_payment_method(
         return RedirectResponse("/pos", status_code=302)
 
     def _back(err=None):
-        suffix = f"&edit_payment_error={err}" if err else ""
-        return RedirectResponse(f"/pos/receipt/{sale_id}?from=sales{suffix}", status_code=302)
+        return RedirectResponse(_receipt_url(sale_id, _receipt_ctx_from_form(ctx), edit_payment_error=err), status_code=302)
 
     if not is_staff(user):
         return _back("denied")
@@ -2789,17 +2831,27 @@ def edit_sale_payment_method(
 
 
 @router.get("/pos/receipt/{sale_id:int}/edit", response_class=HTMLResponse)
-def edit_sale_items_form(sale_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def edit_sale_items_form(
+    sale_id: int,
+    request: Request,
+    from_: str = Query("", alias="from"),
+    back: str = "",
+    cust: int = 0,
+    quote: int = 0,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
     if not user:
         return RedirectResponse("/login", status_code=302)
     sale = db.get(models.Sale, sale_id)
     if not sale:
         return RedirectResponse("/pos", status_code=302)
+    ctx = _receipt_ctx(from_, back, cust, quote)
     if not is_staff(user):
-        return RedirectResponse(f"/pos/receipt/{sale_id}?from=sales&edit_items_error=denied", status_code=302)
+        return RedirectResponse(_receipt_url(sale_id, ctx, edit_items_error="denied"), status_code=302)
     block_reason = _can_edit_sale_items(db, sale)
     if block_reason:
-        return RedirectResponse(f"/pos/receipt/{sale_id}?from=sales&edit_items_error={block_reason}", status_code=302)
+        return RedirectResponse(_receipt_url(sale_id, ctx, edit_items_error=block_reason), status_code=302)
 
     lines_payload = []
     for line in sale.lines:
@@ -2817,6 +2869,7 @@ def edit_sale_items_form(sale_id: int, request: Request, db: Session = Depends(g
         "edit_sale.html",
         {
             "request": request, "app_name": request.app.title, "user": user, "sale": sale,
+            "receipt_url": _receipt_url(sale_id, ctx),
             "lines_json": json.dumps(lines_payload),
             "vat_applied": bool(sale.lines and sale.lines[0].is_vat),
         },

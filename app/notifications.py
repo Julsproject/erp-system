@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 from . import models, settings_store
 from .backup import latest_backup
 from .database import SessionLocal, get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_staff, safe_back_url
 from .products import LOW_STOCK_LOOKBACK_DAYS, days_of_stock_left, low_stock_expr, recent_sold
 from .templating import qty, templates
 
@@ -283,7 +283,7 @@ def _current_alerts(db: Session) -> dict:
             "title": f"No-invoice {kind.lower()}: {s.invoice_no}",
             "body": f"{kind} of {_peso(amount)} for {s.customer_name or 'a walk-in customer'} was processed "
                     "without matching an original invoice — the item and price came from the cashier, worth a spot-check.",
-            "link": f"/pos/receipt/{s.id}?from=sales",
+            "link": f"/pos/receipt/{s.id}",
         }
 
     # ---- backup health (singleton) --------------------------------------
@@ -447,8 +447,9 @@ def list_notifications(
     )
 
 
+# Both return to the list as it was (`back`: its tab and page).
 @router.post("/notifications/{notif_id:int}/read")
-def mark_read(notif_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def mark_read(notif_id: int, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -458,11 +459,11 @@ def mark_read(notif_id: int, db: Session = Depends(get_db), user=Depends(get_cur
         n.is_read = True
         n.read_at = _now()
         db.commit()
-    return RedirectResponse("/notifications", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(safe_back_url(back, "/notifications"), status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/notifications/read-all")
-def mark_all_read(db: Session = Depends(get_db), user=Depends(get_current_user)):
+def mark_all_read(back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -471,4 +472,4 @@ def mark_all_read(db: Session = Depends(get_db), user=Depends(get_current_user))
         models.Notification.is_read.is_(False), models.Notification.is_resolved.is_(False)
     ).update({"is_read": True, "read_at": _now()}, synchronize_session=False)
     db.commit()
-    return RedirectResponse("/notifications", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(safe_back_url(back, "/notifications"), status_code=status.HTTP_302_FOUND)

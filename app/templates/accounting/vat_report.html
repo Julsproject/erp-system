@@ -73,7 +73,7 @@
   {% endif %}
 
   {% if output_vat_detail %}
-  <input class="search" type="search" id="outputVatSearch" placeholder="Search invoice #, customer, or TIN…" oninput="filterVatTable('outputVatBody', 'outputVatSearch', 'outputVatNoMatch')" style="width:100%;margin-bottom:10px;">
+  <input class="search" type="search" id="outputVatSearch" data-remember="out" placeholder="Search invoice #, customer, or TIN…" oninput="filterVatTable('outputVatBody', 'outputVatSearch', 'outputVatNoMatch')" style="width:100%;margin-bottom:10px;">
   {% endif %}
   <div class="table-wrap">
     <table class="grid">
@@ -82,7 +82,7 @@
         {% for r in output_vat_detail %}
         <tr data-search="{{ (r.invoice_no ~ ' ' ~ r.customer_name ~ ' ' ~ (r.customer_tin or ''))|lower }}">
           <td>{{ r.date.strftime('%b %d, %Y') }}</td>
-          <td class="strong">{% if r.source_link %}<a href="{{ r.source_link }}">{{ r.invoice_no }}</a>{% else %}{{ r.invoice_no }}{% endif %}</td>
+          <td class="strong">{% if r.source_link %}<a href="{{ r.source_link }}{{ '&' if '?' in r.source_link else '?' }}back={{ back_here() }}">{{ r.invoice_no }}</a>{% else %}{{ r.invoice_no }}{% endif %}</td>
           <td>{{ r.customer_name }}</td>
           <td>{{ r.customer_tin or '—' }}</td>
           <td class="num">{{ r.net_of_vat|peso if r.net_of_vat is not none else '—' }}</td>
@@ -107,7 +107,7 @@
   <h3 style="margin-top:0;">Input VAT detail</h3>
   <p class="muted">Every Purchase or Expense posting that contributed to Input VAT this period.</p>
   {% if input_vat_detail %}
-  <input class="search" type="search" id="inputVatSearch" placeholder="Search invoice #, supplier, or TIN…" oninput="filterVatTable('inputVatBody', 'inputVatSearch', 'inputVatNoMatch')" style="width:100%;margin-bottom:10px;">
+  <input class="search" type="search" id="inputVatSearch" data-remember="in" placeholder="Search invoice #, supplier, or TIN…" oninput="filterVatTable('inputVatBody', 'inputVatSearch', 'inputVatNoMatch')" style="width:100%;margin-bottom:10px;">
   {% endif %}
   <div class="table-wrap">
     <table class="grid">
@@ -116,7 +116,7 @@
         {% for r in input_vat_detail %}
         <tr data-search="{{ (r.supplier_invoice ~ ' ' ~ r.supplier_name ~ ' ' ~ (r.supplier_tin or ''))|lower }}">
           <td>{{ r.date.strftime('%b %d, %Y') }}</td>
-          <td class="strong">{% if r.source_link %}<a href="{{ r.source_link }}">{{ r.supplier_invoice }}</a>{% else %}{{ r.supplier_invoice }}{% endif %}</td>
+          <td class="strong">{% if r.source_link %}<a href="{{ r.source_link }}{{ '&' if '?' in r.source_link else '?' }}back={{ back_here() }}">{{ r.supplier_invoice }}</a>{% else %}{{ r.supplier_invoice }}{% endif %}</td>
           <td>{{ r.supplier_name }}</td>
           <td>{{ r.supplier_tin or '—' }}</td>
           <td class="num">{{ r.net_of_vat|peso if r.net_of_vat is not none else '—' }}</td>

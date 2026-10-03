@@ -9,9 +9,10 @@
   </div>
   <div class="head-actions">
     {% set pp_url = "/accounting/journal-entries" %}{% set pp_keep = {} %}{% set pp_mode = "all" %}{% include "_period_picker.html" %}
-    <a class="btn" href="/accounting/journal-entries/new">+ New Entry</a>
+    <a class="btn" href="/accounting/journal-entries/new?back={{ back_here() }}">+ New Entry</a>
   </div>
 </div>
+{% set cur_url = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') %}
 {% include "accounting/_subnav.html" %}
 
 {% if request.query_params.get('created') %}
@@ -37,23 +38,27 @@
         <td class="num">{{ e.lines|sum(attribute='debit')|peso }}</td>
         <td class="num">{{ e.lines|sum(attribute='credit')|peso }}</td>
         <td style="white-space:nowrap;">
-          <a class="btn-link" href="/accounting/journal-entries/{{ e.id }}/view">View</a>
+          <a class="btn-link" href="/accounting/journal-entries/{{ e.id }}/view?back={{ back_here() }}">View</a>
           {% if e.id in editable_ids %}
-          <a class="btn-link" href="/accounting/journal-entries/{{ e.id }}/edit">Edit</a>
+          <a class="btn-link" href="/accounting/journal-entries/{{ e.id }}/edit?back={{ back_here() }}">Edit</a>
           {% endif %}
           {% if e.status == 'draft' %}
           <form method="post" action="/accounting/journal-entries/{{ e.id }}/post" style="display:inline;">
+            <input type="hidden" name="back" value="{{ cur_url }}">
             <button class="btn-link" type="submit" onclick="return confirm('Post this entry? It will start affecting every report immediately.')">Post</button>
           </form>
           <form method="post" action="/accounting/journal-entries/{{ e.id }}/delete" style="display:inline;">
+            <input type="hidden" name="back" value="{{ cur_url }}">
             <button class="btn-link" type="submit" onclick="return confirm('Delete this draft?')">Delete</button>
           </form>
           {% elif e.status == 'posted' and e.id in editable_ids %}
           <form method="post" action="/accounting/journal-entries/{{ e.id }}/delete" style="display:inline;">
+            <input type="hidden" name="back" value="{{ cur_url }}">
             <button class="btn-link" type="submit" onclick="return confirm('Delete this entry? Since it was posted today, this removes it outright with no trace — past today, use Reverse instead.')">Delete</button>
           </form>
           {% elif e.status == 'posted' %}
           <form method="post" action="/accounting/journal-entries/{{ e.id }}/reverse" style="display:inline;">
+            <input type="hidden" name="back" value="{{ cur_url }}">
             <button class="btn-link" type="submit" onclick="return confirm('Reverse this entry? A mirror-image entry will be posted; this one will never be edited or deleted.')">Reverse</button>
           </form>
           {% endif %}

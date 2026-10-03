@@ -20,7 +20,7 @@
 {% if open_count %}
 <div class="alert" style="background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8;display:flex;justify-content:space-between;align-items:center;">
   <span><strong>{{ open_count.ref_no }}</strong> is currently open — started {{ open_count.created_at.strftime('%b %d, %Y %I:%M %p') if open_count.created_at else '' }}.</span>
-  <a class="btn-secondary" href="/stock-count/{{ open_count.id }}">Continue counting →</a>
+  <a class="btn-secondary" href="/stock-count/{{ open_count.id }}?back={{ back_here() }}">Continue counting →</a>
 </div>
 {% endif %}
 
@@ -42,6 +42,7 @@
 
 <form id="bulkEffForm" method="post" action="/stock-count/bulk-set-effective-date">
   {% if missing_effective %}<input type="hidden" name="missing_effective" value="1">{% endif %}
+  <input type="hidden" name="back" value="{{ request.url.path ~ ('?' ~ request.url.query if request.url.query else '') }}">
 <div class="table-wrap">
   <table class="grid">
     <thead>
@@ -73,7 +74,7 @@
           {% else %}<span class="txn" style="background:#f1f5f9;color:#64748b;">cancelled</span>{% endif %}
         </td>
         <td class="num">{{ c.lines|length }}</td>
-        <td class="row-actions"><a class="btn-link" href="/stock-count/{{ c.id }}">View</a></td>
+        <td class="row-actions"><a class="btn-link" href="/stock-count/{{ c.id }}?back={{ back_here() }}">View</a></td>
       </tr>
       {% else %}
       <tr><td colspan="{{ 9 if is_admin_user else 8 }}" class="empty">No past counts yet.</td></tr>

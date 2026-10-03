@@ -26,15 +26,15 @@
 </div>
 
 <div class="tabs" style="margin-bottom:18px;">
-  <a class="tab {{ 'active' if not status_filter }}" href="/purchases{{ ('?date_from=' ~ date_from ~ '&date_to=' ~ date_to) if (date_from and date_to) }}">All <span class="muted">({{ all_count }})</span></a>
+  <a class="tab {{ 'active' if not status_filter }}" href="/purchases{{ ('?date_from=' ~ date_from ~ '&date_to=' ~ date_to) if (date_from and date_to) }}{{ (('&' if (date_from and date_to) else '?') ~ 'q=' ~ q|urlencode) if q }}">All <span class="muted">({{ all_count }})</span></a>
   {% for s, label in labels.items() %}
-  <a class="tab {{ 'active' if status_filter == s }}" href="/purchases?status_filter={{ s }}{{ ('&date_from=' ~ date_from ~ '&date_to=' ~ date_to) if (date_from and date_to) }}">{{ label }} <span class="muted">({{ counts.get(s, 0) }})</span></a>
+  <a class="tab {{ 'active' if status_filter == s }}" href="/purchases?status_filter={{ s }}{{ ('&date_from=' ~ date_from ~ '&date_to=' ~ date_to) if (date_from and date_to) }}{{ '&q=' ~ q|urlencode if q }}">{{ label }} <span class="muted">({{ counts.get(s, 0) }})</span></a>
   {% endfor %}
-  <a class="tab {{ 'active' if status_filter == 'return' }}" href="/purchases?status_filter=return{{ ('&date_from=' ~ date_from ~ '&date_to=' ~ date_to) if (date_from and date_to) }}">Returns <span class="muted">({{ counts.get('return', 0) }})</span></a>
+  <a class="tab {{ 'active' if status_filter == 'return' }}" href="/purchases?status_filter=return{{ ('&date_from=' ~ date_from ~ '&date_to=' ~ date_to) if (date_from and date_to) }}{{ '&q=' ~ q|urlencode if q }}">Returns <span class="muted">({{ counts.get('return', 0) }})</span></a>
 </div>
 
 {% set qs = '&status_filter=' ~ status_filter if status_filter else '' %}
-{% set qs = qs ~ ('&q=' ~ q if q else '') %}
+{% set qs = qs ~ ('&q=' ~ q|urlencode if q else '') %}
 {% set qs = qs ~ ('&date_from=' ~ date_from if date_from else '') %}
 {% set qs = qs ~ ('&date_to=' ~ date_to if date_to else '') %}
 {# Dates: the same picker as the reports — keeps the status tab and search. #}
@@ -67,7 +67,7 @@
         <td>{{ p.invoice_no or '—' }}</td>
         <td class="num strong">{{ p.total|peso }}</td>
         <td>{{ p.paid_at.strftime('%b %d, %Y') if p.paid_at else '—' }}</td>
-        <td class="row-actions"><a class="btn-link" href="/purchases/{{ p.id }}">View</a></td>
+        <td class="row-actions"><a class="btn-link" href="/purchases/{{ p.id }}?back={{ back_here() }}">View</a></td>
       </tr>
       {% else %}
       <tr><td colspan="7" class="empty">No purchases {{ 'match that filter' if (status_filter or q or date_from or date_to) else 'yet' }}.</td></tr>

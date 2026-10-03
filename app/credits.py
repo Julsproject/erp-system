@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from . import accounting, audit, models, settings_store
 from .database import get_db
-from .deps import get_current_user, is_admin, is_staff
+from .deps import get_current_user, is_admin, is_staff, safe_back_url, url_with
 from .pos import _invoice_taken, _money, _vat_of
 from .sales import MANILA, SETTLE_METHODS, _resolve_settlement_datetime
 from .templating import templates
@@ -117,7 +117,7 @@ def credits_search(
 
 @router.get("/credits/references", response_class=HTMLResponse)
 def credit_references(
-    request: Request, q: str = "", page: int = 1,
+    request: Request, q: str = "", page: int = 1, undone: int = 0, undo_error: int = 0, back: str = "",
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """Every credit payment that has a reference # (or cheque #) on file,
@@ -170,15 +170,19 @@ def credit_references(
         "credits/references.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "settlements": settlements, "q": q, "page": page, "pages": pages, "total": total,
-         "total_amount": total_amount, "undoable": undoable},
+         "total_amount": total_amount, "undoable": undoable, "undone": undone, "undo_error": undo_error,
+         "back": safe_back_url(back, "/credits")},
     )
 
 
 @router.get("/credits/{customer_id:int}", response_class=HTMLResponse)
 def credit_statement(
-    customer_id: int, request: Request, undone: int = 0, undo_error: int = 0,
+    customer_id: int, request: Request, undone: int = 0, undo_error: int = 0, back: str = "",
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
+    """`back` is the page the statement was opened from (the Credits list,
+    Payment References, Collect Payment, a receipt, a cheque...) for its
+    "← Back" button; without one it goes to the Credits list."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -257,6 +261,7 @@ def credit_statement(
             "customer": customer, "rows": rows, "settlements": settlements, "returned_items": returned_items,
             "orig_total": orig_total, "paid_total": paid_total, "out_total": out_total,
             "undoable": undoable, "undone": undone, "undo_error": undo_error,
+            "back": safe_back_url(back, "/credits"),
         },
     )
 
@@ -542,7 +547,7 @@ def issue_si(
 
 
 @router.get("/credits/{customer_id:int}/pay-full", response_class=HTMLResponse)
-def pay_full_form(customer_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def pay_full_form(customer_id: int, request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -558,6 +563,7 @@ def pay_full_form(customer_id: int, request: Request, db: Session = Depends(get_
             "request": request, "app_name": request.app.title, "user": user,
             "customer": customer, "owed": owed, "total": total, "methods": SETTLE_METHODS, "error": None,
             "payment_date": "", "today_iso": datetime.now(MANILA).date().isoformat(),
+            "back": safe_back_url(back, f"/credits/{customer_id}"),
         },
     )
 
@@ -620,6 +626,7 @@ def pay_full_submit(
     customer_id: int, request: Request,
     method: str = Form("cash"), ref_no: str = Form(""), payment_date: str = Form(""),
     cheque_date: str = Form(""), bank: str = Form(""), cheque_no: str = Form(""),
+    back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -629,6 +636,7 @@ def pay_full_submit(
     customer = db.get(models.Customer, customer_id)
     if not customer:
         return RedirectResponse("/credits", status_code=302)
+    back = safe_back_url(back, f"/credits/{customer_id}")
     owed = _outstanding_sales(db, customer_id)
     total = sum((o for _, o in owed), Decimal("0"))
 
@@ -637,7 +645,7 @@ def pay_full_submit(
     form = {"cheque_date": cheque_date, "payment_date": payment_date, "bank": bank, "cheque_no": cheque_no}
 
     if not owed:
-        return RedirectResponse(f"/credits/{customer_id}", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(back, status_code=status.HTTP_302_FOUND)
 
     error = _apply_batch_payment(db, user, customer, owed, method, ref_no, form)
     if error:
@@ -647,15 +655,16 @@ def pay_full_submit(
                 "request": request, "app_name": request.app.title, "user": user,
                 "customer": customer, "owed": owed, "total": total, "methods": SETTLE_METHODS, "error": error,
                 "payment_date": payment_date or "", "today_iso": datetime.now(MANILA).date().isoformat(),
+                "back": back,
             },
         )
     db.commit()
-    return RedirectResponse(f"/credits/{customer_id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(back, status_code=status.HTTP_302_FOUND)
 
 
 @router.get("/credits/{customer_id:int}/pay-selected", response_class=HTMLResponse)
 def pay_selected_form(
-    customer_id: int, request: Request, sale_ids: list[int] = Query(default=[]),
+    customer_id: int, request: Request, sale_ids: list[int] = Query(default=[]), back: str = "",
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -665,10 +674,11 @@ def pay_selected_form(
     customer = db.get(models.Customer, customer_id)
     if not customer:
         return RedirectResponse("/credits", status_code=302)
+    back = safe_back_url(back, f"/credits/{customer_id}")
     ids = set(sale_ids)
     owed = [(s, o) for s, o in _outstanding_sales(db, customer_id) if s.id in ids]
     if not owed:
-        return RedirectResponse(f"/credits/{customer_id}", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(back, status_code=status.HTTP_302_FOUND)
     total = sum((o for _, o in owed), Decimal("0"))
     return templates.TemplateResponse(
         "credits/pay_selected.html",
@@ -676,6 +686,7 @@ def pay_selected_form(
             "request": request, "app_name": request.app.title, "user": user,
             "customer": customer, "owed": owed, "total": total, "methods": SETTLE_METHODS, "error": None,
             "payment_date": "", "today_iso": datetime.now(MANILA).date().isoformat(),
+            "back": back,
         },
     )
 
@@ -686,7 +697,7 @@ def pay_selected_submit(
     sale_ids: list[str] = Form([]),
     method: str = Form("cash"), ref_no: str = Form(""), payment_date: str = Form(""),
     cheque_date: str = Form(""), bank: str = Form(""), cheque_no: str = Form(""),
-    from_collect: str = Form(""),
+    from_collect: str = Form(""), back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -697,10 +708,13 @@ def pay_selected_submit(
     if not customer:
         return RedirectResponse("/credits", status_code=302)
 
+    # Collect Payment comes back to that customer on its own screen, so the
+    # next payment (or the next customer) is one click away.
+    back = safe_back_url(back, f"/credits/collect?customer_id={customer_id}" if from_collect else f"/credits/{customer_id}")
     ids = {int(i) for i in sale_ids if i.isdigit()}
     owed = [(s, o) for s, o in _outstanding_sales(db, customer_id) if s.id in ids]
     if not owed:
-        return RedirectResponse(f"/credits/{customer_id}", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(back, status_code=status.HTTP_302_FOUND)
     total = sum((o for _, o in owed), Decimal("0"))
 
     method = (method or "cash").strip().lower()
@@ -722,10 +736,11 @@ def pay_selected_submit(
                 "request": request, "app_name": request.app.title, "user": user,
                 "customer": customer, "owed": owed, "total": total, "methods": SETTLE_METHODS, "error": error,
                 "payment_date": payment_date or "", "today_iso": datetime.now(MANILA).date().isoformat(),
+                "back": back,
             },
         )
     db.commit()
-    return RedirectResponse(f"/credits/{customer_id}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(back, status_code=status.HTTP_302_FOUND)
 
 
 def _settlement_is_undoable(db: Session, settlement: models.ReceivableSettlement) -> bool:
@@ -761,7 +776,7 @@ def _settlement_is_undoable(db: Session, settlement: models.ReceivableSettlement
 
 
 @router.post("/credits/settlements/{settlement_id:int}/undo")
-def undo_settlement(settlement_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def undo_settlement(settlement_id: int, request: Request, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -772,10 +787,11 @@ def undo_settlement(settlement_id: int, request: Request, db: Session = Depends(
 
     sale = settlement.sale
     customer_id = sale.customer_id if sale else None
-    back_url = f"/credits/{customer_id}" if customer_id else "/credits"
+    # The page the Undo was clicked on: the statement or Payment References.
+    back_url = safe_back_url(back, f"/credits/{customer_id}" if customer_id else "/credits")
 
     if not _settlement_is_undoable(db, settlement):
-        return RedirectResponse(f"{back_url}?undo_error=1", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url_with(back_url, undo_error=1, undone=None), status_code=status.HTTP_302_FOUND)
 
     amount, method = settlement.amount, settlement.method
     invoice_no = sale.invoice_no if sale else "?"
@@ -789,4 +805,4 @@ def undo_settlement(settlement_id: int, request: Request, db: Session = Depends(
     )
     db.delete(settlement)
     db.commit()
-    return RedirectResponse(f"{back_url}?undone=1", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url_with(back_url, undone=1, undo_error=None), status_code=status.HTTP_302_FOUND)

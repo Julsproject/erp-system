@@ -7,7 +7,7 @@
     <p class="muted">Recorded {{ pdc.created_at.strftime('%b %d, %Y %I:%M %p') if pdc.created_at else '' }}
       {% if pdc.creator %} · by {{ pdc.creator.full_name or pdc.creator.username }}{% endif %}</p>
   </div>
-  <a class="btn-secondary" href="/pdc">← Back to Cheques</a>
+  <a class="btn-secondary" href="{{ back }}">← Back</a>
 </div>
 
 {% if delete_error %}
@@ -68,7 +68,7 @@
     <div class="totals-row"><span class="muted">Amount</span><strong>{{ pdc.amount|peso }}</strong></div>
     {% if pdc.direction == 'received' %}
     <div class="totals-row"><span class="muted">Customer</span><strong>{{ pdc.customer.name if pdc.customer else (pdc.sale.customer_name if pdc.sale else '—') }}</strong></div>
-    {% if pdc.customer %}<div class="totals-row"><span class="muted">Statement</span><a class="btn-link" href="/credits/{{ pdc.customer.id }}">View full account →</a></div>{% endif %}
+    {% if pdc.customer %}<div class="totals-row"><span class="muted">Statement</span><a class="btn-link" href="/credits/{{ pdc.customer.id }}?back={{ back_here() }}">View full account →</a></div>{% endif %}
     {% else %}
     <div class="totals-row"><span class="muted">Supplier</span><strong>{{ pdc.supplier.name if pdc.supplier else '—' }}</strong></div>
     {% endif %}
@@ -86,8 +86,8 @@
         {% for app in pdc.applications %}
         <tr>
           <td>
-            {% if app.sale %}<a class="btn-link" href="/pos/receipt/{{ app.sale.id }}?from=sales">{{ app.sale.invoice_no }}</a>
-            {% elif app.purchase %}<a class="btn-link" href="/purchases/{{ app.purchase.id }}">{{ app.purchase.ref_no }}</a>
+            {% if app.sale %}<a class="btn-link" href="/pos/receipt/{{ app.sale.id }}?back={{ back_here() }}">{{ app.sale.invoice_no }}</a>
+            {% elif app.purchase %}<a class="btn-link" href="/purchases/{{ app.purchase.id }}?back={{ back_here() }}">{{ app.purchase.ref_no }}</a>
             {% else %}—{% endif %}
           </td>
           <td class="num">{{ app.amount|peso }}</td>
@@ -99,11 +99,11 @@
 </div>
 {% elif pdc.sale %}
 <div class="card" style="padding:20px;max-width:560px;margin-top:14px;">
-  <div class="totals-row"><span class="muted">Invoice</span><a class="btn-link" href="/pos/receipt/{{ pdc.sale.id }}?from=sales">{{ pdc.sale.invoice_no }}</a></div>
+  <div class="totals-row"><span class="muted">Invoice</span><a class="btn-link" href="/pos/receipt/{{ pdc.sale.id }}?back={{ back_here() }}">{{ pdc.sale.invoice_no }}</a></div>
 </div>
 {% elif pdc.purchase %}
 <div class="card" style="padding:20px;max-width:560px;margin-top:14px;">
-  <div class="totals-row"><span class="muted">Purchase</span><a class="btn-link" href="/purchases/{{ pdc.purchase.id }}">{{ pdc.purchase.ref_no }}</a></div>
+  <div class="totals-row"><span class="muted">Purchase</span><a class="btn-link" href="/purchases/{{ pdc.purchase.id }}?back={{ back_here() }}">{{ pdc.purchase.ref_no }}</a></div>
 </div>
 {% endif %}
 
@@ -111,25 +111,30 @@
 <div class="pos-actions" style="justify-content:flex-start;margin-top:16px;flex-wrap:wrap;gap:10px;">
   {% if pdc.status == 'pending' %}
   <form method="post" action="/pdc/{{ pdc.id }}/deposit" style="display:flex;gap:8px;align-items:center;">
+    <input type="hidden" name="back" value="{{ back }}">
     <input type="date" name="deposit_date" value="{{ today.isoformat() }}" style="padding:8px;border:1px solid var(--line-2);border-radius:8px;">
     <button class="btn-secondary" type="submit">🏦 Mark Deposited</button>
   </form>
   {% endif %}
   <form method="post" action="/pdc/{{ pdc.id }}/clear" style="display:flex;gap:8px;align-items:center;">
+    <input type="hidden" name="back" value="{{ back }}">
     <input type="date" name="clear_date" value="" max="{{ today.isoformat() }}" title="When it actually cleared — optional, defaults to now" style="padding:8px;border:1px solid var(--line-2);border-radius:8px;">
     <button class="btn" type="submit">✓ Mark Cleared</button>
   </form>
   <form method="post" action="/pdc/{{ pdc.id }}/bounce" style="display:flex;gap:8px;align-items:center;"
         onsubmit="return confirm('Mark this cheque as bounced?{% if pdc.direction == 'issued' %}\n\nA delivery that was booked as paid when received becomes owed again.{% endif %}');">
+    <input type="hidden" name="back" value="{{ back }}">
     <input type="date" name="bounce_date" value="" max="{{ today.isoformat() }}" title="When it bounced — optional, defaults to today" style="padding:8px;border:1px solid var(--line-2);border-radius:8px;">
     <input type="text" name="notes" value="" placeholder="Reason (optional)" style="padding:8px;border:1px solid var(--line-2);border-radius:8px;width:160px;">
     <button class="btn-secondary" type="submit" style="color:#b91c1c;">✕ Mark Bounced</button>
   </form>
   {% if pdc.status == 'pending' %}
   <form method="post" action="/pdc/{{ pdc.id }}/cancel" onsubmit="return confirm('Cancel this cheque record?');">
+    <input type="hidden" name="back" value="{{ back }}">
     <button class="btn-secondary" type="submit">Cancel</button>
   </form>
   <form method="post" action="/pdc/{{ pdc.id }}/delete" onsubmit="return confirm('Delete this cheque entry? Use this only for a duplicate or data-entry mistake — this cannot be undone.');">
+    <input type="hidden" name="back" value="{{ back }}">
     <button class="btn-secondary" type="submit" style="color:#b91c1c;">🗑 Delete</button>
   </form>
   {% endif %}
@@ -140,12 +145,14 @@
 <div class="pos-actions" style="justify-content:flex-start;margin-top:16px;flex-wrap:wrap;gap:10px;">
   <form method="post" action="/pdc/{{ pdc.id }}/bounce" style="display:flex;gap:8px;align-items:center;"
         onsubmit="return confirm('This cheque bounced?\n\nIts clearing is undone first: {{ 'the payment on the invoice is reversed, so the customer owes it again' if pdc.direction == 'received' else 'the delivery it paid is owed to the supplier again' }}. Then it is marked Bounced.');">
+    <input type="hidden" name="back" value="{{ back }}">
     <input type="date" name="bounce_date" value="" max="{{ today.isoformat() }}" title="When it bounced — optional, defaults to today" style="padding:8px;border:1px solid var(--line-2);border-radius:8px;">
     <input type="text" name="notes" value="" placeholder="Reason (optional)" style="padding:8px;border:1px solid var(--line-2);border-radius:8px;width:160px;">
     <button class="btn-secondary" type="submit" style="color:#b91c1c;">✕ Bounced</button>
   </form>
   <form method="post" action="/pdc/{{ pdc.id }}/unclear"
         onsubmit="return confirm('Un-clear this cheque?\n\nIts payments will be reversed, any invoice it closed reopens, and the bank withdrawal is voided. The cheque goes back to pending.');">
+    <input type="hidden" name="back" value="{{ back }}">
     <button class="btn-secondary" type="submit" style="color:#b45309;">↩ Un-clear</button>
     <span class="muted" style="margin-left:8px;">Cleared by mistake? This puts everything back.</span>
   </form>

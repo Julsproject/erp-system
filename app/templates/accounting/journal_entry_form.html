@@ -3,13 +3,15 @@
 {% block content %}
 <div class="page-head">
   <h1 class="page-title">{{ "Edit " ~ entry.journal_no if entry else "New Journal Entry" }}</h1>
-  <a class="btn-link" href="{{ '/accounting/journal-entries/' ~ entry.id ~ '/view' if entry else '/accounting/journal-entries' }}">← {{ 'Back to entry' if entry else 'Manual Journal Entries' }}</a>
+  <a class="btn-link" href="{{ back }}">← Back</a>
 </div>
 {% include "accounting/_subnav.html" %}
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
 
 <form class="card form" method="post" action="{{ '/accounting/journal-entries/' ~ entry.id ~ '/edit' if entry else '/accounting/journal-entries' }}" novalidate id="jeForm">
+  <input type="hidden" name="back" value="{{ back }}">
+  {% if not entry %}<input type="hidden" name="template" value="{{ je_template or '' }}">{% endif %}
   <label>Date
     <input name="txn_date" type="date" value="{{ entry.txn_date.isoformat() if entry else today }}" required>
   </label>
@@ -39,7 +41,7 @@
 
   <div class="form-actions full">
     <button class="btn" type="submit">{{ 'Save changes' if entry else 'Save as Draft' }}</button>
-    <a class="btn-secondary" href="{{ '/accounting/journal-entries/' ~ entry.id ~ '/view' if entry else '/accounting/journal-entries' }}">Cancel</a>
+    <a class="btn-secondary" href="{{ back }}">Cancel</a>
   </div>
   {% if entry %}
   <p class="muted full">{{ 'Still a draft' if entry.status == 'draft' else 'Already posted' }} — saving replaces its lines immediately{{ '' if entry.status == 'draft' else ", updating every report that reads from it." }} Editing is only available today; past that, use Reverse instead.</p>

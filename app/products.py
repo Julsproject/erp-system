@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 
 from . import audit, models, pricing, settings_store
 from .database import SessionLocal, get_db
-from .deps import get_current_user, is_staff, safe_back_url
+from .deps import get_current_user, is_staff, safe_back_url, url_with
 from .double_deductions import find_all_double_deduction_candidates, find_double_deduction_candidates
 from .search_utils import multi_word_ilike
 from .templating import qty, templates
@@ -973,7 +973,10 @@ def export_products_excel(
     )
 
 
-def _price_list_products(db: Session, category_id: int):
+PRICE_LIST_PAGE_SIZE = 50
+
+
+def _price_list_query(db: Session, category_id: int):
     """The exact row set for the price list — Category / Product / Unit /
     Selling Price — shared by the HTML preview and the Excel export so the
     two can never drift apart (same idea as pricing.needs_review_expr)."""
@@ -982,25 +985,40 @@ def _price_list_products(db: Session, category_id: int):
         query = query.filter(models.Product.category_id.is_(None))
     elif category_id:
         query = query.filter(models.Product.category_id == category_id)
-    return (
-        query.outerjoin(models.Category, models.Product.category_id == models.Category.id)
-        .order_by(models.Category.name, models.Product.name)
-        .all()
-    )
+    return query.outerjoin(models.Category, models.Product.category_id == models.Category.id)
 
 
 @router.get("/products/price-list", response_class=HTMLResponse)
-def price_list_preview(request: Request, category_id: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def price_list_preview(request: Request, category_id: int = 0, q: str = "", page: int = 1, back: str = "",
+                       db: Session = Depends(get_db), user=Depends(get_current_user)):
     """HTML preview of the price list before downloading — same rows, same
-    order, as export_price_list_excel below."""
+    order, as export_price_list_excel below, a page at a time. The search
+    narrows only the preview; the download is always the whole category."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    products = _price_list_products(db, category_id)
+    q = (q or "").strip()
+    query = _price_list_query(db, category_id)
+    if q:
+        query = query.filter(
+            multi_word_ilike(models.Product.name, q) | models.Category.name.ilike(f"%{q}%")
+        )
+    total = query.count()
+    pages = max((total + PRICE_LIST_PAGE_SIZE - 1) // PRICE_LIST_PAGE_SIZE, 1)
+    page = min(max(page, 1), pages)
+    products = (
+        query.order_by(models.Category.name, models.Product.name)
+        .offset((page - 1) * PRICE_LIST_PAGE_SIZE)
+        .limit(PRICE_LIST_PAGE_SIZE)
+        .all()
+    )
     categories = db.query(models.Category).order_by(models.Category.name).all()
     return templates.TemplateResponse(
         "products/price_list.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "products": products, "categories": categories, "category_id": category_id},
+         "products": products, "categories": categories, "category_id": category_id,
+         "q": q, "page": page, "pages": pages, "total": total,
+         # the (filtered) Inventory list it was opened from
+         "back": safe_back_url(back, "/products")},
     )
 
 
@@ -1021,7 +1039,7 @@ def export_price_list_excel(
     if not user:
         return RedirectResponse("/login", status_code=302)
 
-    products = _price_list_products(db, category_id)
+    products = _price_list_query(db, category_id).order_by(models.Category.name, models.Product.name).all()
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -1631,7 +1649,8 @@ async def create_product(request: Request, db: Session = Depends(get_db), user=D
 
 
 @router.post("/products/{product_id:int}/create-open-counterpart")
-def create_open_counterpart(product_id: int, request: Request, name: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
+def create_open_counterpart(product_id: int, request: Request, name: str = Form(""), back: str = Form(""),
+                            db: Session = Depends(get_db), user=Depends(get_current_user)):
     """One-click "+ Create Open/Retail counterpart": spins up a brand new
     product that starts empty (0 stock, 0 selling price — the user sets that
     part) but shares this one's category/subcategory/unit type and cost, and
@@ -1646,11 +1665,14 @@ def create_open_counterpart(product_id: int, request: Request, name: str = Form(
     source = db.get(models.Product, product_id)
     if not source:
         return RedirectResponse("/products", status_code=302)
+    # `back` is the source product's own back; the new product's Back
+    # returns to the source product, which still returns there.
+    source_url = url_with(f"/products/{product_id}/edit", back=safe_back_url(back, ""))
     if _open_levels_above(db, source) >= MAX_OPEN_LEVELS:
         # Already the bottom of a box → kg → piece chain — the "+ Create"
         # button is hidden in this case, so reaching here at all means the
         # request was forged or stale; just bounce back quietly.
-        return RedirectResponse(f"/products/{product_id}/edit", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(source_url, status_code=status.HTTP_302_FOUND)
 
     new_name = (name or "").strip() or f"{source.name} (Open/Retail)"
     counterpart = models.Product(
@@ -1670,7 +1692,7 @@ def create_open_counterpart(product_id: int, request: Request, name: str = Form(
         summary=f"Created “{counterpart.name}” as an open/retail counterpart of “{source.name}”",
     )
     db.commit()
-    return RedirectResponse(f"/products/{counterpart.id}/edit", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url_with(f"/products/{counterpart.id}/edit", back=source_url), status_code=status.HTTP_302_FOUND)
 
 
 @router.get("/products/{product_id:int}")
@@ -1764,7 +1786,7 @@ async def update_product(product_id: int, request: Request, db: Session = Depend
 
 
 @router.get("/products/pricing", response_class=HTMLResponse)
-def pricing_tool(request: Request, review: int = 0, product_id: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def pricing_tool(request: Request, review: int = 0, product_id: int = 0, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     """The single unified costing + pricing workflow: search or browse on
     the left (with a 'Price Review Needed' filter folded in as a toggle,
     not a separate tab), edit cost + the 3-row pricing matrix on the right.
@@ -1787,6 +1809,9 @@ def pricing_tool(request: Request, review: int = 0, product_id: int = 0, db: Ses
             "review_count": review_count,
             "initial_review": bool(review),
             "initial_product_id": product_id or None,
+            # Opened from somewhere (a product, the dashboard, a report) —
+            # a "← Back" there. Blank when opened from the sidebar.
+            "back": safe_back_url(back, ""),
         },
     )
 
@@ -1972,7 +1997,7 @@ def update_pricing(product_id: int, data: dict, request: Request, db: Session = 
 
 
 @router.post("/products/{product_id:int}/archive")
-def archive_product(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def archive_product(product_id: int, request: Request, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -1986,7 +2011,8 @@ def archive_product(product_id: int, request: Request, db: Session = Depends(get
             summary=f"Archived “{product.name}”",
         )
         db.commit()
-    return RedirectResponse("/products", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url_with(safe_back_url(back, "/products"), delete_blocked=None, delete_blocked_name=None),
+                            status_code=status.HTTP_302_FOUND)
 
 
 def _product_has_history(db: Session, product_id: int) -> bool:
@@ -2018,7 +2044,7 @@ def _product_has_history(db: Session, product_id: int) -> bool:
 
 
 @router.post("/products/{product_id:int}/delete")
-def delete_product(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def delete_product(product_id: int, request: Request, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Permanently remove a product — only allowed when it has never been
     transacted against (see _product_has_history). Anything with real
     activity has to go through Archive instead, which is reversible and
@@ -2027,13 +2053,15 @@ def delete_product(product_id: int, request: Request, db: Session = Depends(get_
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
+    # Back to the list exactly as it was (search, filters, page).
+    back = safe_back_url(back, "/products")
     product = db.get(models.Product, product_id)
     if not product:
-        return RedirectResponse("/products", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(back, status_code=status.HTTP_302_FOUND)
 
     if _product_has_history(db, product.id):
         return RedirectResponse(
-            f"/products?delete_blocked={product.id}&delete_blocked_name={product.name}",
+            url_with(back, delete_blocked=product.id, delete_blocked_name=product.name, deleted=None),
             status_code=status.HTTP_302_FOUND,
         )
 
@@ -2045,7 +2073,8 @@ def delete_product(product_id: int, request: Request, db: Session = Depends(get_
     )
     db.delete(product)
     db.commit()
-    return RedirectResponse("/products?deleted=1", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url_with(back, deleted=1, delete_blocked=None, delete_blocked_name=None),
+                            status_code=status.HTTP_302_FOUND)
 
 
 _DUP_PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
@@ -2232,20 +2261,23 @@ _MERGE_HISTORY_TABLES = [
 
 @router.post("/products/merge")
 def merge_products(
-    request: Request, keep_id: int = Form(...), merge_id: int = Form(...),
+    request: Request, keep_id: int = Form(...), merge_id: int = Form(...), back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
+    back = safe_back_url(back, "/products")
     if keep_id == merge_id:
-        return RedirectResponse("/products?merge_error=Pick+two+different+products", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url_with(back, merge_error="Pick two different products", merged=None),
+                                status_code=status.HTTP_302_FOUND)
 
     keep = db.get(models.Product, keep_id)
     dup = db.get(models.Product, merge_id)
     if not keep or not dup or not keep.is_active or not dup.is_active:
-        return RedirectResponse("/products?merge_error=Product+not+found", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url_with(back, merge_error="Product not found", merged=None),
+                                status_code=status.HTTP_302_FOUND)
 
     # Everything the Unmerge button on the Activity Log needs to put the
     # duplicate back exactly: which history rows were its own, what stock
@@ -2297,7 +2329,7 @@ def merge_products(
         changes={"_unmerge": undo},
     )
     db.commit()
-    return RedirectResponse(f"/products?merged={keep.name}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url_with(back, merged=keep.name, merge_error=None), status_code=status.HTTP_302_FOUND)
 
 
 def _shelf_value(p: models.Product) -> Decimal:
@@ -2391,7 +2423,7 @@ def unmerge_product(db: Session, log: models.AuditLog, undo: dict, *, user, requ
 
 @router.get("/products/archived", response_class=HTMLResponse)
 def list_archived_products(
-    request: Request, q: str = "", db: Session = Depends(get_db), user=Depends(get_current_user),
+    request: Request, q: str = "", back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -2406,12 +2438,13 @@ def list_archived_products(
     products = query.order_by(models.Product.name).all()
     return templates.TemplateResponse(
         "products/archived.html",
-        {"request": request, "app_name": request.app.title, "user": user, "products": products, "q": q},
+        {"request": request, "app_name": request.app.title, "user": user, "products": products, "q": q,
+         "back": safe_back_url(back, "/products")},
     )
 
 
 @router.post("/products/{product_id:int}/restore")
-def restore_product(product_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def restore_product(product_id: int, request: Request, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -2425,7 +2458,8 @@ def restore_product(product_id: int, request: Request, db: Session = Depends(get
             summary=f"Restored “{product.name}” from archive",
         )
         db.commit()
-    return RedirectResponse("/products/archived", status_code=status.HTTP_302_FOUND)
+    # the Archived list as it was (its search)
+    return RedirectResponse(safe_back_url(back, "/products/archived"), status_code=status.HTTP_302_FOUND)
 
 
 def _bulk_mode_label(mode: str, value: Decimal) -> str:
@@ -2442,16 +2476,20 @@ def _bulk_mode_label(mode: str, value: Decimal) -> str:
 
 
 @router.post("/products/bulk-price", response_class=HTMLResponse)
-def bulk_price_start(request: Request, ids: list[str] = Form([]), db: Session = Depends(get_db), user=Depends(get_current_user)):
+def bulk_price_start(request: Request, ids: list[str] = Form([]), back: str = Form(""),
+                     db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Step 1: show the selected products with a live client-side preview.
-    Nothing is saved here — Apply (below) recomputes and saves for real."""
+    Nothing is saved here — Apply (below) recomputes and saves for real.
+    `back` is the Inventory list (search, filters, page) it was started
+    from; Back and Apply return there."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
+    back = safe_back_url(back, "/products")
     ids = sorted({int(i) for i in ids if i.isdigit()})
     if not ids:
-        return RedirectResponse("/products", status_code=302)
+        return RedirectResponse(back, status_code=302)
     products = (
         db.query(models.Product)
         .filter(models.Product.id.in_(ids), models.Product.is_active.is_(True))
@@ -2460,7 +2498,7 @@ def bulk_price_start(request: Request, ids: list[str] = Form([]), db: Session = 
     )
     return templates.TemplateResponse(
         "products/bulk_price.html",
-        {"request": request, "app_name": request.app.title, "user": user, "products": products},
+        {"request": request, "app_name": request.app.title, "user": user, "products": products, "back": back},
     )
 
 
@@ -2480,6 +2518,8 @@ async def bulk_price_apply(request: Request, db: Session = Depends(get_db), user
     # declared as fixed Form(...) params — instead the DB work (the actual
     # blocking part) runs off the event loop via run_in_threadpool, same
     # effect as converting to a plain `def` route.
+    back = safe_back_url(form.get("back") or "", "/products")
+
     def _do():
         ids = sorted({int(i) for i in form.getlist("ids") if i.isdigit()})
         mode = (form.get("mode") or "").strip()
@@ -2491,7 +2531,7 @@ async def bulk_price_apply(request: Request, db: Session = Depends(get_db), user
             value = Decimal("0")
 
         if not ids:
-            return RedirectResponse("/products", status_code=302)
+            return RedirectResponse(back, status_code=302)
 
         products = (
             db.query(models.Product)
@@ -2568,7 +2608,7 @@ async def bulk_price_apply(request: Request, db: Session = Depends(get_db), user
             skip_notes.append(f"{zeroed} that would've priced at ₱0 or less")
         if skip_notes:
             msg += ", skipped " + " and ".join(skip_notes)
-        return RedirectResponse(f"/products?bulk_msg={msg}", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url_with(back, bulk_msg=msg), status_code=status.HTTP_302_FOUND)
 
     return await run_in_threadpool(_do)
 
@@ -2593,14 +2633,16 @@ def _barcode_data_uri(code: str) -> str:
 
 
 @router.post("/products/labels", response_class=HTMLResponse)
-def print_labels(request: Request, ids: list[str] = Form([]), db: Session = Depends(get_db), user=Depends(get_current_user)):
+def print_labels(request: Request, ids: list[str] = Form([]), back: str = Form(""),
+                 db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
+    back = safe_back_url(back, "/products")  # the Inventory list it was started from
     ids = sorted({int(i) for i in ids if i.isdigit()})
     if not ids:
-        return RedirectResponse("/products", status_code=302)
+        return RedirectResponse(back, status_code=302)
     products = (
         db.query(models.Product)
         .filter(models.Product.id.in_(ids), models.Product.is_active.is_(True))
@@ -2618,7 +2660,7 @@ def print_labels(request: Request, ids: list[str] = Form([]), db: Session = Depe
     labels = [{"product": p, "barcode_uri": _barcode_data_uri(p.barcode)} for p in products]
     return templates.TemplateResponse(
         "products/labels.html",
-        {"request": request, "app_name": request.app.title, "user": user, "labels": labels},
+        {"request": request, "app_name": request.app.title, "user": user, "labels": labels, "back": back},
     )
 
 
@@ -2840,17 +2882,20 @@ def order_slip_search(q: str = "", db: Session = Depends(get_db), user=Depends(g
 
 
 @router.post("/products/bulk-edit", response_class=HTMLResponse)
-def bulk_edit_start(request: Request, ids: list[str] = Form([]), db: Session = Depends(get_db), user=Depends(get_current_user)):
+def bulk_edit_start(request: Request, ids: list[str] = Form([]), back: str = Form(""),
+                    db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Step 1: pick which fields to change (shelf, unit type, category, sub
     category, restocking) for the products ticked in Inventory — same two-step shape as
-    Bulk Price Update. Fields left unticked are not touched."""
+    Bulk Price Update. Fields left unticked are not touched. `back` is the
+    Inventory list it was started from; Back and Apply return there."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
+    back = safe_back_url(back, "/products")
     ids = sorted({int(i) for i in ids if i.isdigit()})
     if not ids:
-        return RedirectResponse("/products", status_code=302)
+        return RedirectResponse(back, status_code=302)
     products = (
         db.query(models.Product)
         .filter(models.Product.id.in_(ids), models.Product.is_active.is_(True))
@@ -2863,7 +2908,8 @@ def bulk_edit_start(request: Request, ids: list[str] = Form([]), db: Session = D
          "shelves": db.query(models.Shelf).order_by(models.Shelf.name).all(),
          "categories": db.query(models.Category).order_by(models.Category.name).all(),
          "subcategories": db.query(models.SubCategory).order_by(models.SubCategory.name).all(),
-         "unit_types": db.query(models.UnitType).order_by(models.UnitType.name).all()},
+         "unit_types": db.query(models.UnitType).order_by(models.UnitType.name).all(),
+         "back": back},
     )
 
 
@@ -2887,7 +2933,7 @@ def bulk_edit_apply(
     set_unit: str = Form(""), unit_type: str = Form(""),
     set_category: str = Form(""), category: str = Form(""),
     set_subcategory: str = Form(""), subcategory: str = Form(""),
-    set_restock: str = Form(""), restock: str = Form(""),
+    set_restock: str = Form(""), restock: str = Form(""), back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """Step 2: apply each ticked field to every selected product. Shelf
@@ -2898,11 +2944,12 @@ def bulk_edit_apply(
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
+    back = safe_back_url(back, "/products")
     ids = sorted({int(i) for i in ids if i.isdigit()})
     if not ids:
-        return RedirectResponse("/products", status_code=302)
+        return RedirectResponse(back, status_code=302)
     if not (set_shelf or set_unit or set_category or set_subcategory or set_restock):
-        return RedirectResponse("/products?bulk_msg=Nothing+was+ticked+to+change.", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url_with(back, bulk_msg="Nothing was ticked to change."), status_code=status.HTTP_302_FOUND)
 
     shelf = None
     if set_shelf:
@@ -2911,10 +2958,10 @@ def bulk_edit_apply(
         except ValueError:
             shelf = None
         if not shelf:
-            return RedirectResponse("/products?bulk_msg=Pick+a+shelf+first.", status_code=status.HTTP_302_FOUND)
+            return RedirectResponse(url_with(back, bulk_msg="Pick a shelf first."), status_code=status.HTTP_302_FOUND)
     new_unit = _get_or_create_unit_type(db, unit_type) if set_unit else None
     if set_unit and not new_unit:
-        return RedirectResponse("/products?bulk_msg=Enter+a+unit+type+first.", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url_with(back, bulk_msg="Enter a unit type first."), status_code=status.HTTP_302_FOUND)
     new_category = _get_or_create_category(db, category) if set_category else None
 
     products = (
@@ -2960,7 +3007,7 @@ def bulk_edit_apply(
     msg = f"Updated {changed} of {len(products)} product{'s' if len(products) != 1 else ''}"
     if skipped:
         msg += ". Skipped: " + "; ".join(skipped[:5]) + (f" and {len(skipped) - 5} more" if len(skipped) > 5 else "")
-    return RedirectResponse(f"/products?bulk_msg={quote(msg)}", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(url_with(back, bulk_msg=msg), status_code=status.HTTP_302_FOUND)
 
 
 # Human labels + in/out direction for the stock-movement reasons written across
@@ -3232,11 +3279,11 @@ def stock_card(
             unit_cost_shown = movement_cost
 
         if m.reason in purchase_reasons:
-            ref_link = f"/purchases/{purchase_id_by_ref[m.ref]}" if m.ref in purchase_id_by_ref else None
+            ref_link = f"/purchases/{purchase_id_by_ref[m.ref]}?back={quote(self_url)}" if m.ref in purchase_id_by_ref else None
         elif m.reason == "stock_count":
-            ref_link = f"/stock-count/{count_id_by_ref[m.ref]}" if m.ref in count_id_by_ref else None
+            ref_link = f"/stock-count/{count_id_by_ref[m.ref]}?back={quote(self_url)}" if m.ref in count_id_by_ref else None
         elif m.inventory_adjustment_id:
-            ref_link = f"/inventory-adjustments/{m.inventory_adjustment_id}"
+            ref_link = f"/inventory-adjustments/{m.inventory_adjustment_id}?back={quote(self_url)}"
         elif m.ref in sale_id_by_ref:
             ref_link = f"/pos/receipt/{sale_id_by_ref[m.ref]}?from=stock_card&back={quote(self_url)}"
         else:

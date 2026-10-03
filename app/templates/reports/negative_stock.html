@@ -41,7 +41,7 @@
     <tbody>
       {% for r in rows %}
       <tr>
-        <td class="strong"><a href="/products/{{ r.product.id }}/stock-card">{{ r.product.name }}</a></td>
+        <td class="strong"><a href="/products/{{ r.product.id }}/stock-card?back={{ back_here() }}">{{ r.product.name }}</a></td>
         <td class="num neg">{{ r.on_hand|qty }} <span class="muted" style="font-size:11.5px;">{{ r.unit }}</span></td>
         <td class="num {{ 'neg' if r.value < 0 }}">{{ r.value|peso }}</td>
         <td>{% if r.negative_since is string %}<span class="muted">{{ r.negative_since }}</span>{% elif r.negative_since %}{{ r.negative_since.strftime('%b %d, %Y') }}{% else %}—{% endif %}</td>

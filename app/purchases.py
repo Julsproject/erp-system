@@ -10,6 +10,7 @@ A return has no staging — it removes stock immediately, same as before.
 import json
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Request, status as http_status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -18,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from . import accounting, audit, models, pricing, settings_store, stock_books, stock_dates
 from .database import get_db
-from .deps import get_current_user, is_floor_staff, is_staff
+from .deps import get_current_user, is_floor_staff, is_staff, safe_back_url
 from .pos import MANILA, VAT_DIVISOR, VAT_RATE, _find_backdated_stock_conflicts, _resolve_txn_datetime, _resolve_unit_factor, _vat_of
 from .sales import _resolve_settlement_datetime
 from .products import LOW_STOCK_LOOKBACK_DAYS, _get_or_create_category, _get_or_create_unit_type, recent_sold
@@ -29,6 +30,17 @@ router = APIRouter()
 
 CENTS = Decimal("0.01")
 COST_DP = Decimal("0.0001")
+
+
+def _purchase_url(purchase_id: int, back: str = "", query: str = "") -> str:
+    """/purchases/{id} plus an already-encoded `query` ("error=..."), keeping
+    the page the purchase was opened from (`back`) — so after a POST lands
+    back on it, its Back link still returns there (Payables, a supplier's
+    history, a filtered list...) instead of the plain list."""
+    parts = [query] if query else []
+    if back:
+        parts.append("back=" + quote(back, safe=""))
+    return f"/purchases/{purchase_id}" + ("?" + "&".join(parts) if parts else "")
 
 
 def _weighted_avg_cost(product: models.Product, base_qty: Decimal, unit_cost_per_base: Decimal) -> Decimal:
@@ -586,7 +598,7 @@ def payables_aging(request: Request, date_from: str = "", date_to: str = "",
 
 @router.get("/purchases/new", response_class=HTMLResponse)
 def new_purchase(
-    request: Request, supplier: int = 0, return_against: int = 0,
+    request: Request, supplier: int = 0, return_against: int = 0, back: str = "",
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -640,7 +652,12 @@ def new_purchase(
          "suppliers": suppliers, "preselect": supplier,
          "return_against_po": return_against_po, "return_lines_prefill": return_lines_prefill,
          "categories": categories, "unit_types": unit_types, "payment_methods": PAYMENT_METHODS,
-         "can_set_alert": is_staff(user)},
+         "can_set_alert": is_staff(user),
+         # Where "← Back" goes, and what the saved purchase's own Back
+         # returns to. A cashier can't open purchase history (it bounces to
+         # POS), so theirs falls back to a fresh New Purchase.
+         "back": safe_back_url(back, f"/purchases/{return_against_po.id}" if return_against_po
+                               else "/purchases" if is_staff(user) else "/purchases/new")},
     )
 
 
@@ -1039,7 +1056,7 @@ def settle_purchase_pay(
     purchase_id: int, request: Request,
     method: str = Form("cash"), amount: str = Form(""),
     cheque_date: str = Form(""), bank: str = Form(""), cheque_no: str = Form(""),
-    payment_date: str = Form(""),
+    payment_date: str = Form(""), back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """Settle a payable — in full or in part. Stock and cost already moved
@@ -1049,9 +1066,10 @@ def settle_purchase_pay(
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
+    back = safe_back_url(back, "")
     purchase = db.get(models.Purchase, purchase_id)
     if not purchase or purchase.txn_type != "receive" or purchase.status != "confirmed":
-        return RedirectResponse(f"/purchases/{purchase_id}", status_code=http_status.HTTP_302_FOUND)
+        return RedirectResponse(_purchase_url(purchase_id, back), status_code=http_status.HTTP_302_FOUND)
 
     settled = _settled_for_purchases(db, [purchase.id])
     outstanding = _purchase_outstanding(purchase, settled)
@@ -1062,7 +1080,7 @@ def settle_purchase_pay(
 
     def back_with_error(error):
         return RedirectResponse(
-            f"/purchases/{purchase_id}?error={error}", status_code=http_status.HTTP_302_FOUND
+            _purchase_url(purchase_id, back, f"error={error}"), status_code=http_status.HTTP_302_FOUND
         )
 
     if amount <= 0:
@@ -1094,7 +1112,10 @@ def settle_purchase_pay(
         db.flush()
         db.add(models.PdcApplication(pdc_id=pdc.id, purchase_id=purchase.id, amount=_money(amount)))
         db.commit()
-        return RedirectResponse(f"/pdc/{pdc.id}", status_code=http_status.HTTP_302_FOUND)
+        # The cheque's page Back-links to this purchase (and on to wherever
+        # the purchase was opened from).
+        return RedirectResponse(f"/pdc/{pdc.id}?back={quote(_purchase_url(purchase_id, back), safe='')}",
+                                status_code=http_status.HTTP_302_FOUND)
 
     settlement = models.PurchaseSettlement(
         purchase_id=purchase.id, method=method, amount=_money(amount), created_by=user.id,
@@ -1121,11 +1142,11 @@ def settle_purchase_pay(
         entity_id=purchase.id, entity_label=purchase.ref_no, summary=summary,
     )
     db.commit()
-    return RedirectResponse(f"/purchases/{purchase_id}", status_code=http_status.HTTP_302_FOUND)
+    return RedirectResponse(_purchase_url(purchase_id, back), status_code=http_status.HTTP_302_FOUND)
 
 
 @router.post("/purchases/{purchase_id:int}/cancel")
-def cancel_purchase(purchase_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def cancel_purchase(purchase_id: int, request: Request, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Void a logged purchase. For a receive, this reverses the stock it
     added (a matching negative movement) and puts the item's cost back to what
     it was before this delivery (see _restore_cost_before) — unless a later
@@ -1135,9 +1156,10 @@ def cancel_purchase(purchase_id: int, request: Request, db: Session = Depends(ge
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
+    back = safe_back_url(back, "")
     purchase = db.get(models.Purchase, purchase_id)
     if not purchase or purchase.status == "cancelled":
-        return RedirectResponse(f"/purchases/{purchase_id}", status_code=http_status.HTTP_302_FOUND)
+        return RedirectResponse(_purchase_url(purchase_id, back), status_code=http_status.HTTP_302_FOUND)
 
     # Undo only what the purchase really moved — a line dated inside a Stock
     # Count moved nothing (the count already had it), so cancelling it must
@@ -1188,7 +1210,7 @@ def cancel_purchase(purchase_id: int, request: Request, db: Session = Depends(ge
         summary=f"Cancelled {purchase.ref_no} — stock reversed",
     )
     db.commit()
-    return RedirectResponse(f"/purchases/{purchase_id}", status_code=http_status.HTTP_302_FOUND)
+    return RedirectResponse(_purchase_url(purchase_id, back), status_code=http_status.HTTP_302_FOUND)
 
 
 @router.post("/purchases/{purchase_id:int}/line/{line_id:int}/selling-price")
@@ -1262,13 +1284,19 @@ def view_purchase(
     error: str = "",
     edit_items_error: str = "",
     edit_payment_error: str = "",
+    back: str = "",
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
+    """`back` is the page the purchase was opened from (Payables, a
+    supplier's history, a filtered list, the Stock Card...). A cashier can't
+    open purchase history (it bounces to POS), so theirs falls back to New
+    Purchase — they land here after every delivery they save."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
+    back = safe_back_url(back, "/purchases" if is_staff(user) else "/purchases/new")
     purchase = db.get(models.Purchase, purchase_id)
     if not purchase:
         return RedirectResponse("/purchases", status_code=302)
@@ -1345,13 +1373,14 @@ def view_purchase(
          "can_edit_items": can_edit_items, "can_edit_payment": can_edit_payment,
          "can_add_to_price": is_staff(user) and purchase.txn_type == "receive",
          "edit_items_error": EDIT_ITEMS_ERRORS.get(edit_items_error),
-         "edit_payment_error": EDIT_PAYMENT_ERRORS.get(edit_payment_error)},
+         "edit_payment_error": EDIT_PAYMENT_ERRORS.get(edit_payment_error),
+         "back": back},
     )
 
 
 @router.post("/purchases/{purchase_id:int}/change-payment-method")
 def change_payment_method(
-    purchase_id: int, request: Request, method: str = Form(""),
+    purchase_id: int, request: Request, method: str = Form(""), back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """Correct a payment method picked by mistake (e.g. clicked Cash instead
@@ -1362,22 +1391,23 @@ def change_payment_method(
     posting."""
     if not user:
         return RedirectResponse("/login", status_code=302)
+    back = safe_back_url(back, "")
     if not is_staff(user):
-        return RedirectResponse(f"/purchases/{purchase_id}?edit_payment_error=denied", status_code=302)
+        return RedirectResponse(_purchase_url(purchase_id, back, "edit_payment_error=denied"), status_code=302)
     purchase = db.get(models.Purchase, purchase_id)
     if not purchase:
         return RedirectResponse("/purchases", status_code=302)
     if purchase.txn_type != "receive":
-        return RedirectResponse(f"/purchases/{purchase_id}?edit_payment_error=return", status_code=302)
+        return RedirectResponse(_purchase_url(purchase_id, back, "edit_payment_error=return"), status_code=302)
     block_reason = _can_edit_purchase_items(db, purchase)
     if block_reason:
-        return RedirectResponse(f"/purchases/{purchase_id}?edit_payment_error={block_reason}", status_code=302)
+        return RedirectResponse(_purchase_url(purchase_id, back, f"edit_payment_error={block_reason}"), status_code=302)
 
     raw_method = (method or "").strip().lower()
     is_payable = raw_method == "payable"
     new_method = None if is_payable else raw_method
     if not is_payable and new_method not in dict(PAYMENT_METHODS):
-        return RedirectResponse(f"/purchases/{purchase_id}?edit_payment_error=invalid", status_code=302)
+        return RedirectResponse(_purchase_url(purchase_id, back, "edit_payment_error=invalid"), status_code=302)
     # Switching TO cheque isn't supported here — that needs a real PDC record,
     # which this flow (a straight reverse-and-repost of the ledger entry)
     # never creates. Switching AWAY FROM cheque is fine as long as there's no
@@ -1386,12 +1416,12 @@ def change_payment_method(
     # still reading "cheque" at this point just means a stale label on a
     # cheque that's no longer actually in play.
     if new_method == "cheque":
-        return RedirectResponse(f"/purchases/{purchase_id}?edit_payment_error=cheque", status_code=302)
+        return RedirectResponse(_purchase_url(purchase_id, back, "edit_payment_error=cheque"), status_code=302)
 
     old_label = "Payable" if purchase.status == "confirmed" else dict(PAYMENT_METHODS).get(purchase.payment_method, purchase.payment_method or "")
     new_label = "Payable" if is_payable else dict(PAYMENT_METHODS)[new_method]
     if old_label == new_label:
-        return RedirectResponse(f"/purchases/{purchase_id}", status_code=http_status.HTTP_302_FOUND)
+        return RedirectResponse(_purchase_url(purchase_id, back), status_code=http_status.HTTP_302_FOUND)
 
     # Unlike create_purchase (where a posting failure just leaves the new
     # purchase without a journal entry — never blocks the operational side),
@@ -1404,7 +1434,7 @@ def change_payment_method(
         accounting.post_purchase_receive(db, purchase, is_payable=is_payable, payment_method=new_method, entered_by_id=user.id)
     except accounting.PostingError:
         db.rollback()
-        return RedirectResponse(f"/purchases/{purchase_id}?edit_payment_error=posting", status_code=302)
+        return RedirectResponse(_purchase_url(purchase_id, back, "edit_payment_error=posting"), status_code=302)
 
     if is_payable:
         purchase.status = "confirmed"
@@ -1426,7 +1456,7 @@ def change_payment_method(
         summary=f"Corrected payment method on {purchase.ref_no}: {old_label} → {new_label}",
     )
     db.commit()
-    return RedirectResponse(f"/purchases/{purchase_id}", status_code=http_status.HTTP_302_FOUND)
+    return RedirectResponse(_purchase_url(purchase_id, back), status_code=http_status.HTTP_302_FOUND)
 
 
 EDIT_VAT_ERRORS = {
@@ -1444,6 +1474,7 @@ def edit_purchase_details(
     invoice_no: str = Form(""),
     delivery_date: str = Form(""),
     vat_applied: str = Form(""),
+    back: str = Form(""),
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
@@ -1462,9 +1493,11 @@ def edit_purchase_details(
     if not purchase:
         return RedirectResponse("/purchases", status_code=302)
 
+    back = safe_back_url(back, "")
+
     def _back(err=None):
-        suffix = f"?error={err}" if err else ""
-        return RedirectResponse(f"/purchases/{purchase_id}{suffix}", status_code=http_status.HTTP_302_FOUND)
+        return RedirectResponse(_purchase_url(purchase_id, back, f"error={err}" if err else ""),
+                                status_code=http_status.HTTP_302_FOUND)
 
     if not is_staff(user):
         return _back("Only+staff+can+edit+a+purchase.")
@@ -1564,17 +1597,20 @@ def edit_purchase_details(
 
 
 @router.get("/purchases/{purchase_id:int}/edit-items", response_class=HTMLResponse)
-def edit_purchase_items_form(purchase_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def edit_purchase_items_form(purchase_id: int, request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """`back` is the purchase page's own back (where the purchase was opened
+    from) — Back/Cancel/Save return to the purchase still carrying it."""
     if not user:
         return RedirectResponse("/login", status_code=302)
+    back = safe_back_url(back, "")
     purchase = db.get(models.Purchase, purchase_id)
     if not purchase:
         return RedirectResponse("/purchases", status_code=302)
     if not is_staff(user):
-        return RedirectResponse(f"/purchases/{purchase_id}?edit_items_error=denied", status_code=302)
+        return RedirectResponse(_purchase_url(purchase_id, back, "edit_items_error=denied"), status_code=302)
     block_reason = _can_edit_purchase_items(db, purchase)
     if block_reason:
-        return RedirectResponse(f"/purchases/{purchase_id}?edit_items_error={block_reason}", status_code=302)
+        return RedirectResponse(_purchase_url(purchase_id, back, f"edit_items_error={block_reason}"), status_code=302)
 
     lines_payload = []
     for line in purchase.lines:
@@ -1590,7 +1626,8 @@ def edit_purchase_items_form(purchase_id: int, request: Request, db: Session = D
         "purchases/edit_items.html",
         {"request": request, "app_name": request.app.title, "user": user,
          "purchase": purchase, "lines_json": json.dumps(lines_payload),
-         "unit_types": db.query(models.UnitType).order_by(models.UnitType.name).all()},
+         "unit_types": db.query(models.UnitType).order_by(models.UnitType.name).all(),
+         "view_url": _purchase_url(purchase_id, back)},
     )
 
 

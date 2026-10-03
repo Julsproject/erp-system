@@ -10,14 +10,14 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .database import get_db
-from .deps import get_current_user, is_admin
+from .deps import get_current_user, is_admin, safe_back_url, url_with
 from .templating import templates
 
 router = APIRouter()
 
 
 @router.get("/encoders", response_class=HTMLResponse)
-def encoders_list(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def encoders_list(request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
@@ -33,12 +33,19 @@ def encoders_list(request: Request, db: Session = Depends(get_db), user=Depends(
     return templates.TemplateResponse(
         "encoders/list.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "encoders": encoders, "counts": counts},
+         "encoders": encoders, "counts": counts,
+         # Only when opened from the POS link; from the sidebar there's no
+         # "← Back" at all. The forms below carry it through their redirects.
+         "back": safe_back_url(back, "")},
     )
 
 
+def _list_url(back: str) -> str:
+    return url_with("/encoders", back=safe_back_url(back, ""))
+
+
 @router.post("/encoders")
-def create_encoder(name: str = Form(...), db: Session = Depends(get_db), user=Depends(get_current_user)):
+def create_encoder(name: str = Form(...), back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
@@ -51,11 +58,11 @@ def create_encoder(name: str = Form(...), db: Session = Depends(get_db), user=De
         else:
             db.add(models.Encoder(name=name))
         db.commit()
-    return RedirectResponse("/encoders", status_code=302)
+    return RedirectResponse(_list_url(back), status_code=302)
 
 
 @router.post("/encoders/{encoder_id:int}/rename")
-def rename_encoder(encoder_id: int, name: str = Form(...), db: Session = Depends(get_db), user=Depends(get_current_user)):
+def rename_encoder(encoder_id: int, name: str = Form(...), back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
@@ -65,11 +72,11 @@ def rename_encoder(encoder_id: int, name: str = Form(...), db: Session = Depends
     if encoder and name:
         encoder.name = name
         db.commit()
-    return RedirectResponse("/encoders", status_code=302)
+    return RedirectResponse(_list_url(back), status_code=302)
 
 
 @router.post("/encoders/{encoder_id:int}/toggle")
-def toggle_encoder(encoder_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def toggle_encoder(encoder_id: int, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Deactivate/reactivate rather than delete — past sales keep pointing at
     this name (it's their permanent record of who wrote them up), so the
     name itself is never removed. Deactivating just drops it off the POS
@@ -82,4 +89,4 @@ def toggle_encoder(encoder_id: int, db: Session = Depends(get_db), user=Depends(
     if encoder:
         encoder.is_active = not encoder.is_active
         db.commit()
-    return RedirectResponse("/encoders", status_code=302)
+    return RedirectResponse(_list_url(back), status_code=302)

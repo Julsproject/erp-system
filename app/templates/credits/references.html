@@ -6,8 +6,11 @@
     <h1 class="page-title">Payment References</h1>
     <p class="muted">Every credit payment recorded with a reference or cheque # — newest first</p>
   </div>
-  <a class="btn-secondary" href="/credits">← Back to Credits</a>
+  <a class="btn-secondary" href="{{ back }}">← Back to Credits</a>
 </div>
+
+{% if undone %}<div class="alert" style="background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;padding:10px 14px;border-radius:8px;margin-bottom:12px;">Payment undone — the invoice is outstanding again.</div>{% endif %}
+{% if undo_error %}<div class="alert" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:10px 14px;border-radius:8px;margin-bottom:12px;">That payment can't be undone here — it's tied to a cheque or delivery record. Use the Cheques register or the delivery instead.</div>{% endif %}
 
 <div class="stat-row">
   <div class="mini-stat"><span class="mini-num">{{ total }}</span><span>{{ 'Matching payments' if q else 'Payments with a reference #' }}</span></div>
@@ -15,9 +18,10 @@
 </div>
 
 <form class="toolbar" method="get" action="/credits/references">
+  {% if back != '/credits' %}<input type="hidden" name="back" value="{{ back }}">{% endif %}
   <input class="search" type="search" name="q" id="qSearch" value="{{ q }}" placeholder="Search reference #, cheque #, invoice #, or customer…" autofocus>
   <button class="btn-secondary" type="submit">Search</button>
-  {% if q %}<a class="btn-link" href="/credits/references">Clear</a>{% endif %}
+  {% if q %}<a class="btn-link" href="/credits/references{{ '?back=' ~ back|urlencode if back != '/credits' }}">Clear</a>{% endif %}
 </form>
 <script>
   // See products/list.html for why: autofocus on a pre-filled box can put
@@ -43,9 +47,10 @@
         <td class="strong">{{ st.cheque_no if st.method == 'cheque' else st.ref_no }}</td>
         <td class="num">{{ st.amount|peso }}</td>
         <td class="row-actions">
-          {% if st.sale.customer_id %}<a class="btn-link" href="/credits/{{ st.sale.customer_id }}">View statement</a>{% endif %}
+          {% if st.sale.customer_id %}<a class="btn-link" href="/credits/{{ st.sale.customer_id }}?back={{ back_here() }}">View statement</a>{% endif %}
           {% if undoable.get(st.id) %}
           <form method="post" action="/credits/settlements/{{ st.id }}/undo" onsubmit="return confirm('Undo this {{ st.amount|peso }} payment on Invoice {{ st.sale.invoice_no }}? The invoice goes back to outstanding.');" style="display:inline;">
+            <input type="hidden" name="back" value="{{ request.url.path ~ ('?' ~ request.url.query if request.url.query else '') }}">
             <button type="submit" class="btn-link danger">Undo</button>
           </form>
           {% endif %}
@@ -69,9 +74,9 @@
 
 {% if pages > 1 %}
 <div class="pager">
-  {% if page > 1 %}<a class="btn-secondary" href="/credits/references?page={{ page - 1 }}&q={{ q }}">← Prev</a>{% endif %}
+  {% if page > 1 %}<a class="btn-secondary" href="/credits/references?page={{ page - 1 }}&q={{ q|urlencode }}{{ '&back=' ~ back|urlencode if back != '/credits' }}">← Prev</a>{% endif %}
   <span class="muted">Page {{ page }} of {{ pages }}</span>
-  {% if page < pages %}<a class="btn-secondary" href="/credits/references?page={{ page + 1 }}&q={{ q }}">Next →</a>{% endif %}
+  {% if page < pages %}<a class="btn-secondary" href="/credits/references?page={{ page + 1 }}&q={{ q|urlencode }}{{ '&back=' ~ back|urlencode if back != '/credits' }}">Next →</a>{% endif %}
 </div>
 {% endif %}
 {% endblock %}

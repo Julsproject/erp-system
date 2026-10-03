@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from . import audit, models
 from .database import SessionLocal, get_db
-from .deps import get_current_user, is_floor_staff, is_staff
+from .deps import get_current_user, is_floor_staff, is_staff, safe_back_url, url_with
 from .pos import MANILA, _apply_stock_count_correction
 from .products import ADJUSTMENT_REASON_LABELS, ADJUSTMENT_REASONS, _parse_upload
 from .search_utils import multi_word_ilike
@@ -466,6 +466,12 @@ def _uncounted_negatives(db: Session, count: models.StockCount):
     return q.all()
 
 
+def _count_url(count_id, back="", **params):
+    """A count's page, keeping the page it was opened from (`back`) so a
+    save that lands back on it keeps its Back link."""
+    return url_with(f"/stock-count/{count_id}", back=safe_back_url(back, ""), **params)
+
+
 @router.get("/stock-count", response_class=HTMLResponse)
 def stock_count_list(
     request: Request, page: int = 1, bulk_msg: int = 0, bulk_error: str = "",
@@ -522,16 +528,19 @@ def stock_count_start(db: Session = Depends(get_db), user=Depends(get_current_us
 
 @router.get("/stock-count/{count_id:int}", response_class=HTMLResponse)
 def stock_count_view(
-    count_id: int, request: Request, date_error: str = "",
+    count_id: int, request: Request, date_error: str = "", back: str = "",
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
+    """`back` is the page the count was opened from (the list, Counted
+    Items, a Stock Card)."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_floor_staff(user):
         return RedirectResponse("/pos", status_code=302)
+    back = safe_back_url(back, "/stock-count")
     count = db.get(models.StockCount, count_id)
     if not count:
-        return RedirectResponse("/stock-count", status_code=302)
+        return RedirectResponse(back, status_code=302)
     line_rows = (
         db.query(models.StockCountLine)
         .filter(models.StockCountLine.stock_count_id == count.id)
@@ -560,13 +569,13 @@ def stock_count_view(
          "missing_negatives": missing_negatives, "date_error": date_error_msg,
          "can_edit_count_date": can_edit_count_date,
          "can_edit_effective_date": can_edit_effective_date,
-         "today_iso": date.today().isoformat()},
+         "today_iso": date.today().isoformat(), "back": back},
     )
 
 
 @router.post("/stock-count/{count_id:int}/set-count-date")
 def stock_count_set_date(
-    count_id: int, request: Request, count_date: str = Form(""),
+    count_id: int, request: Request, count_date: str = Form(""), back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """The date the physical count actually happened — see the count_date
@@ -582,13 +591,13 @@ def stock_count_set_date(
         return RedirectResponse("/stock-count", status_code=302)
     allowed = is_floor_staff(user) if count.status == "open" else is_staff(user)
     if not allowed:
-        return RedirectResponse(f"/stock-count/{count_id}", status_code=302)
+        return RedirectResponse(_count_url(count_id, back), status_code=302)
     try:
         new_date = date.fromisoformat((count_date or "").strip())
     except ValueError:
-        return RedirectResponse(f"/stock-count/{count_id}?date_error=invalid", status_code=302)
+        return RedirectResponse(_count_url(count_id, back, date_error="invalid"), status_code=302)
     if new_date > date.today():
-        return RedirectResponse(f"/stock-count/{count_id}?date_error=future", status_code=302)
+        return RedirectResponse(_count_url(count_id, back, date_error="future"), status_code=302)
     old_date = count.count_date
     if new_date != old_date:
         count.count_date = new_date
@@ -599,12 +608,12 @@ def stock_count_set_date(
             changes={"count_date": [str(old_date) if old_date else None, str(new_date)]},
         )
         db.commit()
-    return RedirectResponse(f"/stock-count/{count_id}", status_code=302)
+    return RedirectResponse(_count_url(count_id, back), status_code=302)
 
 
 @router.post("/stock-count/{count_id:int}/set-effective-date")
 def stock_count_set_effective_date(
-    count_id: int, request: Request, effective_date: str = Form(""),
+    count_id: int, request: Request, effective_date: str = Form(""), back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """When this count's result becomes the new Actual Beginning — see the
@@ -616,16 +625,16 @@ def stock_count_set_effective_date(
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
-        return RedirectResponse(f"/stock-count/{count_id}", status_code=302)
+        return RedirectResponse(_count_url(count_id, back), status_code=302)
     count = db.get(models.StockCount, count_id)
     if not count or count.status != "completed":
-        return RedirectResponse("/stock-count", status_code=302)
+        return RedirectResponse(safe_back_url(back, "/stock-count"), status_code=302)
     if count.effective_applied_at:
-        return RedirectResponse(f"/stock-count/{count_id}?date_error=applied", status_code=302)
+        return RedirectResponse(_count_url(count_id, back, date_error="applied"), status_code=302)
     try:
         new_date = date.fromisoformat((effective_date or "").strip())
     except ValueError:
-        return RedirectResponse(f"/stock-count/{count_id}?date_error=invalid", status_code=302)
+        return RedirectResponse(_count_url(count_id, back, date_error="invalid"), status_code=302)
     old_date = count.effective_date
     if new_date != old_date:
         count.effective_date = new_date
@@ -636,13 +645,13 @@ def stock_count_set_effective_date(
             changes={"effective_date": [str(old_date) if old_date else None, str(new_date)]},
         )
         db.commit()
-    return RedirectResponse(f"/stock-count/{count_id}", status_code=302)
+    return RedirectResponse(_count_url(count_id, back), status_code=302)
 
 
 @router.post("/stock-count/bulk-set-effective-date")
 def stock_count_bulk_set_effective_date(
     request: Request, count_ids: list[str] = Form([]), effective_date: str = Form(""),
-    missing_effective: int = Form(0),
+    missing_effective: int = Form(0), back: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """Same rule and permission as the single set-effective-date route,
@@ -655,11 +664,12 @@ def stock_count_bulk_set_effective_date(
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/stock-count", status_code=302)
-    filter_qs = "&missing_effective=1" if missing_effective else ""
+    # `back`: the list exactly as it was (filter and page).
+    back = safe_back_url(back, "/stock-count?missing_effective=1" if missing_effective else "/stock-count")
     try:
         new_date = date.fromisoformat((effective_date or "").strip())
     except ValueError:
-        return RedirectResponse(f"/stock-count?bulk_error=invalid{filter_qs}", status_code=302)
+        return RedirectResponse(url_with(back, bulk_error="invalid", bulk_msg=None), status_code=302)
 
     updated = 0
     for cid in {int(i) for i in count_ids if i.isdigit()}:
@@ -678,7 +688,7 @@ def stock_count_bulk_set_effective_date(
             updated += 1
     if updated:
         db.commit()
-    return RedirectResponse(f"/stock-count?bulk_msg={updated}{filter_qs}", status_code=302)
+    return RedirectResponse(url_with(back, bulk_msg=updated, bulk_error=None), status_code=302)
 
 
 @router.post("/stock-count/{count_id:int}/scan")
@@ -821,7 +831,7 @@ def stock_count_assign_shelf(count_id: int, data: dict, db: Session = Depends(ge
 
 
 @router.post("/stock-count/{count_id:int}/add-negatives")
-def stock_count_add_negatives(count_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def stock_count_add_negatives(count_id: int, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Pull every still-negative uncounted product into this count in one go,
     so the shop can go count exactly those instead of hunting them down from
     the warning list by hand."""
@@ -837,11 +847,11 @@ def stock_count_add_negatives(count_id: int, db: Session = Depends(get_db), user
             system_qty=Decimal(str(product.total_qty or 0)), counted_qty=Decimal("0"),
         ))
     db.commit()
-    return RedirectResponse(f"/stock-count/{count.id}", status_code=302)
+    return RedirectResponse(_count_url(count.id, back), status_code=302)
 
 
 @router.get("/stock-count/{count_id:int}/import", response_class=HTMLResponse)
-def stock_count_import_form(count_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def stock_count_import_form(count_id: int, request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_floor_staff(user):
@@ -853,14 +863,16 @@ def stock_count_import_form(count_id: int, request: Request, db: Session = Depen
     return templates.TemplateResponse(
         "stock_count/import.html",
         {"request": request, "app_name": request.app.title, "user": user, "count": count,
-         "shelves": shelves, "result": None, "sheet_filters": COUNT_SHEET_FILTERS},
+         "shelves": shelves, "result": None, "sheet_filters": COUNT_SHEET_FILTERS,
+         # the count's page, still carrying where the count was opened from
+         "back": safe_back_url(back, ""), "count_url": _count_url(count.id, back)},
     )
 
 
 @router.post("/stock-count/{count_id:int}/import", response_class=HTMLResponse)
 def stock_count_import_upload(
     count_id: int, request: Request, file: UploadFile = File(...), assign_shelf_id: int = Form(0),
-    db: Session = Depends(get_db), user=Depends(get_current_user),
+    back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -881,7 +893,8 @@ def stock_count_import_upload(
         return templates.TemplateResponse(
             "stock_count/import.html",
             {"request": request, "app_name": request.app.title, "user": user, "count": count,
-             "result": {"error": error}},
+             "result": {"error": error},
+             "back": safe_back_url(back, ""), "count_url": _count_url(count.id, back)},
         )
 
     assign_shelf = db.get(models.Shelf, assign_shelf_id) if assign_shelf_id else None
@@ -901,7 +914,8 @@ def stock_count_import_upload(
         db.commit()
     return templates.TemplateResponse(
         "stock_count/import.html",
-        {"request": request, "app_name": request.app.title, "user": user, "count": count, "result": result},
+        {"request": request, "app_name": request.app.title, "user": user, "count": count, "result": result,
+         "back": safe_back_url(back, ""), "count_url": _count_url(count.id, back)},
     )
 
 
@@ -1187,7 +1201,7 @@ def stock_count_set_line_units(count_id: int, line_id: int, data: dict, db: Sess
 
 @router.post("/stock-count/{count_id:int}/complete")
 def stock_count_complete(count_id: int, request: Request, reason: str = Form("count_correction"),
-                          db: Session = Depends(get_db), user=Depends(get_current_user)):
+                          back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_floor_staff(user):
@@ -1261,11 +1275,11 @@ def stock_count_complete(count_id: int, request: Request, reason: str = Form("co
     except accounting.PostingError:
         pass
     db.commit()
-    return RedirectResponse(f"/stock-count/{count.id}", status_code=302)
+    return RedirectResponse(_count_url(count.id, back), status_code=302)
 
 
 @router.post("/stock-count/{count_id:int}/cancel")
-def stock_count_cancel(count_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def stock_count_cancel(count_id: int, back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_floor_staff(user):
@@ -1276,7 +1290,7 @@ def stock_count_cancel(count_id: int, db: Session = Depends(get_db), user=Depend
         count.completed_by = user.id
         count.completed_at = func.now()
         db.commit()
-    return RedirectResponse("/stock-count", status_code=302)
+    return RedirectResponse(safe_back_url(back, "/stock-count"), status_code=302)
 
 
 # --- Counted Items: every item across counts, and whether each one goes into
@@ -1297,7 +1311,7 @@ def _include_editable(count: models.StockCount) -> bool:
 @router.get("/stock-count/items", response_class=HTMLResponse)
 def stock_count_items(
     request: Request, scope: str = "pending", count_id: int = 0, q: str = "", only: str = "",
-    page: int = 1, msg: str = "",
+    page: int = 1, msg: str = "", back: str = "",
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -1346,7 +1360,9 @@ def stock_count_items(
         {"request": request, "app_name": request.app.title, "user": user,
          "items": items, "counts": counts, "scopes": ITEMS_SCOPES, "scope": scope,
          "count_id": count_id, "q": q, "only": only, "page": page, "pages": pages, "total": total,
-         "excluded_total": excluded_total, "can_edit": is_staff(user), "msg": msg},
+         "excluded_total": excluded_total, "can_edit": is_staff(user), "msg": msg,
+         # where "← Back" goes: the count it was opened from, else Stock Count
+         "back": safe_back_url(back, "/stock-count")},
     )
 
 
@@ -1403,6 +1419,6 @@ def stock_count_items_bulk_include(
             changed += 1
     if changed:
         db.commit()
-    sep = "&" if "?" in back else "?"
     word = "included" if include else "excluded"
-    return RedirectResponse(f"{back}{sep}msg={changed}+item{'' if changed == 1 else 's'}+{word}", status_code=302)
+    # url_with replaces an earlier notice instead of piling up msg=...&msg=...
+    return RedirectResponse(url_with(back, msg=f"{changed} item{'' if changed == 1 else 's'} {word}"), status_code=302)

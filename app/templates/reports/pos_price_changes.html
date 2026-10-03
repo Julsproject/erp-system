@@ -50,12 +50,13 @@
             {% if can_undo and r.can_undo %}
             <form method="post" action="/reports/pos-price-changes/{{ r.entry.id }}/undo" style="display:inline;"
                   onsubmit="return confirm('Put {{ (r.product.name if r.product else '')|e }} back to {{ r.old|peso }} per {{ r.unit|e }}?');">
+              <input type="hidden" name="back" value="{{ request.url.path ~ ('?' ~ request.url.query if request.url.query else '') }}">
               <button type="submit" class="btn-link">↩ Undo</button>
             </form>
             {% elif r.product and r.current != r.new %}
             <span class="muted" style="font-size:12px;" title="The price was changed again after this">changed since</span>
             {% endif %}
-            {% if r.product %}<a class="btn-link" href="/products/pricing?product_id={{ r.product.id }}">Edit</a>{% endif %}
+            {% if r.product %}<a class="btn-link" href="/products/pricing?product_id={{ r.product.id }}&back={{ back_here() }}">Edit</a>{% endif %}
           {% endif %}
         </td>
       </tr>

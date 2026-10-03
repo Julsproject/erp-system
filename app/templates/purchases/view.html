@@ -13,16 +13,26 @@
     </p>
   </div>
   <div class="head-actions">
-    <a class="btn-secondary" href="/purchases" onclick="try { localStorage.removeItem('last_purchase_view'); } catch (e) {}">← Back</a>
+    <a class="btn-secondary" href="{{ back }}" onclick="try { localStorage.removeItem('last_purchase_view'); } catch (e) {}">← Back</a>
     <a class="btn-secondary" href="/purchases/{{ purchase.id }}/pdf">⬇ Download PDF</a>
     {% if purchase.txn_type == 'receive' and purchase.status == 'paid' %}
-    <a class="btn-secondary" href="/purchases/new?return_against={{ purchase.id }}">↩ Return to supplier</a>
+    <a class="btn-secondary" href="/purchases/new?return_against={{ purchase.id }}&back={{ back_here() }}">↩ Return to supplier</a>
     {% endif %}
-    <a class="btn" href="/purchases/new">+ New purchase</a>
+    {# Carries this page's own back, so the purchase saved next returns to
+       the same list — not to this purchase. #}
+    <a class="btn" href="/purchases/new?back={{ back|urlencode }}">+ New purchase</a>
   </div>
+  {# Only staff get "reopen the last purchase" from the sidebar — a cashier's
+     sidebar link is New Purchase, and should stay that. #}
+  {% if (user.role or '')|lower in ('admin', 'manager') %}
   <script>
   try { localStorage.setItem('last_purchase_view', window.location.pathname + window.location.search); } catch (e) {}
   </script>
+  {% else %}
+  <script>
+  try { localStorage.removeItem('last_purchase_view'); } catch (e) {}
+  </script>
+  {% endif %}
 </div>
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}
@@ -53,6 +63,7 @@
   {% if can_edit_payment %}
   <form id="editPaymentForm" method="post" action="/purchases/{{ purchase.id }}/change-payment-method"
         style="display:none;margin:8px 0 0;padding:12px 14px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:13px;max-width:420px;color:#0f172a;">
+    <input type="hidden" name="back" value="{{ back }}">
     <label class="pos-customer">Correct payment method to
       <select name="method">
         {% for value, label in payment_methods %}
@@ -74,19 +85,19 @@
 {% if purchase.txn_type == 'return' and purchase.original_purchase %}
 <div class="alert" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;margin-bottom:16px;">
   ↩ Return from delivery
-  <a href="/purchases/{{ purchase.original_purchase.id }}" style="color:inherit;font-weight:700;text-decoration:underline;">{{ purchase.original_purchase.ref_no }}</a>
+  <a href="/purchases/{{ purchase.original_purchase.id }}?back={{ back_here() }}" style="color:inherit;font-weight:700;text-decoration:underline;">{{ purchase.original_purchase.ref_no }}</a>
 </div>
 {% endif %}
 {% for lr in linked_returns if lr.status != 'cancelled' %}
 <div class="alert" style="background:#fef2f2;border-color:#fecaca;color:#b91c1c;margin-bottom:16px;">
   ⚠ Item(s) from this delivery were returned:
-  <a href="/purchases/{{ lr.id }}" style="color:inherit;font-weight:700;text-decoration:underline;">{{ lr.ref_no }}</a> · {{ lr.total|peso }}
+  <a href="/purchases/{{ lr.id }}?back={{ back_here() }}" style="color:inherit;font-weight:700;text-decoration:underline;">{{ lr.ref_no }}</a> · {{ lr.total|peso }}
 </div>
 {% endfor %}
 {% for lr in linked_returns if lr.status == 'cancelled' %}
 <p class="muted" style="font-size:12.5px;margin:0 0 12px;">
   A return was recorded against this delivery by mistake and has since been cancelled (no live effect):
-  <a href="/purchases/{{ lr.id }}">{{ lr.ref_no }}</a> · {{ lr.total|peso }}
+  <a href="/purchases/{{ lr.id }}?back={{ back_here() }}">{{ lr.ref_no }}</a> · {{ lr.total|peso }}
 </p>
 {% endfor %}
 
@@ -101,7 +112,7 @@
       <strong>{{ r.line.product_name }}</strong> — {{ r.alert.message }}
       {% if r.line.product %}
       (cost {{ r.line.product.cost_price|peso }} vs price {{ r.line.product.selling_price|peso }})
-      <a class="btn-link" href="/products/{{ r.line.product.id }}/edit">Set price →</a>
+      <a class="btn-link" href="/products/{{ r.line.product.id }}/edit?back={{ back_here() }}">Set price →</a>
       {% endif %}
     </li>
     {% endfor %}
@@ -129,6 +140,7 @@
   {% if can_edit_details %}
   <form id="editDetailsForm" method="post" action="/purchases/{{ purchase.id }}/edit-details"
         style="display:none;margin-top:14px;padding:12px 14px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:13px;max-width:420px;color:#0f172a;">
+    <input type="hidden" name="back" value="{{ back }}">
     <label class="pos-customer">Supplier
       <select name="supplier_id">
         {% for s in suppliers %}
@@ -163,7 +175,7 @@
 
 {% if can_edit_items %}
 <div style="margin-bottom:8px;">
-  <a class="btn-link" href="/purchases/{{ purchase.id }}/edit-items">✎ Edit items</a>
+  <a class="btn-link" href="/purchases/{{ purchase.id }}/edit-items?back={{ back|urlencode }}">✎ Edit items</a>
 </div>
 {% endif %}
 
@@ -253,7 +265,7 @@
   <p class="muted" style="margin-top:0;">
     A cheque was issued for this delivery and is awaiting clearance.
   </p>
-  <a class="btn-link" href="/pdc/{{ pending_pdc.id }}">View the cheque →</a>
+  <a class="btn-link" href="/pdc/{{ pending_pdc.id }}?back={{ back_here() }}">View the cheque →</a>
 </section>
 {% endif %}
 {% endif %}
@@ -283,6 +295,7 @@
   <h3 class="card-title">Record a payment</h3>
   <p class="muted" style="margin-top:0;">{{ outstanding|peso }} owed to {{ purchase.supplier.name if purchase.supplier else 'the supplier' }} — pay all of it, or part now and the rest later.</p>
   <form method="post" action="/purchases/{{ purchase.id }}/pay" onsubmit="return document.getElementById('payMethod').value !== 'cheque' || document.getElementById('payChequeDate').value !== '';">
+    <input type="hidden" name="back" value="{{ back }}">
     <label class="pos-customer">Amount (₱)
       <input name="amount" type="number" step="0.01" min="0.01" value="{{ '%.2f'|format(outstanding) }}" autofocus>
       <small class="hint">Max is what's still owed ({{ outstanding|peso }}).</small>
@@ -322,6 +335,7 @@
 {% set noun = 'return' if purchase.txn_type == 'return' else 'purchase' %}
 <div class="pos-actions" style="justify-content:flex-start;margin-top:16px;">
   <form method="post" action="/purchases/{{ purchase.id }}/cancel" onsubmit="return confirm('Cancel this {{ noun }}? Its stock effect will be reversed.');">
+    <input type="hidden" name="back" value="{{ back }}">
     <button class="btn-secondary" type="submit">Cancel {{ noun }}</button>
   </form>
 </div>

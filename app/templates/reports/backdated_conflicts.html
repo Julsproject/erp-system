@@ -30,7 +30,7 @@
       <tr>
         <td class="muted">{{ r.created_at.strftime('%b %d, %Y %I:%M %p') if r.created_at else '' }}</td>
         <td class="strong">
-          {% if r.sale_id %}<a class="btn-link" href="{{ '/purchases/' if r.is_purchase else '/pos/receipt/' }}{{ r.sale_id }}">{{ r.invoice_no }}</a>{% else %}{{ r.invoice_no }}{% endif %}
+          {% if r.sale_id %}<a class="btn-link" href="{{ '/purchases/' if r.is_purchase else '/pos/receipt/' }}{{ r.sale_id }}?back={{ back_here() }}">{{ r.invoice_no }}</a>{% else %}{{ r.invoice_no }}{% endif %}
         </td>
         <td>{{ r.username or '—' }}</td>
         <td>

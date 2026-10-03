@@ -6,7 +6,7 @@
     <h1 class="page-title">Cheque Books</h1>
     <p class="muted">Every cheque number you've issued, by booklet — and every one that's missing.</p>
   </div>
-  <a class="btn-secondary" href="/payments">← Supplier Payments</a>
+  {% if back %}<a class="btn-secondary" href="{{ back }}">← Back</a>{% endif %}
 </div>
 
 {% if error %}<div class="alert">{{ error }}</div>{% endif %}

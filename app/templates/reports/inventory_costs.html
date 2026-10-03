@@ -71,9 +71,9 @@
 
 {% if pages > 1 %}
 <div class="pager">
-  {% if page > 1 %}<a class="btn-secondary" href="/reports/inventory-costs?page={{ page - 1 }}&q={{ q }}">← Prev</a>{% endif %}
+  {% if page > 1 %}<a class="btn-secondary" href="/reports/inventory-costs?page={{ page - 1 }}&q={{ q|urlencode }}">← Prev</a>{% endif %}
   <span class="muted">Page {{ page }} of {{ pages }}</span>
-  {% if page < pages %}<a class="btn-secondary" href="/reports/inventory-costs?page={{ page + 1 }}&q={{ q }}">Next →</a>{% endif %}
+  {% if page < pages %}<a class="btn-secondary" href="/reports/inventory-costs?page={{ page + 1 }}&q={{ q|urlencode }}">Next →</a>{% endif %}
 </div>
 {% endif %}
 

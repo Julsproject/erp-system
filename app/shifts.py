@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from . import audit, models
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_staff, safe_back_url
 from .templating import templates
 
 router = APIRouter()
@@ -102,11 +102,14 @@ def expected_cash_for(db: Session, cashier_id: int, start, end) -> Decimal:
 def open_shift_form(request: Request, next: str = "/pos", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    # Same-site paths only — `next` comes from the URL, so an unchecked one
+    # would let a crafted link bounce the cashier off to another site.
+    next = safe_back_url(next, "/pos")
     if get_open_shift(db, user.id):
-        return RedirectResponse(next or "/pos", status_code=302)
+        return RedirectResponse(next, status_code=302)
     return templates.TemplateResponse(
         "shifts/open.html",
-        {"request": request, "app_name": request.app.title, "user": user, "next": next or "/pos", "error": None},
+        {"request": request, "app_name": request.app.title, "user": user, "next": next, "error": None},
     )
 
 
@@ -117,15 +120,16 @@ def open_shift(
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
+    next = safe_back_url(next, "/pos")
     if get_open_shift(db, user.id):
-        return RedirectResponse((next or "/pos"), status_code=302)
+        return RedirectResponse(next, status_code=302)
 
     opening = _dec(opening_amount)
     if opening < 0:
         return templates.TemplateResponse(
             "shifts/open.html",
             {"request": request, "app_name": request.app.title, "user": user,
-             "next": next or "/pos", "error": "Enter a valid opening amount (0 or more)."},
+             "next": next, "error": "Enter a valid opening amount (0 or more)."},
         )
     shift = models.CashierShift(cashier_id=user.id, opening_amount=opening)
     db.add(shift)
@@ -136,7 +140,7 @@ def open_shift(
         summary=f"{user.username} opened the drawer with {opening}",
     )
     db.commit()
-    return RedirectResponse((next or "/pos"), status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(next, status_code=status.HTTP_302_FOUND)
 
 
 @router.get("/shifts/current", response_class=HTMLResponse)

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .database import get_db
-from .deps import get_current_user, is_staff
+from .deps import get_current_user, is_staff, safe_back_url
 from .purchases import PAYMENT_METHODS, _purchase_outstanding, _settled_for_purchases
 from .templating import templates
 
@@ -136,33 +136,35 @@ def list_suppliers(
     )
 
 
-def _render_form(request, user, supplier=None, error=None):
+def _render_form(request, user, supplier=None, error=None, back=""):
     return templates.TemplateResponse(
         "suppliers/form.html",
         {"request": request, "app_name": request.app.title, "user": user,
-         "supplier": supplier, "terms": PAYMENT_TERMS, "error": error},
+         "supplier": supplier, "terms": PAYMENT_TERMS, "error": error,
+         # the (filtered/paged) supplier list it was opened from
+         "back": safe_back_url(back, "/suppliers")},
     )
 
 
 @router.get("/suppliers/new", response_class=HTMLResponse)
-def new_supplier(request: Request, user=Depends(get_current_user)):
+def new_supplier(request: Request, back: str = "", user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
-    return _render_form(request, user)
+    return _render_form(request, user, back=back)
 
 
 @router.get("/suppliers/{supplier_id:int}/edit", response_class=HTMLResponse)
-def edit_supplier(supplier_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def edit_supplier(supplier_id: int, request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
     supplier = db.get(models.Supplier, supplier_id)
     if not supplier:
-        return RedirectResponse("/suppliers", status_code=302)
-    return _render_form(request, user, supplier=supplier)
+        return RedirectResponse(safe_back_url(back, "/suppliers"), status_code=302)
+    return _render_form(request, user, supplier=supplier, back=back)
 
 
 def _apply_form(supplier: models.Supplier, form):
@@ -188,7 +190,7 @@ def create_supplier(
     name: str = Form(""), code: str = Form(""), contact_person: str = Form(""), mobile: str = Form(""),
     telephone: str = Form(""), email: str = Form(""), address: str = Form(""), tin: str = Form(""),
     payment_terms: str = Form(""), payment_days: str = Form("30"), status_field: str = Form("active", alias="status"),
-    db: Session = Depends(get_db), user=Depends(get_current_user),
+    back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -200,15 +202,15 @@ def create_supplier(
         "payment_days": payment_days, "status": status_field,
     }
     if not (name or "").strip():
-        return _render_form(request, user, error="Supplier name is required.")
+        return _render_form(request, user, error="Supplier name is required.", back=back)
     code = (code or "").strip()
     if code and db.query(models.Supplier).filter(models.Supplier.code == code).first():
-        return _render_form(request, user, error=f"Supplier code '{code}' is already used.")
+        return _render_form(request, user, error=f"Supplier code '{code}' is already used.", back=back)
     supplier = models.Supplier(code=code or _next_code(db))
     _apply_form(supplier, form)
     db.add(supplier)
     db.commit()
-    return RedirectResponse("/suppliers", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(safe_back_url(back, "/suppliers"), status_code=status.HTTP_302_FOUND)
 
 
 @router.post("/suppliers/{supplier_id:int}")
@@ -217,7 +219,7 @@ def update_supplier(
     name: str = Form(""), code: str = Form(""), contact_person: str = Form(""), mobile: str = Form(""),
     telephone: str = Form(""), email: str = Form(""), address: str = Form(""), tin: str = Form(""),
     payment_terms: str = Form(""), payment_days: str = Form("30"), status_field: str = Form("active", alias="status"),
-    db: Session = Depends(get_db), user=Depends(get_current_user),
+    back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -225,35 +227,38 @@ def update_supplier(
         return RedirectResponse("/pos", status_code=302)
     supplier = db.get(models.Supplier, supplier_id)
     if not supplier:
-        return RedirectResponse("/suppliers", status_code=302)
+        return RedirectResponse(safe_back_url(back, "/suppliers"), status_code=302)
     form = {
         "name": name, "contact_person": contact_person, "mobile": mobile, "telephone": telephone,
         "email": email, "address": address, "tin": tin, "payment_terms": payment_terms,
         "payment_days": payment_days, "status": status_field,
     }
     if not (name or "").strip():
-        return _render_form(request, user, supplier=supplier, error="Supplier name is required.")
+        return _render_form(request, user, supplier=supplier, error="Supplier name is required.", back=back)
     code = (code or "").strip()
     if code and code != (supplier.code or ""):
         clash = db.query(models.Supplier).filter(models.Supplier.code == code, models.Supplier.id != supplier.id).first()
         if clash:
-            return _render_form(request, user, supplier=supplier, error=f"Supplier code '{code}' is already used.")
+            return _render_form(request, user, supplier=supplier, error=f"Supplier code '{code}' is already used.", back=back)
         supplier.code = code
     _apply_form(supplier, form)
     db.commit()
-    return RedirectResponse("/suppliers", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(safe_back_url(back, "/suppliers"), status_code=status.HTTP_302_FOUND)
 
 
 @router.get("/suppliers/{supplier_id:int}/history", response_class=HTMLResponse)
-def supplier_history(supplier_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    """Purchase history: receipts, returns, delivery history and item costs."""
+def supplier_history(supplier_id: int, request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Purchase history: receipts, returns, delivery history and item costs.
+    `back` is the page it was opened from (the filtered supplier list, Pay
+    Suppliers...)."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
+    back = safe_back_url(back, "/suppliers")
     supplier = db.get(models.Supplier, supplier_id)
     if not supplier:
-        return RedirectResponse("/suppliers", status_code=302)
+        return RedirectResponse(back, status_code=302)
 
     purchases = (
         db.query(models.Purchase)
@@ -309,7 +314,7 @@ def supplier_history(supplier_id: int, request: Request, db: Session = Depends(g
             "net_total": received_total - returned_total,
             "items": list(item_rows.values()),
             "payable_rows": payable_rows, "out_total": out_total, "settlements": settlements,
-            "payment_method_labels": dict(PAYMENT_METHODS),
+            "payment_method_labels": dict(PAYMENT_METHODS), "back": back,
         },
     )
 
@@ -333,7 +338,9 @@ def _outstanding_purchases(db: Session, supplier_id: int):
 
 
 @router.get("/suppliers/{supplier_id:int}/pay-full", response_class=HTMLResponse)
-def supplier_pay_full_form(supplier_id: int, request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+def supplier_pay_full_form(supplier_id: int, request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """`back` is the supplier history it was opened from (with that page's
+    own back), so Back/Cancel/Pay return there."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -348,6 +355,7 @@ def supplier_pay_full_form(supplier_id: int, request: Request, db: Session = Dep
         {
             "request": request, "app_name": request.app.title, "user": user,
             "supplier": supplier, "owed": owed, "total": total, "methods": PAYMENT_METHODS, "error": None,
+            "back": safe_back_url(back, f"/suppliers/{supplier_id}/history"),
         },
     )
 
@@ -356,12 +364,13 @@ def supplier_pay_full_form(supplier_id: int, request: Request, db: Session = Dep
 def supplier_pay_full_submit(
     supplier_id: int, request: Request,
     method: str = Form("cash"), cheque_date: str = Form(""), bank: str = Form(""), cheque_no: str = Form(""),
-    db: Session = Depends(get_db), user=Depends(get_current_user),
+    back: str = Form(""), db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
         return RedirectResponse("/pos", status_code=302)
+    back = safe_back_url(back, f"/suppliers/{supplier_id}/history")
     supplier = db.get(models.Supplier, supplier_id)
     if not supplier:
         return RedirectResponse("/suppliers", status_code=302)
@@ -378,11 +387,12 @@ def supplier_pay_full_submit(
             {
                 "request": request, "app_name": request.app.title, "user": user,
                 "supplier": supplier, "owed": owed, "total": total, "methods": PAYMENT_METHODS, "error": error,
+                "back": back,
             },
         )
 
     if not owed:
-        return RedirectResponse(f"/suppliers/{supplier_id}/history", status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(back, status_code=status.HTTP_302_FOUND)
 
     cheque_date_val = None
     if method == "cheque":
@@ -419,4 +429,4 @@ def supplier_pay_full_submit(
             purchase.payment_method = method
             purchase.paid_at = func.now()
     db.commit()
-    return RedirectResponse(f"/suppliers/{supplier_id}/history", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(back, status_code=status.HTTP_302_FOUND)
