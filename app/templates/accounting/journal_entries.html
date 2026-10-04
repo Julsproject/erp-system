@@ -5,10 +5,10 @@
   <div>
     <h1 class="page-title">Manual Journal Entries</h1>
     <p class="muted">For anything the automatic posting engine doesn't cover — capital injections, corrections, closing entries.
-      {% if custom %}<br>Dated {{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }}{% else %}<br>Latest 100{% endif %}</p>
+      {% if custom %}<br>Dated {{ period_start.strftime('%b %d, %Y') }} – {{ period_end.strftime('%b %d, %Y') }}{% elif q %}<br>All matches{% else %}<br>Latest 100{% endif %}</p>
   </div>
   <div class="head-actions">
-    {% set pp_url = "/accounting/journal-entries" %}{% set pp_keep = {} %}{% set pp_mode = "all" %}{% include "_period_picker.html" %}
+    {% set pp_url = "/accounting/journal-entries" %}{% set pp_keep = {"q": q} if q else {} %}{% set pp_mode = "all" %}{% include "_period_picker.html" %}
     <a class="btn-secondary" href="/accounting/journal-entries/new?template=payroll&back={{ back_here() }}" title="Payday: salaries, SSS/PhilHealth/Pag-IBIG deductions, net pay in cash">+ Payroll (payday)</a>
     <a class="btn-secondary" href="/accounting/journal-entries/new?template=gov_remittance&back={{ back_here() }}" title="Paying SSS, PhilHealth and Pag-IBIG: employees' and employer's shares">+ Pay SSS / PhilHealth / Pag-IBIG</a>
     <a class="btn" href="/accounting/journal-entries/new?back={{ back_here() }}">+ New Entry</a>
@@ -16,6 +16,14 @@
 </div>
 {% set cur_url = request.url.path ~ ('?' ~ request.url.query if request.url.query else '') %}
 {% include "accounting/_subnav.html" %}
+
+<form class="toolbar" method="get" action="/accounting/journal-entries">
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search journal #, description, reference, memo, account or amount…" autofocus>
+  {% if custom %}<input type="hidden" name="date_from" value="{{ date_from }}"><input type="hidden" name="date_to" value="{{ date_to }}">{% endif %}
+  <button class="btn-secondary" type="submit">Search</button>
+  {% if q %}<a class="btn-link" href="/accounting/journal-entries{{ ('?date_from=' ~ date_from ~ '&date_to=' ~ date_to) if custom }}">Clear</a>
+  <span class="muted">{{ entries|length }} match{{ 'es' if entries|length != 1 }}</span>{% endif %}
+</form>
 
 {% if request.query_params.get('created') %}
 <div class="alert" style="background:#dcfce7;color:#15803d;">Saved as draft: {{ request.query_params.get('created') }}. It won't affect any report until you Post it below.</div>

@@ -15,7 +15,7 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from . import audit, models
@@ -2043,27 +2043,46 @@ def ap_subledger(
 # every other accounting screen in this app is already is_staff-gated.
 # --------------------------------------------------------------------------- #
 @router.get("/accounting/journal-entries", response_class=HTMLResponse)
-def journal_entries_list(request: Request, date_from: str = "", date_to: str = "",
+def journal_entries_list(request: Request, date_from: str = "", date_to: str = "", q: str = "",
                          db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_admin(user):
         return RedirectResponse("/pos", status_code=302)
-    query = db.query(models.JournalEntry).filter(models.JournalEntry.source_type == "manual")
+    JE, JL = models.JournalEntry, models.JournalLine
+    query = db.query(JE).filter(JE.source_type == "manual")
     # No range = the latest 100, as before; a range shows every entry dated in it.
     custom = bool(_parse_date(date_from) and _parse_date(date_to))
     if custom:
         period_start, period_end, _ = _resolve_period(30, date_from, date_to)
-        query = query.filter(models.JournalEntry.txn_date.between(period_start, period_end))
+        query = query.filter(JE.txn_date.between(period_start, period_end))
     else:
         period_start = period_end = None
-    entries = query.order_by(models.JournalEntry.id.desc()).limit(None if custom else 100).all()
+    # Search: every word must appear in the journal #, description, reference,
+    # a line's memo or account name; a number also matches a line's amount
+    # ("54,879" or "54879.00").
+    q = (q or "").strip()
+    if q:
+        for word in q.split():
+            like = f"%{word}%"
+            line_hit = (
+                db.query(JL.entry_id).join(models.Account, JL.account_id == models.Account.id)
+                .filter(or_(JL.memo.ilike(like), models.Account.name.ilike(like), models.Account.code == word))
+            )
+            conds = [JE.journal_no.ilike(like), JE.description.ilike(like), JE.reference_no.ilike(like), JE.id.in_(line_hit)]
+            try:
+                amount = Decimal(word.replace(",", "").replace("₱", ""))
+                conds.append(JE.id.in_(db.query(JL.entry_id).filter(or_(JL.debit == amount, JL.credit == amount))))
+            except (InvalidOperation, ValueError):
+                pass
+            query = query.filter(or_(*conds))
+    entries = query.order_by(JE.id.desc()).limit(None if (custom or q) else 100).all()
     editable_ids = {e.id for e in entries if manual_entry_is_editable(e)}
     return templates.TemplateResponse(
         "accounting/journal_entries.html",
         {"request": request, "app_name": request.app.title, "user": user, "entries": entries,
          "editable_ids": editable_ids, "days": 0, "custom": custom, "date_from": date_from, "date_to": date_to,
-         "period_start": period_start, "period_end": period_end},
+         "period_start": period_start, "period_end": period_end, "q": q},
     )
 
 
