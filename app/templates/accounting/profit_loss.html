@@ -28,8 +28,9 @@
   <h3 style="margin-top:0;">Reconciliation vs. the operational P&amp;L report</h3>
   <p class="muted">Compares this ledger-based figure against <a href="/reports/profit-loss?{{ 'date_from=' ~ date_from ~ '&date_to=' ~ date_to if custom else 'days=' ~ days }}">Reports → Profit &amp; Loss</a> for the
     same period, which is computed straight from Sales/Expenses records rather than journal postings. They won't
-    always match exactly — the ledger P&amp;L has no Inventory Adjustment leg yet — but a large or growing gap is
-    worth investigating.</p>
+    match exactly: the report's revenue still includes the 12% VAT on VAT sales, which the books move out to Output
+    VAT, and its expenses include the VAT on purchases the books claim as Input VAT. A gap much bigger than the
+    period's VAT is worth investigating.</p>
   <div class="stat-row">
     <div class="mini-stat"><span class="mini-num">{{ data.net_profit|peso }}</span><span>Ledger Net Profit</span></div>
     <div class="mini-stat"><span class="mini-num">{{ operational.net_profit|peso }}</span><span>Operational Net Profit</span></div>

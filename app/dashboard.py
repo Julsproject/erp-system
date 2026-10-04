@@ -89,7 +89,10 @@ def _sales_between(db: Session, start: date, end: date) -> Decimal:
 
 
 def _profit_between(db: Session, start: date, end: date) -> Decimal:
-    """Revenue minus cost of goods, using the cost frozen on each sale line."""
+    """Gross profit: revenue minus cost of goods (the cost frozen on each sale
+    line) and minus inventory shrinkage net of gains, which is part of cost
+    of goods sold — same as Reports → Profit & Loss."""
+    from .reports import _ledger_shrinkage
     cogs_expr = models.SaleLine.qty * models.SaleLine.unit_factor * models.SaleLine.unit_cost
     value = (
         db.query(func.coalesce(func.sum(models.SaleLine.line_total - cogs_expr), 0))
@@ -101,7 +104,7 @@ def _profit_between(db: Session, start: date, end: date) -> Decimal:
         )
         .scalar()
     )
-    return Decimal(str(value or 0))
+    return Decimal(str(value or 0)) - _ledger_shrinkage(db, start, end)
 
 
 def _parse_date(s: str):

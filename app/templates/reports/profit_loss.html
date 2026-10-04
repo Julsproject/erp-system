@@ -19,8 +19,9 @@
       <tr><td class="muted" style="padding-left:18px;">net of refunds &amp; exchanges</td><td></td></tr>
       <tr><td style="padding-top:14px;">Sales of goods</td><td class="num" style="padding-top:14px;">{{ goods_sales|peso }}</td></tr>
       <tr><td class="muted" style="padding-left:18px;">before refunds &amp; exchanges</td><td></td></tr>
-      <tr><td>Less: Cost of goods sold</td><td class="num">({{ cogs|peso }})</td></tr>
-      <tr><td class="muted" style="padding-left:18px;">what those goods cost the shop</td><td></td></tr>
+      <tr><td>Less: Cost of goods sold</td><td class="num">({{ total_cogs|peso }})</td></tr>
+      <tr><td class="muted" style="padding-left:18px;">Goods sold — what they cost the shop</td><td class="num muted">{{ cogs|peso }}</td></tr>
+      <tr><td class="muted" style="padding-left:18px;">Inventory shrinkage, net of gains <a href="/reports/inventory-adjustments">— breakdown →</a></td><td class="num muted {{ 'neg' if shrinkage < 0 }}">{{ shrinkage|peso }}</td></tr>
       <tr><td class="strong" style="padding-top:14px;border-top:1px solid var(--line);">Gross Profit</td><td class="num strong {{ 'neg' if gross_profit < 0 }}" style="padding-top:14px;border-top:1px solid var(--line);">{{ gross_profit|peso }}</td></tr>
       <tr><td class="muted" style="padding-left:18px;">from goods sold this period</td><td></td></tr>
     </tbody>
@@ -38,24 +39,13 @@
     </tbody>
   </table>
 
-  <h3 class="ex-h" style="margin-top:22px;">Inventory Shrinkage / Gain</h3>
-  <table class="grid" style="box-shadow:none;border:none;">
-    <tbody>
-      <tr>
-        <td>From manual stock edits &amp; stock counts</td>
-        <td class="num {{ 'neg' if inventory_adjustment_total < 0 }}">{{ inventory_adjustment_total|peso }}</td>
-      </tr>
-      <tr><td class="muted" style="padding-left:18px;"><a href="/reports/inventory-adjustments?{{ 'date_from=' ~ date_from ~ '&date_to=' ~ date_to if custom else 'days=' ~ days }}">See breakdown →</a></td><td></td></tr>
-    </tbody>
-  </table>
-
   <table class="grid" style="box-shadow:none;border:none;margin-top:18px;">
     <tbody>
       <tr>
         <td class="strong" style="font-size:16px;border-top:2px solid var(--ink);padding-top:14px;">Net Profit</td>
         <td class="num strong {{ 'neg' if net_profit < 0 }}" style="font-size:16px;border-top:2px solid var(--ink);padding-top:14px;">{{ net_profit|peso }}</td>
       </tr>
-      <tr><td class="muted" style="padding-left:18px;">Gross Profit − Total Expenses + Inventory Adjustments</td><td></td></tr>
+      <tr><td class="muted" style="padding-left:18px;">Gross Profit − Total Expenses</td><td></td></tr>
     </tbody>
   </table>
 </div>

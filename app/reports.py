@@ -113,6 +113,31 @@ def payroll_total(db: Session, period_start: date, period_end: date) -> Decimal:
     return sum((r["amount"] for r in payroll_by_account(db, period_start, period_end)), Decimal("0"))
 
 
+def _ledger_shrinkage(db: Session, period_start: date, period_end: date) -> Decimal:
+    """Net inventory shrinkage for the period (losses minus gains), from the
+    accounts mapped as INV_ADJ_LOSS and INV_ADJ_GAIN, by journal date.
+    Drafts are left out; a reversed entry and its reversal cancel out."""
+    def net(function_key: str) -> Decimal:
+        mapping = db.query(models.AccountMapping).filter(models.AccountMapping.function_key == function_key).first()
+        if not mapping:
+            return Decimal("0")
+        value = (
+            db.query(func.coalesce(func.sum(models.JournalLine.debit - models.JournalLine.credit), 0))
+            .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
+            .filter(models.JournalLine.account_id == mapping.account_id,
+                    models.JournalEntry.status != "draft",
+                    models.JournalEntry.txn_date.between(period_start, period_end))
+            .scalar()
+        )
+        return Decimal(str(value or 0))
+    # Loss account is debit-normal, gain account credit-normal: both nets are
+    # debit − credit, so adding them gives losses − gains.
+    if (db.query(models.AccountMapping.account_id).filter_by(function_key="INV_ADJ_LOSS").scalar()
+            == db.query(models.AccountMapping.account_id).filter_by(function_key="INV_ADJ_GAIN").scalar()):
+        return net("INV_ADJ_LOSS").quantize(Decimal("0.01"))
+    return (net("INV_ADJ_LOSS") + net("INV_ADJ_GAIN")).quantize(Decimal("0.01"))
+
+
 def _pl_data(db: Session, period_start: date, period_end: date):
     """Same formulas the Dashboard uses, so the numbers agree with what the
     owner already sees there: Revenue = net sales (sale + refund + exchange
@@ -143,7 +168,14 @@ def _pl_data(db: Session, period_start: date, period_end: date):
     )
     goods_sales = Decimal(str(goods_sales or 0)).quantize(Decimal("0.01"))
     cogs = Decimal(str(cogs or 0)).quantize(Decimal("0.01"))
-    gross_profit = goods_sales - cogs
+    # Inventory shrinkage is part of cost of goods sold, net of any gains —
+    # read from the books' own Shrinkage & Losses / Inventory Gain accounts,
+    # so it's exactly what the ledger P&L counts. Stock counts that only
+    # caught up on stock never encoded (opening inventory) post to Inventory
+    # Corrections (equity) instead and are not profit, so they stay out here.
+    shrinkage = _ledger_shrinkage(db, period_start, period_end)
+    total_cogs = cogs + shrinkage
+    gross_profit = goods_sales - total_cogs
 
     expense_rows = (
         db.query(models.ExpenseCategory.name, func.coalesce(func.sum(models.Expense.amount), 0))
@@ -160,23 +192,16 @@ def _pl_data(db: Session, period_start: date, period_end: date):
     )
     total_expenses = sum((r["amount"] for r in expenses_by_category), ZERO)
 
-    inventory_adjustment_total = (
-        db.query(func.coalesce(func.sum(models.StockMovement.value), 0))
-        .filter(_pnl_adjustment_filter(),
-                _local_date(models.StockMovement.created_at).between(period_start, period_end))
-        .scalar()
-    )
-    inventory_adjustment_total = Decimal(str(inventory_adjustment_total or 0))
-
     return {
         "revenue": revenue,
         "goods_sales": goods_sales,
         "cogs": cogs,
+        "shrinkage": shrinkage,
+        "total_cogs": total_cogs,
         "gross_profit": gross_profit,
         "expenses_by_category": expenses_by_category,
         "total_expenses": total_expenses,
-        "inventory_adjustment_total": inventory_adjustment_total,
-        "net_profit": gross_profit - total_expenses + inventory_adjustment_total,
+        "net_profit": gross_profit - total_expenses,
     }
 
 
@@ -240,7 +265,9 @@ def export_profit_loss(
     header_row(["Line", "Amount"])
     ws.append(["Revenue (net of refunds/exchanges)", float(data["revenue"])])
     ws.append(["Sales of goods (before refunds & exchanges)", float(data["goods_sales"])])
-    ws.append(["Less: Cost of goods sold", float(-data["cogs"])])
+    ws.append(["Cost of goods sold — goods sold", float(-data["cogs"])])
+    ws.append(["Cost of goods sold — inventory shrinkage (net of gains)", float(-data["shrinkage"])])
+    ws.append(["Less: Total cost of goods sold", float(-data["total_cogs"])])
     ws.append(["Gross Profit (from goods sold)", float(data["gross_profit"])])
     ws.append([])
     header_row(["Expenses by category", "Amount"])
@@ -248,12 +275,10 @@ def export_profit_loss(
         ws.append([row["name"], float(row["amount"])])
     ws.append(["Total Expenses", float(data["total_expenses"])])
     ws.append([])
-    ws.append(["Inventory Shrinkage / Gain (adjustments & stock counts)", float(data["inventory_adjustment_total"])])
-    ws.append([])
-    ws.append(["Net Profit (Gross Profit − Expenses + Inventory Adjustments)", float(data["net_profit"])])
+    ws.append(["Net Profit (Gross Profit − Expenses)", float(data["net_profit"])])
 
     for cell in ws["A"]:
-        if cell.value in ("Total Expenses", "Net Profit (Gross Profit − Expenses + Inventory Adjustments)"):
+        if cell.value in ("Total Expenses", "Net Profit (Gross Profit − Expenses)"):
             cell.font = Font(bold=True)
     ws.column_dimensions["A"].width = 40
     ws.column_dimensions["B"].width = 18

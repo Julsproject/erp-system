@@ -125,10 +125,8 @@
       <div class="w-pl">
         <div class="row"><span>Revenue</span><b>{{ revenue|peso }}</b></div>
         <div class="row"><span>Gross profit</span><b>{{ gross_profit|peso }}</b></div>
+        {% if shrinkage %}<div class="row" style="font-size:12px;color:#64748b;"><span>&nbsp;&nbsp;after inventory shrinkage (net of gains)</span><span>{{ shrinkage|peso }}</span></div>{% endif %}
         <div class="row"><span>Expenses</span><b>− {{ total_expenses|peso }}</b></div>
-        {% if inventory_adjustment_total and inventory_adjustment_total != 0 %}
-        <div class="row"><span>Inventory adjustments</span><b>{{ inventory_adjustment_total|peso }}</b></div>
-        {% endif %}
         <div class="row grand"><span>Net profit</span><span>{{ net_profit|peso }}</span></div>
       </div>
     </div>
