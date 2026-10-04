@@ -34,11 +34,12 @@
     </thead>
     <tbody>
       <tr><td colspan="5" class="muted">Opening balance</td><td class="num strong">{{ opening|peso }}</td></tr>
+      {% set src_links = je_source_links(rows|map(attribute='entry')|list) %}
       {% for r in rows %}
       <tr>
         <td>{{ r.entry.txn_date.strftime('%b %d, %Y') }}</td>
-        <td class="strong">{{ r.entry.journal_no }}</td>
-        <td>{{ r.entry.description }}{% if r.line.memo %} <span class="muted">({{ r.line.memo }})</span>{% endif %}</td>
+        <td class="strong"><a href="/accounting/journal-entries/{{ r.entry.id }}/view?back={{ back_here() }}" title="Open this journal entry">{{ r.entry.journal_no }}</a></td>
+        {% set src = src_links.get(r.entry.id) %}<td>{% if src %}<a href="{{ src[1] }}?back={{ back_here() }}" title="Open {{ src[0] }} to view or change it">{{ r.entry.description }}</a>{% else %}{{ r.entry.description }}{% endif %}{% if r.line.memo %} <span class="muted">({{ r.line.memo }})</span>{% endif %}</td>
         <td class="num">{{ r.line.debit|peso if r.line.debit else '—' }}</td>
         <td class="num">{{ r.line.credit|peso if r.line.credit else '—' }}</td>
         <td class="num strong">{{ r.balance|peso }}</td>

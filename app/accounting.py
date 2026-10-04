@@ -19,7 +19,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from . import audit, models
-from .database import get_db
+from .database import SessionLocal, get_db
 from .deps import get_current_user, is_admin, is_staff, safe_back_url, url_with
 from .templating import templates
 
@@ -2227,6 +2227,77 @@ def journal_entry_create(
         return RedirectResponse(url_with("/accounting/journal-entries/new", saved=entry.journal_no,
                                          template=template, back=back), status_code=302)
     return RedirectResponse(f"/accounting/journal-entries?created={entry.journal_no}", status_code=302)
+
+
+# Where each kind of automatic entry came from — so a ledger line opens the
+# record to fix (the Expense, the delivery, the receipt…) instead of a dead
+# journal number. source_id means: a sale's id for sale / sale_cogs /
+# sale_settlement, a purchase's for purchase / purchase_settlement, a stock
+# movement's for cost_variance / stock_correction, else the record named.
+_SOURCE_PAGES = {
+    "sale": ("Sale", "Sale receipt", "/pos/receipt/{}"),
+    "sale_cogs": ("Sale", "Sale receipt", "/pos/receipt/{}"),
+    "sale_settlement": ("Sale", "Sale receipt", "/pos/receipt/{}"),
+    "purchase": ("Purchase", "Delivery", "/purchases/{}"),
+    "purchase_settlement": ("Purchase", "Delivery", "/purchases/{}"),
+    "expense": ("Expense", "Expense", "/expenses/{}/edit"),
+    "inventory_adjustment": ("InventoryAdjustment", "Inventory adjustment", "/inventory-adjustments/{}"),
+    "stock_count": ("StockCount", "Stock count", "/stock-count/{}"),
+}
+
+
+def je_source_links(entries) -> dict:
+    """{entry_id: (label, url)} for the record behind each entry, loaded in
+    a few batched queries. A reversal points at whatever its original came
+    from; manual and one-off system entries (opening balance, true-ups) get
+    nothing — their own journal entry page is the record."""
+    entries = [e for e in entries if e is not None]
+    if not entries:
+        return {}
+    db = SessionLocal()
+    try:
+        originals = {}
+        rev_ids = {e.is_reversal_of_id for e in entries if e.source_type == "reversal" and e.is_reversal_of_id}
+        if rev_ids:
+            originals = {o.id: o for o in db.query(models.JournalEntry).filter(models.JournalEntry.id.in_(rev_ids))}
+        target = {e.id: originals.get(e.is_reversal_of_id, e) if e.source_type == "reversal" else e for e in entries}
+
+        wanted = {}
+        for t in target.values():
+            if t.source_id:
+                if t.source_type in _SOURCE_PAGES:
+                    wanted.setdefault(_SOURCE_PAGES[t.source_type][0], set()).add(t.source_id)
+                elif t.source_type in ("cost_variance", "stock_correction"):
+                    wanted.setdefault("StockMovement", set()).add(t.source_id)
+        found = {}
+        for model_name, ids in wanted.items():
+            model = getattr(models, model_name)
+            found[model_name] = {r.id: r for r in db.query(model).filter(model.id.in_(ids))}
+        product_names = {}
+        if found.get("StockMovement"):
+            pids = {mv.product_id for mv in found["StockMovement"].values()}
+            product_names = dict(db.query(models.Product.id, models.Product.name).filter(models.Product.id.in_(pids)))
+
+        links = {}
+        for e in entries:
+            t = target[e.id]
+            if t.source_type in _SOURCE_PAGES:
+                model_name, label, url = _SOURCE_PAGES[t.source_type]
+                rec = found.get(model_name, {}).get(t.source_id)
+                if rec is not None:
+                    ref = getattr(rec, "ref_no", None) or getattr(rec, "invoice_no", None) or f"#{rec.id}"
+                    links[e.id] = (f"{label} {ref}", url.format(rec.id))
+            elif t.source_type in ("cost_variance", "stock_correction"):
+                mv = found.get("StockMovement", {}).get(t.source_id)
+                if mv is not None:
+                    links[e.id] = (f"Stock card — {product_names.get(mv.product_id, 'item')}",
+                                   f"/products/{mv.product_id}/stock-card")
+        return links
+    finally:
+        db.close()
+
+
+templates.env.globals["je_source_links"] = je_source_links
 
 
 @router.get("/accounting/journal-entries/{entry_id:int}/view", response_class=HTMLResponse)
