@@ -149,7 +149,7 @@ def _view_url(pdc_id: int, back: str, **params) -> str:
 
 
 @router.post("/pdc/{pdc_id:int}/deposit")
-def deposit_pdc(pdc_id: int, request: Request, deposit_date: str = "", back: str = Form(""),
+def deposit_pdc(pdc_id: int, request: Request, deposit_date: str = Form(""), back: str = Form(""),
                 db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Handed to the bank teller — a physical-custody marker only, no
     financial posting yet (same limbo as pending). Optional step; clear/
