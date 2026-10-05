@@ -85,7 +85,7 @@ def _current_alerts(db: Session) -> dict:
             "category": "stock", "severity": "danger",
             "title": f"Out of stock: {p.name}",
             "body": "On-hand quantity has reached zero. Reorder to keep selling it.",
-            "link": "/products",
+            "link": f"/products/{p.id}/stock-card",
         }
     default_low_stock_pct = settings_store.default_low_stock_pct()
     low = (
@@ -114,7 +114,7 @@ def _current_alerts(db: Session) -> dict:
             "category": "stock", "severity": "warning",
             "title": f"Low stock: {p.name}",
             "body": body,
-            "link": "/products?flag=lowstock",
+            "link": f"/products/{p.id}/stock-card",
         }
 
     # ---- below-cost pricing ---------------------------------------------
@@ -132,7 +132,7 @@ def _current_alerts(db: Session) -> dict:
             "category": "pricing", "severity": "danger",
             "title": f"Selling at or below cost: {p.name}",
             "body": f"Selling price {_peso(p.selling_price)} is not above cost {_peso(p.cost_price)} — every sale loses money.",
-            "link": "/products?alert=1",
+            "link": f"/products/pricing?product_id={p.id}",
         }
 
     # ---- below the shop's minimum-margin target (softer than below-cost) --
@@ -160,7 +160,7 @@ def _current_alerts(db: Session) -> dict:
                     "title": f"Below {min_margin:g}% margin target: {p.name}",
                     "body": f"Selling {_peso(price)} on a {_peso(cost)} cost is only {margin_pct:.1f}% margin, "
                             f"under your {min_margin:g}% target — still profitable, just thinner than your standard.",
-                    "link": f"/products/{p.id}/edit",
+                    "link": f"/products/pricing?product_id={p.id}",
                 }
 
     # ---- credits (overdue + due soon) -----------------------------------
@@ -194,7 +194,7 @@ def _current_alerts(db: Session) -> dict:
                 "category": "credit", "severity": "danger",
                 "title": f"Overdue credit: {who}",
                 "body": f"Invoice {sale.invoice_no} — {_peso(outstanding)} outstanding, {days} day(s) past due.",
-                "link": "/sales/receivables",
+                "link": f"/pos/receipt/{sale.id}",
             }
         elif sale.due_date <= horizon:
             days = (sale.due_date - today).days
@@ -202,7 +202,7 @@ def _current_alerts(db: Session) -> dict:
                 "category": "credit", "severity": "warning",
                 "title": f"Credit due soon: {who}",
                 "body": f"Invoice {sale.invoice_no} — {_peso(outstanding)} due in {days} day(s).",
-                "link": "/sales/receivables",
+                "link": f"/pos/receipt/{sale.id}",
             }
 
     # ---- payables (overdue + due soon) ------------------------------------
@@ -224,7 +224,7 @@ def _current_alerts(db: Session) -> dict:
                 "category": "payable", "severity": "danger",
                 "title": f"Overdue payable: {who}",
                 "body": f"{p.ref_no} — {_peso(p.total)} outstanding, {days} day(s) past due.",
-                "link": "/purchases/payables",
+                "link": f"/purchases/{p.id}",
             }
         elif p.due_date <= horizon:
             days = (p.due_date - today).days
@@ -232,7 +232,7 @@ def _current_alerts(db: Session) -> dict:
                 "category": "payable", "severity": "warning",
                 "title": f"Payable due soon: {who}",
                 "body": f"{p.ref_no} — {_peso(p.total)} due in {days} day(s).",
-                "link": "/purchases/payables",
+                "link": f"/purchases/{p.id}",
             }
 
     # ---- cheques due today / upcoming / overdue --------------------------
@@ -258,7 +258,7 @@ def _current_alerts(db: Session) -> dict:
             "title": f"Cheque {bucket}: {direction.lower()} {_peso(c.amount)}",
             "body": f"{direction} cheque {c.cheque_no or ''} dated {c.cheque_date.strftime('%b %d, %Y')}"
                     f"{' — past due, clear or update it.' if bucket == 'overdue' else '.'}".strip(),
-            "link": "/pdc",
+            "link": f"/pdc/{c.id}",
         }
 
     # ---- no-invoice refunds/exchanges -------------------------------------
