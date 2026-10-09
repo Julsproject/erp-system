@@ -28,7 +28,7 @@
 {% set filter_count = (1 if category_id else 0) + (1 if date_from else 0) + (1 if date_to else 0) %}
 
 <form class="toolbar" method="get" action="/expenses">
-  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search payee, description, or ref #…">
+  <input class="search" type="search" name="q" value="{{ q }}" placeholder="Search payee, description, receipt # or EXP #…">
   <button class="btn-secondary" type="submit">Search</button>
 
   <details class="filter-drop" {{ 'open' if filter_count }}>
@@ -62,12 +62,18 @@
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Ref #</th><th>Date</th><th>Category</th><th>Payee</th><th>Description</th><th>Payment</th><th class="num">Amount</th><th></th></tr>
+      <tr><th>Receipt #</th><th>Date</th><th>Category</th><th>Payee</th><th>Description</th><th>Payment</th><th class="num">Amount</th><th></th></tr>
     </thead>
     <tbody>
       {% for e in expenses %}
       <tr>
-        <td class="strong">{{ e.ref_no }}</td>
+        {# The supplier's own receipt / OR # is what people look up; the EXP #
+           stays underneath as the system's unique number (two suppliers can
+           print the same receipt number). #}
+        <td>
+          {% if e.receipt_no %}<span class="strong">{{ e.receipt_no }}</span>{% else %}<span class="muted">no receipt #</span>{% endif %}
+          <div class="muted" style="font-size:11px;">{{ e.ref_no }}</div>
+        </td>
         <td>{{ e.expense_date.strftime('%b %d, %Y') if e.expense_date else '—' }}</td>
         <td>{{ e.category.name if e.category else '—' }}</td>
         <td>{{ e.payee or '—' }}</td>

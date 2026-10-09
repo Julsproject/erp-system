@@ -91,6 +91,7 @@ def list_expenses(
             models.Expense.description.ilike(like),
             models.Expense.ref_no.ilike(like),
             models.Expense.reference_no.ilike(like),
+            models.Expense.receipt_no.ilike(like),
         ))
     if category_id:
         query = query.filter(models.Expense.category_id == category_id)
