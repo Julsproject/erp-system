@@ -10,7 +10,7 @@ A return has no staging — it removes stock immediately, same as before.
 import json
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-from urllib.parse import quote
+from urllib.parse import quote, quote_plus
 
 from fastapi import APIRouter, Depends, Form, Request, status as http_status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -114,6 +114,27 @@ EDIT_PAYMENT_ERRORS = {
     "invalid": "Choose a valid payment method.",
     "posting": "No account is mapped for that payment method in Accounting Setup — nothing was changed.",
 }
+
+
+def _duplicate_dr(db: Session, supplier_id, invoice_no, exclude_id=None):
+    """The delivery already saved under this supplier's DR/invoice #, if any
+    — so the same DR can't be encoded twice and its stock and payable
+    doubled. Per supplier (two suppliers' DR books can share numbers), on
+    receivings only (a return may quote the DR it's returning against), and
+    ignoring case and spaces ("dr 1234" = "DR1234"); cancelled ones don't
+    count, so a cancelled delivery can be re-encoded properly."""
+    key = "".join((invoice_no or "").split()).upper()
+    if not supplier_id or not key:
+        return None
+    query = db.query(models.Purchase).filter(
+        models.Purchase.supplier_id == supplier_id,
+        models.Purchase.txn_type == "receive",
+        models.Purchase.status != "cancelled",
+        func.upper(func.replace(models.Purchase.invoice_no, " ", "")) == key,
+    )
+    if exclude_id:
+        query = query.filter(models.Purchase.id != exclude_id)
+    return query.order_by(models.Purchase.id).first()
 
 
 def _can_edit_purchase_items(db: Session, purchase: "models.Purchase"):
@@ -744,6 +765,14 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
     supplier_id = int(supplier_id) if supplier_id else None
     if not supplier_id:
         return JSONResponse({"ok": False, "error": "Choose a supplier."}, status_code=400)
+    if txn_type == "receive":
+        dup = _duplicate_dr(db, supplier_id, data.get("invoice_no"))
+        if dup:
+            return JSONResponse({"ok": False, "error": (
+                f"DR/Invoice # {dup.invoice_no} is already saved for this supplier as {dup.ref_no}"
+                f"{' (' + dup.delivery_date + ')' if dup.delivery_date else ''}. "
+                "Check that delivery instead of encoding it twice."
+            )}, status_code=400)
 
     # Optional backdating for a purchase entered after the fact — lands it on
     # the day it happened in every date-based report; blank keeps live 'now'.
@@ -1520,6 +1549,11 @@ def edit_purchase_details(
 
     if (new_supplier_id, new_invoice_no, new_delivery_date) == (old_supplier_id, old_invoice_no, old_delivery_date) and not vat_changed:
         return _back()
+
+    if purchase.txn_type == "receive" and (new_supplier_id, new_invoice_no) != (old_supplier_id, old_invoice_no):
+        dup = _duplicate_dr(db, new_supplier_id, new_invoice_no, exclude_id=purchase.id)
+        if dup:
+            return _back(quote_plus(f"DR/Invoice # {dup.invoice_no} is already saved for this supplier as {dup.ref_no}."))
 
     if vat_changed:
         block_reason = _can_edit_purchase_items(db, purchase)
