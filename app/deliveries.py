@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from . import audit, models
 from .database import get_db
 from .deps import get_current_user, safe_back_url, url_with
+from .search_utils import invoice_display_ilike
 from .templating import templates
 
 router = APIRouter()
@@ -109,7 +110,7 @@ def list_deliveries(
             models.Delivery.delivery_no.ilike(like),
             models.Delivery.recipient_name.ilike(like),
             models.Delivery.driver_name.ilike(like),
-            models.Sale.invoice_no.ilike(like),
+            invoice_display_ilike(models.Sale.receipt_type, models.Sale.invoice_no, q),
         ))
     if df:
         query = query.filter(_local_date(models.Delivery.created_at) >= df)

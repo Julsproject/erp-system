@@ -93,6 +93,19 @@
         {% endif %}
       </tr>
       {% endfor %}
+      {% for sale in si_only %}
+      {# Already settled — no payment checkbox, only the Output VAT tick, for
+         an SI written when the customer collects it (see credits.collect). #}
+      <tr data-invoice="{{ sale.invoice_no|lower }}">
+        <td></td>
+        <td class="strong">{{ (sale.receipt_type or '') ~ sale.invoice_no }}</td>
+        <td>{{ sale.created_at.strftime('%b %d, %Y') if sale.created_at else '' }}</td>
+        <td class="num muted">paid</td>
+        <td>
+          <input type="checkbox" class="vatChk" name="dr_sale_ids" value="{{ sale.id }}" data-total="{{ sale.total }}" onchange="updateSiTotal()" form="issueSiForm">
+        </td>
+      </tr>
+      {% endfor %}
       <tr id="noInvoiceMatch" class="empty" style="display:none;">
         <td colspan="{{ 5 if si_eligible_ids else 4 }}" class="empty">No invoice matches your search.</td>
       </tr>
@@ -144,7 +157,7 @@
   {% if si_eligible_ids %}
   <div class="card" style="max-width:340px;flex:1;min-width:280px;">
     <p class="muted" style="margin:0 0 10px;font-size:12.5px;">
-      A Delivery Receipt never carries VAT on its own — tick the ones above whose VAT you need to formally recognize now, then issue the SI that documents them.
+      A Delivery Receipt never carries VAT on its own — tick the ones above whose VAT you need to formally recognize now, then issue the SI that documents them. Rows marked <strong>paid</strong> can still be ticked: an SI is paperwork, so issuing it doesn't change what was collected.
     </p>
     <label>SI Invoice # <span class="muted">(new — from the SI booklet)</span>
       <input name="si_invoice_no" type="text" placeholder="e.g. 000210" autocomplete="off" form="issueSiForm">

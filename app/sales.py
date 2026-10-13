@@ -17,6 +17,7 @@ from .database import get_db
 from urllib.parse import quote
 
 from .deps import get_current_user, is_staff, safe_back_url
+from .search_utils import invoice_display_ilike
 from .templating import templates
 
 router = APIRouter()
@@ -155,9 +156,11 @@ def _filtered_sales_query(db: Session, q: str, type_filter: str, date_from, date
     if q:
         like = f"%{q}%"
         query = query.filter(or_(
-            models.Sale.invoice_no.ilike(like),
+            invoice_display_ilike(models.Sale.receipt_type, models.Sale.invoice_no, q),
             models.Sale.customer_name.ilike(like),
             models.Sale.payments.any(models.Payment.ref_no.ilike(like)),
+            models.Sale.settlements.any(models.ReceivableSettlement.ref_no.ilike(like)),
+            models.Sale.settlements.any(models.ReceivableSettlement.cheque_no.ilike(like)),
         ))
     if type_filter == "sale":
         # An exchange is labeled "Sale x Exchange" precisely because it
@@ -487,7 +490,10 @@ def receivables(
     )
     if q:
         like = f"%{q}%"
-        query = query.filter(or_(models.Sale.invoice_no.ilike(like), models.Sale.customer_name.ilike(like)))
+        query = query.filter(or_(
+            invoice_display_ilike(models.Sale.receipt_type, models.Sale.invoice_no, q),
+            models.Sale.customer_name.ilike(like),
+        ))
     query, period = _date_filter(query, date_from, date_to)
 
     total_count, total_credit = query.with_entities(

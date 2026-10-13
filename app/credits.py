@@ -14,6 +14,7 @@ from .database import get_db
 from .deps import get_current_user, is_admin, is_staff, safe_back_url, url_with
 from .pos import _invoice_taken, _money, _vat_of
 from .sales import MANILA, SETTLE_METHODS, _resolve_settlement_datetime
+from .search_utils import invoice_display_ilike
 from .templating import templates
 
 DR_BOOKLETS = ("DRS", "DRB")
@@ -146,7 +147,7 @@ def credit_references(
             or_(
                 models.ReceivableSettlement.ref_no.ilike(f"%{q}%"),
                 models.ReceivableSettlement.cheque_no.ilike(f"%{q}%"),
-                models.Sale.invoice_no.ilike(f"%{q}%"),
+                invoice_display_ilike(models.Sale.receipt_type, models.Sale.invoice_no, q),
                 models.Customer.name.ilike(f"%{q}%"),
             )
         )
@@ -402,21 +403,32 @@ def _render_collect(request: Request, db: Session, user, *, q: str = "", custome
     owed = []
     total = Decimal("0")
     si_eligible_ids = set()
+    si_only = []
     if customer:
         owed = _outstanding_sales(db, customer.id)
         total = sum((o for _, o in owed), Decimal("0"))
-        # A DR can have Output VAT recognized (an SI issued against it) once
-        # it's still outstanding here and nothing has already covered it —
-        # see issue_si. A plain SI invoice never needs this (it already
-        # carries its own VAT from encoding).
+        # A DR can have Output VAT recognized (an SI issued against it) as
+        # long as nothing has already covered it — see issue_si. A plain SI
+        # invoice never needs this (it already carries its own VAT from
+        # encoding). Already-paid DRs count too: the shop encodes the
+        # payment first and writes the SI when the customer collects it, so
+        # they're listed below the outstanding ones for ticking.
         dr_ids = [s.id for s, _ in owed if (s.receipt_type or "").upper() in DR_BOOKLETS]
-        already_covered = set()
-        if dr_ids:
-            already_covered = {
-                row[0] for row in db.query(models.SiApplication.dr_sale_id)
-                .filter(models.SiApplication.dr_sale_id.in_(dr_ids)).all()
-            }
-        si_eligible_ids = set(dr_ids) - already_covered
+        owed_ids = {s.id for s, _ in owed}
+        si_only = [
+            s for s in db.query(models.Sale)
+            .filter(models.Sale.customer_id == customer.id,
+                    models.Sale.is_voided.is_(False),
+                    func.upper(models.Sale.receipt_type).in_(DR_BOOKLETS))
+            .order_by(models.Sale.created_at.desc())
+            .all()
+            if s.id not in owed_ids
+        ]
+        covered_rows = db.query(models.SiApplication.dr_sale_id).filter(
+            models.SiApplication.dr_sale_id.in_(dr_ids + [s.id for s in si_only] or [0])).all()
+        already_covered = {row[0] for row in covered_rows}
+        si_only = [s for s in si_only if s.id not in already_covered]
+        si_eligible_ids = (set(dr_ids) - already_covered) | {s.id for s in si_only}
     elif q:
         matches = (
             db.query(models.Customer)
@@ -433,7 +445,7 @@ def _render_collect(request: Request, db: Session, user, *, q: str = "", custome
         {
             "request": request, "app_name": request.app.title, "user": user,
             "q": q, "customer": customer, "matches": matches, "match_totals": match_totals,
-            "owed": owed, "total": total, "methods": SETTLE_METHODS,
+            "owed": owed, "total": total, "methods": SETTLE_METHODS, "si_only": si_only,
             "si_eligible_ids": si_eligible_ids, "si_error": si_error,
             "today_iso": datetime.now(MANILA).date().isoformat(),
             "is_admin": is_admin(user), "error": error, "posted": posted,
@@ -485,7 +497,6 @@ def issue_si(
     # Re-derive eligibility server-side — never trust which boxes the client
     # says were checked. Same rule as the GET page: still outstanding for
     # this customer, a DR booklet, and not already covered by another SI.
-    owed_ids = {s.id for s, _ in _outstanding_sales(db, customer.id)}
     drs = (
         db.query(models.Sale)
         .filter(models.Sale.id.in_(ids), models.Sale.customer_id == customer.id)
@@ -497,7 +508,7 @@ def issue_si(
     }
     drs = [
         s for s in drs
-        if s.id in owed_ids and (s.receipt_type or "").upper() in DR_BOOKLETS and s.id not in already_covered
+        if not s.is_voided and (s.receipt_type or "").upper() in DR_BOOKLETS and s.id not in already_covered
     ]
     if not drs:
         return _back("None of the selected invoices are eligible for an SI anymore — refresh and try again.")
