@@ -45,7 +45,16 @@
           </span>
         </div>
         <div class="totals-row">
-          <span><label class="vat-label"><input type="checkbox" id="vatOn" {{ 'checked' if vat_applied }} onchange="computeTotals()"> VAT (12%) · included</label></span>
+          {# Same booklet rule as the POS and pos.edit_sale_items: an SI always
+             carries VAT, a DR never can — only other receipts are a choice. #}
+          {% set booklet = (sale.receipt_type or '')|upper %}
+          <span><label class="vat-label"><input type="checkbox" id="vatOn"
+            {{ 'checked' if vat_applied or booklet == 'SI' }}
+            {{ 'disabled' if booklet in ('SI', 'DRS', 'DRB') }}
+            onchange="computeTotals()"> VAT (12%) · included
+            {% if booklet == 'SI' %}<span class="muted" style="font-size:12px;">— always on an SI</span>
+            {% elif booklet in ('DRS', 'DRB') %}<span class="muted" style="font-size:12px;">— never on a DR</span>{% endif %}
+          </label></span>
           <span id="tVat">₱0.00</span>
         </div>
         <div class="totals-row grand"><span>Total</span><span id="tTotal">₱0.00</span></div>
@@ -65,7 +74,7 @@
 </div>
 
 <script>
-const VAT_RATE = 12, VAT_DIV = 1.12;
+const VAT_RATE = 0.12, VAT_DIV = 1.12;   // VAT is inclusive: total x 12/112
 const saleId = {{ sale.id }};
 let cart = {{ lines_json|safe }}.map(function (l) {
   return {

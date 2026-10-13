@@ -864,6 +864,11 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
     # client sent (the UI already disables this, this is the real guard).
     if (receipt_type or "").strip().upper() in ("DRS", "DRB"):
         vat_applied = False
+    # The mirror image: an SI is the VAT receipt, so it always carries VAT —
+    # 51 SIs had been saved with the box simply left unticked, quietly
+    # understating Output VAT. The UI ticks and locks it; this is the guard.
+    elif (receipt_type or "").strip().upper() == "SI":
+        vat_applied = True
     encoded_by_id = int(encoded_by_id) if encoded_by_id else None
     sale = models.Sale(
         invoice_no=invoice_no, receipt_type=(receipt_type or "").strip() or None,
@@ -2896,6 +2901,11 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
     if qty_err:
         return JSONResponse({"ok": False, "error": qty_err}, status_code=400)
     vat_applied = bool(data.get("vat_applied"))
+    booklet = (sale.receipt_type or "").strip().upper()
+    if booklet in ("DRS", "DRB"):
+        vat_applied = False          # same booklet rule as _finalize_sale
+    elif booklet == "SI":
+        vat_applied = True
     discount_total = _dec(data.get("discount_total"))
 
     old_total = sale.total

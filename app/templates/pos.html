@@ -589,9 +589,13 @@ function enforceVatBooklet() {
   const vatOn = document.getElementById('vatOn');
   const hint = document.getElementById('vatDrHint');
   const isDr = ['DRS', 'DRB'].includes(receiptTypeBox.value);
-  vatOn.disabled = isDr;
+  const isSi = receiptTypeBox.value === 'SI';
+  // A DR can never carry VAT; an SI always does (it IS the VAT receipt), so
+  // it's ticked and locked rather than left to be remembered.
+  vatOn.disabled = isDr || isSi;
   hint.style.display = isDr ? 'inline' : 'none';
   if (isDr) vatOn.checked = false;
+  if (isSi) vatOn.checked = true;
 }
 
 async function onReceiptTypeChange() {
