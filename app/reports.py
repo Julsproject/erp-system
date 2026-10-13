@@ -143,9 +143,14 @@ def _pl_data(db: Session, period_start: date, period_end: date):
     owner already sees there: Revenue = net sales (sale + refund + exchange
     totals); Gross Profit = revenue from 'sale' lines minus their frozen cost.
     An SI ("si") is left out of both: it only re-documents DRs already
-    counted as sales (credits.issue_si), so adding it counted them twice."""
+    counted as sales (credits.issue_si), so adding it counted them twice.
+
+    Everything here is NET OF VAT, like the ledger P&L (accounting.
+    _pl_ledger_data): Output VAT collected on a sale is owed to the BIR, not
+    income, and Input VAT paid on an expense is claimed back, not a cost —
+    counting either as profit overstated it on both sides."""
     revenue = (
-        db.query(func.coalesce(func.sum(models.Sale.total), 0))
+        db.query(func.coalesce(func.sum(models.Sale.total - models.Sale.vat_amount), 0))
         .filter(
             _local_date(models.Sale.created_at).between(period_start, period_end),
             models.Sale.is_voided.is_(False),
@@ -155,6 +160,29 @@ def _pl_data(db: Session, period_start: date, period_end: date):
     )
     revenue = Decimal(str(revenue or 0))
 
+    # An SI issued later over earlier DRs recognises VAT on them in ITS own
+    # period (credits.issue_si / accounting.post_si_conversion debits revenue
+    # for exactly this), so that VAT comes out of this period's goods sales
+    # too — otherwise the DR's full gross would stay counted as profit.
+    si_vat = (
+        db.query(func.coalesce(func.sum(models.Sale.vat_amount), 0))
+        .filter(
+            models.Sale.txn_type == "si",
+            models.Sale.is_voided.is_(False),
+            _local_date(models.Sale.created_at).between(period_start, period_end),
+        )
+        .scalar()
+    )
+    # VAT sits on the sale, not on its lines, so it comes off the line totals here.
+    sale_vat = (
+        db.query(func.coalesce(func.sum(models.Sale.vat_amount), 0))
+        .filter(
+            models.Sale.txn_type == "sale",
+            models.Sale.is_voided.is_(False),
+            _local_date(models.Sale.created_at).between(period_start, period_end),
+        )
+        .scalar()
+    )
     cogs_expr = models.SaleLine.qty * models.SaleLine.unit_factor * models.SaleLine.unit_cost
     goods_sales, cogs = (
         db.query(func.coalesce(func.sum(models.SaleLine.line_total), 0), func.coalesce(func.sum(cogs_expr), 0))
@@ -166,7 +194,8 @@ def _pl_data(db: Session, period_start: date, period_end: date):
         )
         .one()
     )
-    goods_sales = Decimal(str(goods_sales or 0)).quantize(Decimal("0.01"))
+    goods_sales = (Decimal(str(goods_sales or 0)) - Decimal(str(sale_vat or 0))
+                   - Decimal(str(si_vat or 0))).quantize(Decimal("0.01"))
     cogs = Decimal(str(cogs or 0)).quantize(Decimal("0.01"))
     # Inventory shrinkage is part of cost of goods sold, net of any gains —
     # read from the books' own Shrinkage & Losses / Inventory Gain accounts,
@@ -178,7 +207,8 @@ def _pl_data(db: Session, period_start: date, period_end: date):
     gross_profit = goods_sales - total_cogs
 
     expense_rows = (
-        db.query(models.ExpenseCategory.name, func.coalesce(func.sum(models.Expense.amount), 0))
+        db.query(models.ExpenseCategory.name,
+                 func.coalesce(func.sum(models.Expense.amount - func.coalesce(models.Expense.vat_amount, 0)), 0))
         .select_from(models.Expense)
         .outerjoin(models.ExpenseCategory, models.Expense.category_id == models.ExpenseCategory.id)
         .filter(models.Expense.is_voided.is_(False), models.Expense.expense_date.between(period_start, period_end))

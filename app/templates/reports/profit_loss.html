@@ -16,9 +16,9 @@
   <table class="grid" style="box-shadow:none;border:none;">
     <tbody>
       <tr><td class="strong">Revenue</td><td class="num strong">{{ revenue|peso }}</td></tr>
-      <tr><td class="muted" style="padding-left:18px;">net of refunds &amp; exchanges</td><td></td></tr>
+      <tr><td class="muted" style="padding-left:18px;">net of VAT, refunds &amp; exchanges</td><td></td></tr>
       <tr><td style="padding-top:14px;">Sales of goods</td><td class="num" style="padding-top:14px;">{{ goods_sales|peso }}</td></tr>
-      <tr><td class="muted" style="padding-left:18px;">before refunds &amp; exchanges</td><td></td></tr>
+      <tr><td class="muted" style="padding-left:18px;">net of VAT, before refunds &amp; exchanges</td><td></td></tr>
       <tr><td>Less: Cost of goods sold</td><td class="num">({{ total_cogs|peso }})</td></tr>
       <tr><td class="muted" style="padding-left:18px;">Goods sold — what they cost the shop</td><td class="num muted">{{ cogs|peso }}</td></tr>
       <tr><td class="muted" style="padding-left:18px;">Inventory shrinkage, net of gains <a href="/reports/inventory-adjustments">— breakdown →</a></td><td class="num muted {{ 'neg' if shrinkage < 0 }}">{{ shrinkage|peso }}</td></tr>
@@ -28,6 +28,7 @@
   </table>
 
   <h3 class="ex-h" style="margin-top:22px;">Expenses by category</h3>
+  <p class="muted" style="margin:0 0 8px;font-size:12.5px;">Net of VAT — Input VAT on an expense is claimed back, so it isn't a cost.</p>
   <table class="grid" style="box-shadow:none;border:none;">
     <tbody>
       {% for r in expenses_by_category %}
