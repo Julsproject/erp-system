@@ -363,10 +363,25 @@ def post_sale(db: Session, sale: models.Sale, *, method_rows: list, receivable_a
     the cost leg (Dr Cost of Sales / Cr Inventory, see sale_cogs) in the
     same entry — so a void, un-void or item correction that reverses or
     re-posts this entry carries the cost with it automatically."""
+    # Money rows are what was handed over, which on an over-tender is more
+    # than the sale (the rest comes back as change). Only what the shop keeps
+    # belongs in the entry — without this the entry wouldn't balance, and
+    # _finalize_sale swallows that, leaving the sale with no ledger entry at
+    # all (58 August sales were found that way).
+    money_rows = [(m, Decimal(str(a))) for m, a in method_rows if m not in ("receivable", "cheque")]
+    keep = Decimal(str(sale.total or 0)) - Decimal(str(receivable_amount or 0))
+    excess = sum((a for _, a in money_rows), ZERO) - keep
+    if excess > 0:
+        trimmed = []
+        for method, amount in reversed(money_rows):   # change comes out of the last row paid, normally cash
+            take = min(amount, excess)
+            amount, excess = amount - take, excess - take
+            if amount > 0:
+                trimmed.append((method, amount))
+        money_rows = list(reversed(trimmed))
+
     lines = []
-    for method, amount in method_rows:
-        if method in ("receivable", "cheque"):
-            continue  # folded into the single AR line below instead, to avoid one JE line per split
+    for method, amount in money_rows:
         fkey = SALE_FUNCTION_KEYS.get(method)
         if not fkey:
             continue
