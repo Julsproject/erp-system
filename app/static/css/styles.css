@@ -755,15 +755,29 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
 /* overselling */
 .warn-tag { font-size: 10.5px; font-weight: 700; color: var(--warn); background: var(--warn-tint); padding: 2px 6px; border-radius: 6px; margin-left: 4px; }
 .cart-qty.over { border-color: var(--warn); background: var(--warn-tint); }
-/* POS cart: the Item column gets most of the row and long names wrap onto a
-   second line instead of being squeezed by the fixed-width inputs. Scoped to
-   the POS panels so Purchases / Edit Sale carts keep their sizing. */
-.pos-cart-panel .cart-table th, .pos-cart-panel .cart-table td { padding: 10px 8px; }
+/* POS cart: one line per item, so a long cart stays on screen. The name is
+   clipped with an ellipsis (full name is in the row's tooltip) rather than
+   wrapping, and the row's controls are sized to match. Scoped to the POS
+   panels so Purchases / Edit Sale carts keep their roomier sizing. */
+.pos-cart-panel .cart-table th, .pos-cart-panel .cart-table td { padding: 4px 6px; }
+.pos-cart-panel .cart-table th { font-size: 11.5px; }
 .pos-cart-panel .cart-table th.cart-item { width: 40%; }
-.pos-cart-panel .cart-table td.cart-item { white-space: normal; font-size: 16px; font-weight: 700; line-height: 1.3; min-width: 180px; }
-.pos-cart-panel .cart-table td.cart-item .warn-tag { display: table; margin: 4px 0 0; }
-.pos-cart-panel .cart-qty, .pos-cart-panel .cart-price { width: 100px; padding: 12px 10px; }
-.pos-cart-panel .cart-unit { max-width: 120px; }
+.pos-cart-panel .cart-table td.cart-item {
+  font-size: 13px; font-weight: 700; line-height: 1.25; min-width: 120px; max-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pos-cart-panel .cart-table td.cart-item .warn-tag { margin-left: 4px; }
+.pos-cart-panel .cart-qty, .pos-cart-panel .cart-price { width: 86px; padding: 5px 8px; font-size: 13.5px; border-radius: 7px; }
+.pos-cart-panel .cart-unit { max-width: 112px; padding: 4px 6px; font-size: 12px; }
+.pos-cart-panel .cart-disc { width: 58px; padding: 4px 6px; font-size: 12px; }
+.pos-cart-panel .disc-toggle { padding: 2px 5px; font-size: 11px; }
+.pos-cart-panel .cart-table td.num.strong { font-size: 13.5px; }
+/* The unit reminder under the qty box ("whole Piece only") would add a second
+   line to every row — the unit is already shown in the dropdown beside it, so
+   only the ⚠ warning version is kept. */
+.pos-cart-panel .qty-quarter.muted { display: none; }
+.pos-cart-panel .qty-quarter { font-size: 10.5px; line-height: 1.2; }
+.pos-cart-panel .set-price-btn { font-size: 10.5px !important; margin-top: 1px !important; }
 
 /* Parked-sale picker rows ("Saved drafts") */
 .draft-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 9px; margin-bottom: 8px; }
@@ -967,8 +981,8 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
   .cart-qty, .cart-price { width: 84px; font-size: 16px; padding: 10px; }
   .cart-unit, .cart-unit-txt { width: auto; max-width: 116px; }
   .cart-disc, .disc-input { width: 74px; }
-  .pos-cart-panel .cart-qty, .pos-cart-panel .cart-price { width: 84px; }
-  .pos-cart-panel .cart-table td.cart-item { min-width: 140px; }
+  .pos-cart-panel .cart-qty, .pos-cart-panel .cart-price { width: 72px; font-size: 13px; }
+  .pos-cart-panel .cart-table td.cart-item { min-width: 90px; }
   input.line-cost, input.line-total { width: 110px; }
   .refund-foot .pos-complete { min-width: 0; }
 }

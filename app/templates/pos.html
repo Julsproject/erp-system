@@ -878,7 +878,7 @@ function renderCart() {
       escapeHtml(u.label || u.name) + ' (' + peso(u.price) + ')</option>').join('');
     const tr = document.createElement('tr');
     tr.innerHTML =
-      '<td class="strong cart-item">' + escapeHtml(line.product.name) + perPieceTag(line.product) +
+      '<td class="strong cart-item" title="' + escapeHtml(line.product.name) + '">' + escapeHtml(line.product.name) + perPieceTag(line.product) +
         (over ? ' <span class="warn-tag" title="Selling beyond stock (allowed)">⚠ over stock</span>' : '') + '</td>' +
       '<td>' + (line.customPrice ? escapeHtml(unit.name) : '<select class="cart-unit" onchange="setUnit(' + i + ', this.value)">' + opts + '</select>') + '</td>' +
       '<td class="num"><input class="cart-qty' + (over || fractionalCountedLine(line) ? ' over' : '') + '" type="text" inputmode="decimal" autocomplete="off" value="' + fmtQtyInput(line) + '" oninput="setQty(' + i + ', this.value)" onblur="normalizeQty(' + i + ', this)">' +
