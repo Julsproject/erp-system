@@ -100,8 +100,9 @@ def list_expenses(
     if dt:
         query = query.filter(models.Expense.expense_date <= dt)
 
-    total_count, total_amount = query.with_entities(
-        func.count(models.Expense.id), func.coalesce(func.sum(models.Expense.amount), 0)
+    total_count, total_amount, total_vat = query.with_entities(
+        func.count(models.Expense.id), func.coalesce(func.sum(models.Expense.amount), 0),
+        func.coalesce(func.sum(models.Expense.vat_amount), 0),
     ).one()
     pages = max((total_count + PAGE_SIZE - 1) // PAGE_SIZE, 1)
     page = min(page, pages)
@@ -120,6 +121,7 @@ def list_expenses(
             "expenses": expenses, "categories": categories, "category_id": category_id,
             "q": q, "date_from": date_from, "date_to": date_to,
             "total_count": total_count, "total_amount": Decimal(str(total_amount or 0)),
+            "total_vat": Decimal(str(total_vat or 0)),
             "page": page, "pages": pages,
         },
     )

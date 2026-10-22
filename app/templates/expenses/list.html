@@ -19,6 +19,7 @@
 <div class="stat-row">
   <div class="mini-stat"><span class="mini-num">{{ total_count }}</span><span>Transactions</span></div>
   <div class="mini-stat owed"><span class="mini-num">{{ total_amount|peso }}</span><span>Total (this filter)</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ total_vat|peso }}</span><span>Input VAT (this filter)</span></div>
 </div>
 
 {% set qs = '&q=' ~ q|urlencode if q else '' %}
@@ -62,7 +63,7 @@
 <div class="table-wrap">
   <table class="grid">
     <thead>
-      <tr><th>Receipt #</th><th>Date</th><th>Category</th><th>Payee</th><th>Description</th><th>Payment</th><th class="num">Amount</th><th></th></tr>
+      <tr><th>Receipt #</th><th>Date</th><th>Category</th><th>Payee</th><th>Payment</th><th class="num">VAT</th><th class="num">Amount</th><th></th></tr>
     </thead>
     <tbody>
       {% for e in expenses %}
@@ -76,9 +77,11 @@
         </td>
         <td>{{ e.expense_date.strftime('%b %d, %Y') if e.expense_date else '—' }}</td>
         <td>{{ e.category.name if e.category else '—' }}</td>
-        <td>{{ e.payee or '—' }}</td>
-        <td>{{ e.description or '—' }}</td>
+        {# Description moved off the row to make space for VAT — it's on the
+           payee as a tooltip, and in full on Edit / Print. #}
+        <td {% if e.description %}title="{{ e.description }}"{% endif %}>{{ e.payee or '—' }}</td>
         <td>{{ e.payment_method|replace('_',' ')|title }}</td>
+        <td class="num {{ 'muted' if not e.vat_amount }}">{{ e.vat_amount|peso if e.vat_amount else 'no VAT' }}</td>
         <td class="num strong">{{ e.amount|peso }}</td>
         <td class="row-actions">
           <a class="btn-link" href="/expenses/{{ e.id }}/edit?back={{ cur_url|urlencode }}">Edit</a>
