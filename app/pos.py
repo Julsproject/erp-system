@@ -10,7 +10,7 @@ import json
 import re
 from urllib.parse import parse_qsl, urlencode
 from datetime import date, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -201,6 +201,75 @@ def _add_stock(product: models.Product, base_qty: Decimal):
 
 # Whole → Open/Retail → its own Open/Retail (box → kg → rods) at most.
 MAX_OPEN_LEVELS = 2
+
+
+def _make_available(db: Session, product: models.Product, needed_base_qty: Decimal, *, ref: str, note: str, created_at=None):
+    """Bring in stock for `product` from wherever it can legitimately come
+    before it is sold: assembled from its own parts, or opened from the
+    sealed pack it is a counterpart of. Both are value-neutral moves."""
+    _build_from_components(db, product, needed_base_qty, ref=ref, note=note, created_at=created_at)
+    _replenish_from_source(db, product, needed_base_qty, ref=ref, note=note, created_at=created_at)
+
+
+def _build_from_components(db: Session, product: models.Product, needed_base_qty: Decimal, *, ref, note, created_at=None, _depth=0):
+    """A product sold as a made-up set (ProductComponent rows — e.g. an
+    expansion bolt "w/ shield" = 1 bolt + 1 shield) is assembled on the way
+    out: the parts come off their own stock and the set goes on, one
+    movement each, so the shop only ever really holds stock in the parts it
+    buys. Nothing happens if enough sets are already made up on the shelf.
+
+    Parts are themselves made available first (a part can be an Open/Retail
+    item, or a set of its own), and the set's cost becomes its parts' cost
+    added up. A part that runs dry is allowed to go negative, like any other
+    oversell here — see _deduct_stock."""
+    if not product.components or _depth >= MAX_OPEN_LEVELS:
+        return
+    available = (product.beginning_stock or Decimal("0")) + (product.stock_qty or Decimal("0"))
+    if available >= needed_base_qty:
+        return
+    short = needed_base_qty - available
+    build = short.to_integral_value(rounding=ROUND_CEILING)   # sets are counted, never a fraction
+    if build <= 0:
+        return
+
+    extra = {"created_at": created_at} if created_at is not None else {}
+    value_before = available * Decimal(str(product.cost_price or 0))
+    set_cost = Decimal("0")
+    parts = []
+    for comp in product.components:
+        part = db.get(models.Product, comp.component_id, with_for_update=True)
+        if not part:
+            return                       # a missing part — leave the set alone rather than half-build it
+        per_set = Decimal(str(comp.qty or 0))
+        if per_set <= 0:
+            continue
+        take = per_set * build
+        _make_available(db, part, take, ref=ref, note=note, created_at=created_at)
+        set_cost += per_set * Decimal(str(part.cost_price or 0))
+        parts.append((part, take))
+    if not parts:
+        return
+
+    for part, take in parts:
+        part_value = take * Decimal(str(part.cost_price or 0))
+        _deduct_stock(part, take)
+        db.add(models.StockMovement(
+            product_id=part.id, qty_base=-take, reason="repack-out",
+            unit_cost=part.cost_price, value=-part_value,
+            ref=ref, note=f"Used in “{product.name}”"[:255], **extra,
+        ))
+    unit_cost = set_cost.quantize(Decimal("0.01"))
+    _add_stock(product, build)
+    db.add(models.StockMovement(
+        product_id=product.id, qty_base=build, reason="repack-in",
+        unit_cost=unit_cost, value=(unit_cost * build),
+        ref=ref, note="Assembled from its parts"[:255], **extra,
+    ))
+    product.cost_price = unit_cost       # the set is worth exactly what its parts cost
+    stock_books.book_cost_variance(
+        db, product, value_before=value_before, value_added=unit_cost * build,
+        ref=ref, note="Cost reset by assembling from parts", stamp=created_at,
+    )
 
 
 def _replenish_from_source(db: Session, product: models.Product, needed_base_qty: Decimal, *, ref: str, note: str, created_at=None):
@@ -936,7 +1005,7 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
             # pack over from its sealed source first — so both the cost
             # captured just below and the actual deduction reflect the
             # now-replenished stock.
-            _replenish_from_source(db, product, base_qty, ref=_display_invoice(sale), note="Auto-opened for loose sale", created_at=movement_stamp)
+            _make_available(db, product, base_qty, ref=_display_invoice(sale), note="Auto-opened for loose sale", created_at=movement_stamp)
             sale_unit_cost = Decimal(str(product.cost_price or 0))
             _deduct_stock(product, base_qty)
             db.add(models.StockMovement(
@@ -1740,7 +1809,7 @@ def pos_exchange(data: dict, db: Session = Depends(get_db), user=Depends(get_cur
         if product:
             factor = _resolve_unit_factor(product, ln.get("unit_name"), factor)
             base_qty = qty * factor
-            _replenish_from_source(db, product, base_qty, ref=None, note="Auto-opened for loose exchange item")
+            _make_available(db, product, base_qty, ref=None, note="Auto-opened for loose exchange item")
             _deduct_stock(product, base_qty)  # oversell allowed — see _finalize_sale
             ex_sale_cost = Decimal(str(product.cost_price or 0))
             mv = models.StockMovement(
@@ -2316,7 +2385,7 @@ def unvoid_sale(
         product = db.get(models.Product, pid, with_for_update=True)
         if not product or base_qty <= 0:
             continue
-        _replenish_from_source(db, product, base_qty, ref=_display_invoice(sale), note="Auto-opened restoring an un-voided sale")
+        _make_available(db, product, base_qty, ref=_display_invoice(sale), note="Auto-opened restoring an un-voided sale")
         value_before = Decimal(str(product.total_qty or 0)) * Decimal(str(product.cost_price or 0))
         _deduct_stock(product, base_qty)
         unit_cost = unit_cost_by_pid[pid]
@@ -3004,7 +3073,7 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
             # Cost is read after the replenish on purpose — an auto-opened
             # pack can restate cost_price, and this row (plus the SaleLine
             # below) must carry the post-replenish figure, same as checkout.
-            _replenish_from_source(db, product, base_qty, ref=ref, note="Auto-opened for a corrected item", created_at=sale.created_at)
+            _make_available(db, product, base_qty, ref=ref, note="Auto-opened for a corrected item", created_at=sale.created_at)
             _deduct_stock(product, base_qty)
             unit_cost = Decimal(str(product.cost_price or 0))
             db.add(models.StockMovement(

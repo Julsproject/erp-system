@@ -193,6 +193,18 @@ try { localStorage.setItem('last_product_view', {{ ('/products/' ~ product.id ~ 
     </span>
   </label>
 
+  {# Parts this product is made up from, when it's sold as a set (an
+     expansion bolt "w/ shield" = 1 bolt + 1 shield). Selling it assembles
+     it from these — see pos._build_from_components. #}
+  <div class="full">
+    <label>Made up of <span class="muted">— optional, for an item you sell as a set/pair</span></label>
+    <div id="componentRows"></div>
+    <input type="hidden" name="components_json" id="componentsJson" value="">
+    <input type="text" id="componentSearch" placeholder="Search a part to add… e.g. the bolt, then the shield" autocomplete="off">
+    <div id="componentResults" class="pos-results" style="display:none;position:relative;max-height:220px;overflow:auto;z-index:5;"></div>
+    <small class="hint">Selling one of these takes its parts off stock automatically and costs it at the parts' cost added up — so you only keep stock in the parts you actually buy. Leave empty for a normal product.</small>
+  </div>
+
   <div class="full">
     <label>Replenish from (sealed source) <span class="muted">— optional</span>
       <input type="text" id="replenishSearch" placeholder="Search a product to auto-open a pack from…" autocomplete="off"
@@ -470,6 +482,66 @@ try { localStorage.setItem('last_product_view', {{ ('/products/' ~ product.id ~ 
   calcTotal();
   updateBaseLabels();
   recalcPrices();
+
+  /* ---- "Made up of": the parts a set is assembled from ---- */
+  let components = {{ components_json|safe }};
+  function renderComponents() {
+    const box = document.getElementById('componentRows');
+    box.innerHTML = '';
+    components.forEach((c, i) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:6px;';
+      row.innerHTML = '<input type="number" step="any" min="0" value="' + c.qty + '" style="width:80px;" ' +
+          'oninput="setComponentQty(' + i + ', this.value)" title="How many of this part go into one set">' +
+        '<span class="muted" style="min-width:48px;">' + escapeHtml(c.unit || '') + '</span>' +
+        '<span style="flex:1;font-weight:600;">' + escapeHtml(c.name) + '</span>' +
+        '<button type="button" class="btn-link danger" onclick="removeComponent(' + i + ')">✕</button>';
+      box.appendChild(row);
+    });
+    document.getElementById('componentsJson').value = JSON.stringify(
+      components.map(c => ({ id: c.id, qty: c.qty })));
+  }
+  function setComponentQty(i, v) { components[i].qty = v; renderComponents(); }
+  function removeComponent(i) { components.splice(i, 1); renderComponents(); }
+  const componentSearchEl = document.getElementById('componentSearch');
+  let componentTimer = null;
+  if (componentSearchEl) {
+    componentSearchEl.addEventListener('input', () => {
+      clearTimeout(componentTimer);
+      componentTimer = setTimeout(runComponentSearch, 180);
+    });
+    componentSearchEl.addEventListener('blur', () => {
+      setTimeout(() => { document.getElementById('componentResults').style.display = 'none'; }, 150);
+    });
+    renderComponents();
+  }
+  async function runComponentSearch() {
+    const q = componentSearchEl.value.trim();
+    const box = document.getElementById('componentResults');
+    if (!q) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    const res = await fetch('/purchases/search?q=' + encodeURIComponent(q));
+    const data = await res.json();
+    const selfId = {{ product.id if product else 'null' }};
+    const taken = components.map(c => c.id);
+    const products = (data.products || []).filter(p => p.id !== selfId && taken.indexOf(p.id) < 0);
+    if (!products.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.innerHTML = '';
+    products.forEach(p => {
+      const el = document.createElement('button');
+      el.type = 'button'; el.className = 'pos-item';
+      el.onmousedown = (e) => e.preventDefault();
+      el.onclick = () => {
+        components.push({ id: p.id, name: p.name, unit: p.base_unit, qty: 1 });
+        componentSearchEl.value = '';
+        box.style.display = 'none';
+        renderComponents();
+      };
+      el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span></div>' +
+        '<div class="pos-item-sub">' + escapeHtml(p.base_unit) + ' · cost ' + (p.cost_price || 0).toFixed(2) + '</div>';
+      box.appendChild(el);
+    });
+    box.style.display = 'block';
+  }
 
   /* ---- Replenish-from link (open/retail counterpart) ---- */
   function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }

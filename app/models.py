@@ -232,6 +232,14 @@ class Product(Base):
     unit_type = relationship("UnitType")
     shelf = relationship("Shelf")
     replenish_from = relationship("Product", remote_side=[id], backref="open_items")
+    # The parts this product is assembled from, when it is sold as a set.
+    components = relationship(
+        "ProductComponent",
+        foreign_keys="ProductComponent.parent_id",
+        back_populates="parent",
+        cascade="all, delete-orphan",
+        order_by="ProductComponent.sort_order",
+    )
     units = relationship(
         "ProductUnit",
         back_populates="product",
@@ -328,6 +336,27 @@ class Product(Base):
                 remaining -= qty * factor
             breakdown.append({"name": name, "qty": qty})
         return breakdown
+
+
+class ProductComponent(Base):
+    """One part of a product that is sold as a made-up pair or set — e.g.
+    "EXPANSION BOLT 3/8 w/shield" is 1 bolt + 1 shield, both bought
+    separately. Selling the parent assembles it from these first (see
+    pos._build_from_components), so stock is only ever really held in the
+    parts, and the parent's cost is the parts' cost added up.
+
+    qty is in the component's OWN base units per 1 parent base unit.
+    """
+    __tablename__ = "product_components"
+
+    id = Column(Integer, primary_key=True)
+    parent_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
+    component_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    qty = Column(Numeric(18, 8), nullable=False, server_default="1")
+    sort_order = Column(Integer, nullable=False, server_default="0")
+
+    parent = relationship("Product", foreign_keys=[parent_id], back_populates="components")
+    component = relationship("Product", foreign_keys=[component_id])
 
 
 class ProductUnit(Base):

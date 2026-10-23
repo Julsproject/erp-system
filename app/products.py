@@ -1091,6 +1091,14 @@ def _render_form(request, db, user, product=None, error=None, back=""):
             "unit_types": unit_types,
             "shelves": shelves,
             "adjustment_reasons": ADJUSTMENT_REASONS,
+            # The parts a set is made up from, for the "Made up of" box.
+            "components_json": json.dumps([
+                {"id": c.component_id,
+                 "name": c.component.name if c.component else "",
+                 "unit": (c.component.unit_type.name if c.component and c.component.unit_type else ""),
+                 "qty": float(c.qty or 0)}
+                for c in (product.components if product else [])
+            ]),
             # Room for another Open/Retail level under this one (box → kg → piece)?
             "can_add_open_level": bool(product and product.id and _open_levels_above(db, product) < MAX_OPEN_LEVELS),
             "error": error,
@@ -1498,6 +1506,39 @@ def _save_from_form(product: models.Product, db: Session, form):
     else:
         product.replenish_from_id = None
         product.replenish_factor = None
+
+    # "Made up of" — the parts this product is assembled from when sold as a
+    # set (see models.ProductComponent). Replaced wholesale on each save, the
+    # same way the units ladder below is.
+    raw_components = (form.get("components_json") or "").strip()
+    if raw_components:
+        try:
+            rows = json.loads(raw_components)
+        except ValueError:
+            raise ValueError("Couldn't read the parts list — remove the parts and add them again.")
+        product.components = []
+        seen = set()
+        for order, row in enumerate(rows if isinstance(rows, list) else []):
+            try:
+                comp_id = int(row.get("id"))
+            except (TypeError, ValueError):
+                continue
+            qty = _to_decimal(str(row.get("qty") or "0"))
+            if comp_id in seen or qty <= 0:
+                continue
+            part = db.get(models.Product, comp_id)
+            if not part:
+                continue
+            if product.id and comp_id == product.id:
+                raise ValueError("A product can't be made up of itself.")
+            # Flat one level, like the Open/Retail link: a part that is itself
+            # a set would make assembling chase a chain (and could loop).
+            if part.components:
+                raise ValueError(f"“{part.name}” is itself made up of other parts — pick its parts directly instead.")
+            seen.add(comp_id)
+            product.components.append(models.ProductComponent(component_id=comp_id, qty=qty, sort_order=order))
+    elif product.id:
+        product.components = []
 
     # Units ladder (extra sellable units). Parallel arrays from the form.
     # Each row's factor can be typed relative to another unit already on the
