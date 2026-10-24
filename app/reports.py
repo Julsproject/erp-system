@@ -14,7 +14,7 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from sqlalchemy import and_, func, not_
+from sqlalchemy import and_, case, func, not_
 from sqlalchemy.orm import Session, aliased
 
 from . import models, pricing, settings_store
@@ -139,92 +139,68 @@ def _ledger_shrinkage(db: Session, period_start: date, period_end: date) -> Deci
 
 
 def _pl_data(db: Session, period_start: date, period_end: date):
-    """Same formulas the Dashboard uses, so the numbers agree with what the
-    owner already sees there: Revenue = net sales (sale + refund + exchange
-    totals); Gross Profit = revenue from 'sale' lines minus their frozen cost.
-    An SI ("si") is left out of both: it only re-documents DRs already
-    counted as sales (credits.issue_si), so adding it counted them twice.
+    """The P&L straight from the ledger — the same journal entries Accounting
+    → Profit & Loss adds up, so the two always agree to the peso. (It used
+    to be rebuilt from receipts and expense records with its own rules for
+    VAT, voids, refunds and SIs, and never quite matched the books.)
 
-    Everything here is NET OF VAT, like the ledger P&L (accounting.
-    _pl_ledger_data): Output VAT collected on a sale is owed to the BIR, not
-    income, and Input VAT paid on an expense is claimed back, not a cost —
-    counting either as profit overstated it on both sides."""
-    revenue = (
-        db.query(func.coalesce(func.sum(models.Sale.total - models.Sale.vat_amount), 0))
-        .filter(
-            _local_date(models.Sale.created_at).between(period_start, period_end),
-            models.Sale.is_voided.is_(False),
-            models.Sale.txn_type != "si",
-        )
-        .scalar()
-    )
-    revenue = Decimal(str(revenue or 0))
+    Sales = revenue accounts, net of VAT and returns (Inventory Gain left
+    out — it's netted into cost below). Cost of goods sold = Cost of Sales
+    accounts, plus inventory shrinkage net of gains. Expenses = expense
+    accounts, shown by Expense category where an entry came from an Expense
+    record, otherwise by account (payroll, etc.). Everything by journal
+    date; drafts are left out, a reversed entry and its reversal cancel.
+    "unbooked" lists receipts and expenses in the period that never reached
+    the books, so a gap in the ledger shows instead of hiding."""
+    JE, JL, Acc = models.JournalEntry, models.JournalLine, models.Account
+    in_period = (JE.status != "draft", JE.txn_date.between(period_start, period_end))
+    gain_id = db.query(models.AccountMapping.account_id).filter_by(function_key="INV_ADJ_GAIN").scalar()
+    loss_id = db.query(models.AccountMapping.account_id).filter_by(function_key="INV_ADJ_LOSS").scalar()
 
-    # An SI issued later over earlier DRs recognises VAT on them in ITS own
-    # period (credits.issue_si / accounting.post_si_conversion debits revenue
-    # for exactly this), so that VAT comes out of this period's goods sales
-    # too — otherwise the DR's full gross would stay counted as profit.
-    si_vat = (
-        db.query(func.coalesce(func.sum(models.Sale.vat_amount), 0))
-        .filter(
-            models.Sale.txn_type == "si",
-            models.Sale.is_voided.is_(False),
-            _local_date(models.Sale.created_at).between(period_start, period_end),
-        )
-        .scalar()
-    )
-    # VAT sits on the sale, not on its lines, so it comes off the line totals here.
-    sale_vat = (
-        db.query(func.coalesce(func.sum(models.Sale.vat_amount), 0))
-        .filter(
-            models.Sale.txn_type == "sale",
-            models.Sale.is_voided.is_(False),
-            _local_date(models.Sale.created_at).between(period_start, period_end),
-        )
-        .scalar()
-    )
-    cogs_expr = models.SaleLine.qty * models.SaleLine.unit_factor * models.SaleLine.unit_cost
-    goods_sales, cogs = (
-        db.query(func.coalesce(func.sum(models.SaleLine.line_total), 0), func.coalesce(func.sum(cogs_expr), 0))
-        .join(models.Sale, models.SaleLine.sale_id == models.Sale.id)
-        .filter(
-            models.Sale.txn_type == "sale",
-            models.Sale.is_voided.is_(False),
-            _local_date(models.Sale.created_at).between(period_start, period_end),
-        )
-        .one()
-    )
-    goods_sales = (Decimal(str(goods_sales or 0)) - Decimal(str(sale_vat or 0))
-                   - Decimal(str(si_vat or 0))).quantize(Decimal("0.01"))
-    cogs = Decimal(str(cogs or 0)).quantize(Decimal("0.01"))
-    # Inventory shrinkage is part of cost of goods sold, net of any gains —
-    # read from the books' own Shrinkage & Losses / Inventory Gain accounts,
-    # so it's exactly what the ledger P&L counts. Stock counts that only
-    # caught up on stock never encoded (opening inventory) post to Inventory
-    # Corrections (equity) instead and are not profit, so they stay out here.
+    def total(account_type, exclude=None):
+        q = (db.query(func.coalesce(func.sum(JL.debit - JL.credit), 0))
+             .join(JE, JL.entry_id == JE.id).join(Acc, JL.account_id == Acc.id)
+             .filter(Acc.account_type == account_type, *in_period))
+        if exclude:
+            q = q.filter(JL.account_id != exclude)
+        return Decimal(str(q.scalar() or 0)).quantize(Decimal("0.01"))
+
+    sales = -total("revenue", exclude=gain_id)
+    cogs = total("cost_of_sales", exclude=loss_id)
     shrinkage = _ledger_shrinkage(db, period_start, period_end)
     total_cogs = cogs + shrinkage
-    gross_profit = goods_sales - total_cogs
+    gross_profit = sales - total_cogs
 
-    expense_rows = (
-        db.query(models.ExpenseCategory.name,
-                 func.coalesce(func.sum(models.Expense.amount - func.coalesce(models.Expense.vat_amount, 0)), 0))
-        .select_from(models.Expense)
+    # Expenses: an entry from an Expense record (or the reversal of one, when
+    # it's voided or edited) is listed under that Expense's category; any
+    # other entry (payroll, manual) under its account's name.
+    original = aliased(JE)
+    expense_id = case((JE.source_type == "expense", JE.source_id),
+                      (original.source_type == "expense", original.source_id), else_=None)
+    rows = (
+        db.query(Acc.name, models.ExpenseCategory.name, func.sum(JL.debit - JL.credit))
+        .select_from(JL)
+        .join(JE, JL.entry_id == JE.id).join(Acc, JL.account_id == Acc.id)
+        .outerjoin(original, JE.is_reversal_of_id == original.id)
+        .outerjoin(models.Expense, models.Expense.id == expense_id)
         .outerjoin(models.ExpenseCategory, models.Expense.category_id == models.ExpenseCategory.id)
-        .filter(models.Expense.is_voided.is_(False), models.Expense.expense_date.between(period_start, period_end))
-        .group_by(models.ExpenseCategory.name)
+        .filter(Acc.account_type == "expense", *in_period)
+        .group_by(Acc.name, models.ExpenseCategory.name)
         .all()
     )
+    by_name = {}
+    for account_name, category_name, amount in rows:
+        key = category_name or account_name
+        by_name[key] = by_name.get(key, Decimal("0")) + Decimal(str(amount or 0))
     expenses_by_category = sorted(
-        [{"name": name or "Uncategorized", "amount": Decimal(str(amt or 0))} for name, amt in expense_rows]
-        + payroll_by_account(db, period_start, period_end),
+        [{"name": k, "amount": v.quantize(Decimal("0.01"))} for k, v in by_name.items() if v],
         key=lambda r: r["amount"], reverse=True,
     )
     total_expenses = sum((r["amount"] for r in expenses_by_category), ZERO)
 
     return {
-        "revenue": revenue,
-        "goods_sales": goods_sales,
+        "revenue": sales,
+        "goods_sales": sales,
         "cogs": cogs,
         "shrinkage": shrinkage,
         "total_cogs": total_cogs,
@@ -232,7 +208,31 @@ def _pl_data(db: Session, period_start: date, period_end: date):
         "expenses_by_category": expenses_by_category,
         "total_expenses": total_expenses,
         "net_profit": gross_profit - total_expenses,
+        "unbooked": _unbooked(db, period_start, period_end),
     }
+
+
+def _unbooked(db: Session, period_start: date, period_end: date) -> dict:
+    """Receipts and expenses dated in the period with no posted journal
+    entry — they're missing from the ledger, so from this P&L too."""
+    JE = models.JournalEntry
+    posted_sales = db.query(JE.source_id).filter(JE.source_type == "sale", JE.status.in_(("posted", "reversed")))
+    sales = (
+        db.query(models.Sale)
+        .filter(models.Sale.is_voided.is_(False),
+                _local_date(models.Sale.created_at).between(period_start, period_end),
+                ~models.Sale.id.in_(posted_sales))
+        .order_by(models.Sale.created_at).all()
+    )
+    posted_exp = db.query(JE.source_id).filter(JE.source_type == "expense", JE.status.in_(("posted", "reversed")))
+    expenses = (
+        db.query(models.Expense)
+        .filter(models.Expense.is_voided.is_(False),
+                models.Expense.expense_date.between(period_start, period_end),
+                ~models.Expense.id.in_(posted_exp))
+        .order_by(models.Expense.expense_date).all()
+    )
+    return {"sales": sales, "expenses": expenses}
 
 
 @router.get("/reports/profit-loss", response_class=HTMLResponse)
@@ -293,8 +293,7 @@ def export_profit_loss(
     ws.append([f"Profit & Loss — {period_start.isoformat()} to {period_end.isoformat()}"])
     ws.append([])
     header_row(["Line", "Amount"])
-    ws.append(["Revenue (net of refunds/exchanges)", float(data["revenue"])])
-    ws.append(["Sales of goods (before refunds & exchanges)", float(data["goods_sales"])])
+    ws.append(["Sales (net of VAT, returns & exchanges — from the books)", float(data["revenue"])])
     ws.append(["Cost of goods sold — goods sold", float(-data["cogs"])])
     ws.append(["Cost of goods sold — inventory shrinkage (net of gains)", float(-data["shrinkage"])])
     ws.append(["Less: Total cost of goods sold", float(-data["total_cogs"])])
@@ -1692,7 +1691,7 @@ def _weekly_summary_data(db: Session, period_start: date, period_end: date):
         .filter(models.Expense.is_voided.is_(False), models.Expense.expense_date.between(period_start, period_end))
         .scalar()
     )
-    expenses_paid = Decimal(str(expenses_paid or 0)) + payroll_total(db, period_start, period_end)
+    expenses_paid = pl["total_expenses"]   # from the books, same as the P&L above
 
     top_products = _sales_by_product(db, period_start, period_end)[:8]
 

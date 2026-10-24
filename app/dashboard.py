@@ -167,14 +167,12 @@ def dashboard(
     month_start = today.replace(day=1)
 
     # ---- headline numbers ------------------------------------------------
-    period_expenses = (
-        db.query(func.coalesce(func.sum(models.Expense.amount), 0))
-        .filter(models.Expense.is_voided.is_(False), models.Expense.expense_date.between(period_start, period_end))
-        .scalar()
-    )
-    from .reports import payroll_total   # payroll is booked as journal entries, not Expenses
-    period_expenses = Decimal(str(period_expenses or 0)) + payroll_total(db, period_start, period_end)
-    period_profit = _profit_between(db, period_start, period_end)
+    # Profit and expenses come from the books, same as both P&L reports
+    # (reports._pl_data), so the Dashboard can't disagree with them.
+    from .reports import _pl_data
+    pl_now = _pl_data(db, period_start, period_end)
+    period_expenses = pl_now["total_expenses"]
+    period_profit = pl_now["gross_profit"]
 
     kpi = {
         "today": _sales_between(db, today, today),
@@ -191,12 +189,9 @@ def dashboard(
     prev_end = period_start - timedelta(days=1)
     prev_start = prev_end - timedelta(days=span - 1)
     prev_sales = _sales_between(db, prev_start, prev_end)
-    prev_profit = _profit_between(db, prev_start, prev_end)
-    prev_expenses = Decimal(str(
-        db.query(func.coalesce(func.sum(models.Expense.amount), 0))
-        .filter(models.Expense.is_voided.is_(False), models.Expense.expense_date.between(prev_start, prev_end))
-        .scalar() or 0
-    )) + payroll_total(db, prev_start, prev_end)
+    pl_prev = _pl_data(db, prev_start, prev_end)
+    prev_profit = pl_prev["gross_profit"]
+    prev_expenses = pl_prev["total_expenses"]
     compare = {
         "prev_start": prev_start, "prev_end": prev_end,
         "sales": {"now": kpi["period"], "prev": prev_sales, "pct": _pct_change(kpi["period"], prev_sales)},

@@ -12,13 +12,22 @@
   </div>
 </div>
 
+<p class="muted" style="margin:-6px 0 12px;font-size:12.5px;">Read from the books (the same ledger as Accounting → Profit &amp; Loss), so the two always agree.</p>
+{% if unbooked and (unbooked.sales or unbooked.expenses) %}
+<div class="alert" style="max-width:640px;">
+  <strong>Not yet in the books:</strong> these are dated in this period but never reached the ledger, so they're missing from this P&amp;L.
+  <ul style="margin:6px 0 0 18px;">
+    {% for s in unbooked.sales %}<li><a href="/pos/receipt/{{ s.id }}?back={{ back_here() }}">{{ s.receipt_type or '' }} {{ s.invoice_no }}</a> · {{ s.created_at.strftime('%b %d') }} · {{ s.total|peso }}</li>{% endfor %}
+    {% for e in unbooked.expenses %}<li><a href="/expenses/{{ e.id }}/edit?back={{ back_here() }}">{{ e.receipt_no or e.ref_no }}</a> · {{ e.expense_date.strftime('%b %d') }} · {{ e.payee or '' }} · {{ e.amount|peso }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 <div class="card" style="padding:24px;max-width:640px;">
   <table class="grid" style="box-shadow:none;border:none;">
     <tbody>
-      <tr><td class="strong">Revenue</td><td class="num strong">{{ revenue|peso }}</td></tr>
-      <tr><td class="muted" style="padding-left:18px;">net of VAT, refunds &amp; exchanges</td><td></td></tr>
-      <tr><td style="padding-top:14px;">Sales of goods</td><td class="num" style="padding-top:14px;">{{ goods_sales|peso }}</td></tr>
-      <tr><td class="muted" style="padding-left:18px;">net of VAT, before refunds &amp; exchanges</td><td></td></tr>
+      <tr><td class="strong">Sales</td><td class="num strong">{{ revenue|peso }}</td></tr>
+      <tr><td class="muted" style="padding-left:18px;">net of VAT, returns &amp; exchanges</td><td></td></tr>
       <tr><td>Less: Cost of goods sold</td><td class="num">({{ total_cogs|peso }})</td></tr>
       <tr><td class="muted" style="padding-left:18px;">Goods sold — what they cost the shop</td><td class="num muted">{{ cogs|peso }}</td></tr>
       <tr><td class="muted" style="padding-left:18px;">Inventory shrinkage, net of gains <a href="/reports/inventory-adjustments">— breakdown →</a></td><td class="num muted {{ 'neg' if shrinkage < 0 }}">{{ shrinkage|peso }}</td></tr>

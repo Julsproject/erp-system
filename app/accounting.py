@@ -1470,6 +1470,20 @@ def _type_balance(db: Session, account_type: str, as_of: date) -> Decimal:
     by each account's own normal_balance, summed since inception through
     as_of. Cumulative (not period-only) because there's no formal
     period-close workflow — see plan Phase 2+ item 5."""
+    if account_type in ("revenue", "cost_of_sales", "expense"):
+        # Same rule as the P&L (_pl_ledger_data): revenue is credit − debit
+        # for every revenue account, so Sales Returns (debit-normal) reduces
+        # it instead of adding to it; costs/expenses are debit − credit.
+        row = (
+            db.query(func.coalesce(func.sum(models.JournalLine.debit), 0), func.coalesce(func.sum(models.JournalLine.credit), 0))
+            .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
+            .join(models.Account, models.JournalLine.account_id == models.Account.id)
+            .filter(models.Account.account_type == account_type, models.JournalEntry.txn_date <= as_of,
+                    models.JournalEntry.status != "draft")
+            .one()
+        )
+        debit, credit = Decimal(str(row[0] or 0)), Decimal(str(row[1] or 0))
+        return (credit - debit) if account_type == "revenue" else (debit - credit)
     accounts = db.query(models.Account).filter(
         models.Account.is_active.is_(True), models.Account.account_type == account_type,
     ).all()
@@ -1484,22 +1498,22 @@ def _pl_ledger_data(db: Session, period_start: date, period_end: date):
     balances, this is scoped to the period — sum of JournalLine movement
     (not opening balance) for revenue/cost_of_sales/expense accounts."""
     def _period_total(account_type: str) -> Decimal:
-        accounts = db.query(models.Account).filter(
-            models.Account.is_active.is_(True), models.Account.account_type == account_type,
-        ).all()
-        total = ZERO
-        for account in accounts:
-            row = (
-                db.query(func.coalesce(func.sum(models.JournalLine.debit), 0), func.coalesce(func.sum(models.JournalLine.credit), 0))
-                .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
-                .filter(models.JournalLine.account_id == account.id,
-                        models.JournalEntry.txn_date.between(period_start, period_end),
-                        models.JournalEntry.status != "draft")
-                .one()
-            )
-            debit, credit = Decimal(str(row[0] or 0)), Decimal(str(row[1] or 0))
-            total += (debit - credit) if account.normal_balance == "debit" else (credit - debit)
-        return total
+        # Revenue is credit − debit for EVERY revenue account, so a contra
+        # account like Sales Returns (debit-normal) reduces sales; reading it
+        # by its own normal balance added returns to sales instead. Costs and
+        # expenses are debit − credit. Inactive accounts still count — their
+        # past postings are real.
+        row = (
+            db.query(func.coalesce(func.sum(models.JournalLine.debit), 0), func.coalesce(func.sum(models.JournalLine.credit), 0))
+            .join(models.JournalEntry, models.JournalLine.entry_id == models.JournalEntry.id)
+            .join(models.Account, models.JournalLine.account_id == models.Account.id)
+            .filter(models.Account.account_type == account_type,
+                    models.JournalEntry.txn_date.between(period_start, period_end),
+                    models.JournalEntry.status != "draft")
+            .one()
+        )
+        debit, credit = Decimal(str(row[0] or 0)), Decimal(str(row[1] or 0))
+        return (credit - debit) if account_type == "revenue" else (debit - credit)
 
     revenue = _period_total("revenue")
     cost_of_sales = _period_total("cost_of_sales")
