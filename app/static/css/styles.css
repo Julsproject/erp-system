@@ -694,6 +694,9 @@ table.grid tr:last-child td { border-bottom: none; }
    (which stays narrow for POS's small per-line discount box) so a 5-6 digit
    peso amount like 12425.00 shows in full instead of getting clipped. */
 input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size: 14.5px; }
+/* New Purchase's table sits inside .pos-cart-panel, whose narrow
+   .cart-disc rule (58px) otherwise wins and clips the amount. */
+.pos-cart-panel input.line-cost, .pos-cart-panel input.line-total { width: 130px; padding: 8px 10px; font-size: 14px; }
 
 .totals { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
 .totals-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 0; font-size: 14px; color: var(--muted); }
@@ -983,7 +986,8 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
   .cart-disc, .disc-input { width: 74px; }
   .pos-cart-panel .cart-qty, .pos-cart-panel .cart-price { width: 72px; font-size: 13px; }
   .pos-cart-panel .cart-table td.cart-item { min-width: 90px; }
-  input.line-cost, input.line-total { width: 110px; }
+  input.line-cost, input.line-total,
+  .pos-cart-panel input.line-cost, .pos-cart-panel input.line-total { width: 110px; }
   .refund-foot .pos-complete { min-width: 0; }
 }
 

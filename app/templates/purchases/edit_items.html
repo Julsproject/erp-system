@@ -111,6 +111,22 @@ function peso(v) { return '₱' + (Math.round((Number(v) || 0) * 100) / 100).toL
 function fmtQty(n) { return (Math.round((Number(n) || 0) * 1000) / 1000).toString(); }
 function round4(n) { return (Math.round((Number(n) || 0) * 10000) / 10000).toString(); }
 function round2(n) { return (Math.round((Number(n) || 0) * 100) / 100).toString(); }
+/* Unit Price / Subtotal show thousands commas; plainNum() reads them back. */
+function money(n, maxDp) { return (Number(n) || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: maxDp || 2 }); }
+function plainNum(v) { return String(v == null ? '' : v).replace(/,/g, ''); }
+function liveCommas(input, maxDp) {
+  const caret = input.selectionStart;
+  const digitsBefore = input.value.slice(0, caret).replace(/[^0-9.]/g, '').length;
+  let s = input.value.replace(/[^0-9.]/g, '');
+  const dot = s.indexOf('.');
+  if (dot >= 0) s = s.slice(0, dot + 1) + s.slice(dot + 1).replace(/[.]/g, '').slice(0, maxDp || 2);
+  const [whole, frac] = s.split('.');
+  const grouped = (whole || '').replace(/^0+(?=[0-9])/, '').replace(/[0-9](?=([0-9]{3})+$)/g, '$&,');
+  input.value = frac !== undefined ? (grouped || '0') + '.' + frac : grouped;
+  let pos = 0, seen = 0;
+  while (pos < input.value.length && seen < digitsBefore) { if (/[0-9.]/.test(input.value[pos])) seen++; pos++; }
+  input.setSelectionRange(pos, pos);
+}
 function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function lineTotalOf(line) { return (Number(line.qty) || 0) * (Number(line.unitCost) || 0); }
 
@@ -227,8 +243,8 @@ function renderCart() {
       '<td class="strong">' + escapeHtml(line.name) + '</td>' +
       '<td>' + unitCell + '<div class="hint row-baseqty">' + baseQtyHint(line) + '</div></td>' +
       '<td class="num"><input class="cart-qty" type="number" step="0.001" min="0" value="' + fmtQty(line.qty) + '" oninput="setQty(' + i + ', this.value)"></td>' +
-      '<td class="num"><input class="cart-disc line-cost" type="number" step="0.01" min="0" value="' + round4(line.unitCost) + '" oninput="setCost(' + i + ', this.value)"></td>' +
-      '<td class="num"><input class="cart-disc line-total" type="number" step="0.01" min="0" value="' + round2(lineTotalOf(line)) + '" oninput="setTotal(' + i + ', this.value)"></td>' +
+      '<td class="num"><input class="cart-disc line-cost" type="text" inputmode="decimal" autocomplete="off" value="' + money(line.unitCost, 4) + '" oninput="liveCommas(this, 4); setCost(' + i + ', plainNum(this.value))"></td>' +
+      '<td class="num"><input class="cart-disc line-total" type="text" inputmode="decimal" autocomplete="off" value="' + money(lineTotalOf(line)) + '" oninput="liveCommas(this); setTotal(' + i + ', plainNum(this.value))"></td>' +
       '<td><button type="button" class="btn-link danger" onclick="removeLine(' + i + ')">✕</button></td>';
     body.appendChild(tr);
   });
@@ -245,8 +261,8 @@ function refreshCartComputed() {
     if (!tr) return;
     const costInput = tr.querySelector('.line-cost');
     const totalInput = tr.querySelector('.line-total');
-    if (costInput && document.activeElement !== costInput) costInput.value = round4(line.unitCost);
-    if (totalInput && document.activeElement !== totalInput) totalInput.value = round2(lineTotalOf(line));
+    if (costInput && document.activeElement !== costInput) costInput.value = money(line.unitCost, 4);
+    if (totalInput && document.activeElement !== totalInput) totalInput.value = money(lineTotalOf(line));
   });
   computeTotals();
 }
