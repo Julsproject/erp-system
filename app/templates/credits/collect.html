@@ -72,7 +72,7 @@
   <table class="grid">
     <thead>
       <tr>
-        <th><input type="checkbox" id="selectAllChk" {{ 'checked' if not posted or pv.sale_ids|length == owed|length }} onchange="toggleAllChk(this)" title="Select all"></th>
+        <th><input type="checkbox" id="selectAllChk" autocomplete="off" {{ 'checked' if posted and pv.sale_ids|length == owed|length }} onchange="toggleAllChk(this)" title="Select all"></th>
         <th>Invoice #</th><th>Date</th><th class="num">Outstanding</th>
         {% if si_eligible_ids %}<th title="Recognize Output VAT for this Delivery Receipt via a new SI">Output VAT</th>{% endif %}
       </tr>
@@ -80,14 +80,17 @@
     <tbody id="invoiceBody">
       {% for sale, outstanding in owed %}
       <tr data-invoice="{{ sale.invoice_no|lower }}">
-        <td><input type="checkbox" class="payChk" name="sale_ids" value="{{ sale.id }}" data-outstanding="{{ outstanding }}" {{ 'checked' if not posted or sale.id in pv.sale_ids }} onchange="updateTotal()" form="collectForm"></td>
+        <td>{# Unticked by default — after a Pay Selected the page comes back with
+               nothing ticked, so the next click can't pay invoices by accident.
+               Only a payment the server turned back keeps what was ticked. #}
+          <input type="checkbox" class="payChk" name="sale_ids" value="{{ sale.id }}" data-outstanding="{{ outstanding }}" autocomplete="off" {{ 'checked' if posted and sale.id in pv.sale_ids }} onchange="updateTotal()" form="collectForm"></td>
         <td class="strong">{{ sale.invoice_no }}</td>
         <td>{{ sale.created_at.strftime('%b %d, %Y') if sale.created_at else '' }}</td>
         <td class="num owed">{{ outstanding|peso }}</td>
         {% if si_eligible_ids %}
         <td>
           {% if sale.id in si_eligible_ids %}
-          <input type="checkbox" class="vatChk" name="dr_sale_ids" value="{{ sale.id }}" data-total="{{ sale.total }}" onchange="updateSiTotal()" form="issueSiForm">
+          <input type="checkbox" class="vatChk" name="dr_sale_ids" value="{{ sale.id }}" data-total="{{ sale.total }}" autocomplete="off" onchange="updateSiTotal()" form="issueSiForm">
           {% endif %}
         </td>
         {% endif %}
@@ -102,7 +105,7 @@
         <td>{{ sale.created_at.strftime('%b %d, %Y') if sale.created_at else '' }}</td>
         <td class="num muted">paid</td>
         <td>
-          <input type="checkbox" class="vatChk" name="dr_sale_ids" value="{{ sale.id }}" data-total="{{ sale.total }}" onchange="updateSiTotal()" form="issueSiForm">
+          <input type="checkbox" class="vatChk" name="dr_sale_ids" value="{{ sale.id }}" data-total="{{ sale.total }}" autocomplete="off" onchange="updateSiTotal()" form="issueSiForm">
         </td>
       </tr>
       {% endfor %}
@@ -348,6 +351,16 @@
   ['ref_no', 'payment_date', 'bank', 'cheque_no', 'cheque_date', 'si_invoice_no', 'si_date'].forEach(function (name) {
     const el = document.querySelector('[name=' + name + ']');
     if (el) el.addEventListener('input', saveDraft);
+  });
+
+  // Coming Back to this page (browser back/forward cache) must not show the
+  // old ticks either — clear them unless a saved draft says otherwise.
+  window.addEventListener('pageshow', function (e) {
+    if (!e.persisted || POSTED) return;
+    document.querySelectorAll('.payChk, .vatChk, #selectAllChk').forEach(c => { c.checked = false; });
+    restoreDraft();
+    updateTotal();
+    if (typeof updateSiTotal === 'function') updateSiTotal();
   });
 
   const collectForm = document.getElementById('collectForm');
