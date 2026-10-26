@@ -126,7 +126,7 @@ def store_display(
     # capped, so the items customers ask for must make the cut.
     out_q, out_days, _ = apply_mover(
         db.query(models.Product).filter(
-            models.Product.is_active.is_(True), qty_expr <= 0, models.Product.no_restock.is_(False)),
+            models.Product.is_active.is_(True), qty_expr <= 0, models.Product.no_restock.is_(False), models.Product.is_service.is_(False)),
         "",
     )
     out_of_stock = out_q.order_by(out_days.desc(), models.Product.name).all()

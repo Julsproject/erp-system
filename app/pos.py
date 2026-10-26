@@ -153,8 +153,11 @@ def _stock_taken_by_sale(db: Session, sale: models.Sale) -> dict:
     whose movements predate invoice refs falls back to the lines' qty."""
     ref = _display_invoice(sale)
     taken, by_lines = {}, {}
+    service_ids = {pid for (pid,) in db.query(models.Product.id).filter(
+        models.Product.id.in_([ln.product_id for ln in sale.lines if ln.product_id] or [0]),
+        models.Product.is_service.is_(True))}
     for ln in sale.lines:
-        if ln.product_id:
+        if ln.product_id and ln.product_id not in service_ids:   # a service never took stock
             by_lines[ln.product_id] = by_lines.get(ln.product_id, Decimal("0")) + (
                 Decimal(str(ln.qty or 0)) * Decimal(str(ln.unit_factor or 1)))
     db.flush()
@@ -705,6 +708,7 @@ def _product_payload_for_pos(db: Session, p: models.Product) -> dict:
         "is_vat": bool(p.is_vat),
         "base_unit": base_unit,
         "on_hand": float((p.beginning_stock or 0) + (p.stock_qty or 0)),
+        "is_service": bool(p.is_service),   # no stock: no "on hand" / over-stock warnings
         # Open/Retail sold by the kilo: shown in quarter kilos (6 3/4) on screen.
         "loose_kg": bool(p.replenish_from_id and p.unit_type and p.unit_type.name.strip().lower() == "kg"),
         "units": units,
@@ -979,7 +983,11 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
         subtotal += line_total
 
         base_qty = qty * factor
-        if product.id in conflicting_ids and not force_stock_deduction:
+        if product.is_service:
+            # A service (mixer rental): nothing leaves the shelf and it costs
+            # no goods — no stock movement, zero cost on the line.
+            sale_unit_cost = Decimal("0")
+        elif product.id in conflicting_ids and not force_stock_deduction:
             # Already physically counted in a completed Stock Count that
             # covers this date — that count's number already reflects this
             # item being gone, so deducting again here would double it.
@@ -1026,7 +1034,7 @@ def _finalize_sale(db: Session, user, *, invoice_no, customer_name, vat_applied,
             is_vat=is_vat,
             price_tier=(ln.get("tier") or "fixed"),
             # Freeze today's cost so profit reporting stays accurate later.
-            unit_cost=_money(product.cost_price or 0),
+            unit_cost=_money(0 if product.is_service else (product.cost_price or 0)),
         ))
 
     discount_total = _dec(discount_total)
@@ -1637,7 +1645,7 @@ def pos_refund(data: dict, db: Session = Depends(get_db), user=Depends(get_curre
             vat_base += value
         product = db.get(models.Product, int(it["product_id"]), with_for_update=True) if it.get("product_id") else None
         refund_unit_cost = Decimal("0")
-        if product:
+        if product and not product.is_service:   # a service never went into stock
             factor = _resolve_unit_factor(product, it.get("unit_name"), factor)
             _add_stock(product, qty * factor)
             refund_unit_cost = Decimal(str(product.cost_price or 0))
@@ -1775,7 +1783,7 @@ def pos_exchange(data: dict, db: Session = Depends(get_db), user=Depends(get_cur
         returned_total += value
         product = db.get(models.Product, int(it["product_id"]), with_for_update=True) if it.get("product_id") else None
         ex_return_cost = Decimal("0")
-        if product:
+        if product and not product.is_service:
             factor = _resolve_unit_factor(product, it.get("unit_name"), factor)
             _add_stock(product, qty * factor)
             ex_return_cost = Decimal(str(product.cost_price or 0))
@@ -1806,7 +1814,7 @@ def pos_exchange(data: dict, db: Session = Depends(get_db), user=Depends(get_cur
         new_total += lt
         product = db.get(models.Product, int(ln["product_id"]), with_for_update=True) if ln.get("product_id") else None
         ex_sale_cost = Decimal("0")
-        if product:
+        if product and not product.is_service:
             factor = _resolve_unit_factor(product, ln.get("unit_name"), factor)
             base_qty = qty * factor
             _make_available(db, product, base_qty, ref=None, note="Auto-opened for loose exchange item")
@@ -2669,6 +2677,9 @@ def edit_sale_date(
     old_d = old_created_at.astimezone(MANILA).date() if old_created_at else new_d
     ref = _display_invoice(sale)
     pids = {l.product_id for l in sale.lines if l.product_id}
+    # A service never took stock, so re-dating it must not settle any.
+    pids -= {pid for (pid,) in db.query(models.Product.id).filter(
+        models.Product.id.in_(pids or [0]), models.Product.is_service.is_(True))}
     moves = (
         db.query(models.StockMovement)
         .filter(models.StockMovement.ref == ref,
@@ -3056,7 +3067,9 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
         subtotal += line_total
 
         base_qty = qty * factor
-        if product.id in suppressed_ids:
+        if product.is_service:
+            unit_cost = Decimal("0")   # a service takes no stock — see _finalize_sale
+        elif product.id in suppressed_ids:
             # Stayed stock-neutral at checkout and stays stock-neutral now:
             # the Stock Count that covered this sale's date still covers it,
             # so its shelf number already reflects whatever really went out.
@@ -3085,7 +3098,7 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
             product_id=product.id, product_name=product.name, unit_name=ln.get("unit_name"),
             unit_factor=factor, qty=qty, unit_price=unit_price, discount=discount,
             line_total=_money(line_total), is_vat=vat_applied,
-            price_tier=(ln.get("tier") or "fixed"), unit_cost=_money(product.cost_price or 0),
+            price_tier=(ln.get("tier") or "fixed"), unit_cost=_money(0 if product.is_service else (product.cost_price or 0)),
         ))
 
     if not sale.lines:

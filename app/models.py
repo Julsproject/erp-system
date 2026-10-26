@@ -192,6 +192,12 @@ class Product(Base):
     # stays off Low Stock / No Stock and their counts (see products.low_stock_expr
     # and _no_stock_filter).
     no_restock = Column(Boolean, nullable=False, server_default="false")
+    # A service sold at the POS (mixer rental): no stock is taken, counted or
+    # costed, and its income posts to income_account (e.g. 4500 Rental
+    # Income) instead of Sales — see pos._is_stocked, accounting.post_sale.
+    is_service = Column(Boolean, nullable=False, server_default="false")
+    income_account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)
+    income_account = relationship("Account", foreign_keys=[income_account_id])
 
     # Every product carries THREE selling prices at once, so the shop can quote
     # a different one per customer type without re-pricing the item:

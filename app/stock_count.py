@@ -213,7 +213,7 @@ def _find_products(db: Session, q: str):
         return [barcode_hit]
     return (
         db.query(models.Product)
-        .filter(models.Product.is_active.is_(True), multi_word_ilike(models.Product.name, q))
+        .filter(models.Product.is_active.is_(True), models.Product.is_service.is_(False), multi_word_ilike(models.Product.name, q))
         .order_by(models.Product.name)
         .limit(15)
         .all()
@@ -988,7 +988,7 @@ def stock_count_import_template(count_id: int, shelf_id: int = 0, only: str = ""
         products = query.order_by(models.Product.name).all()
         only_label = COUNT_SHEET_FILTERS["in_count"][1]
     else:
-        query = db.query(models.Product).filter(models.Product.is_active.is_(True))
+        query = db.query(models.Product).filter(models.Product.is_active.is_(True), models.Product.is_service.is_(False))
         if shelf:
             query = query.filter(models.Product.shelf_id == shelf.id)
         products = query.order_by(models.Product.name).all()

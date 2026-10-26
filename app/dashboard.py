@@ -304,7 +304,7 @@ def dashboard(
     # below are the ones that matter; "Don't restock" items are left out.
     out_q, out_days, out_movers = apply_mover(
         db.query(models.Product).filter(
-            models.Product.is_active.is_(True), _qty_expr() <= 0, models.Product.no_restock.is_(False)),
+            models.Product.is_active.is_(True), _qty_expr() <= 0, models.Product.no_restock.is_(False), models.Product.is_service.is_(False)),
         "",
     )
     out_of_stock = out_q.order_by(out_days.desc(), models.Product.name).all()
@@ -317,7 +317,7 @@ def dashboard(
     low_stock = low_q.order_by(low_days.desc(), _qty_expr(), models.Product.name).all()
     no_cost = (
         db.query(func.count(models.Product.id))
-        .filter(models.Product.is_active.is_(True), models.Product.cost_price <= 0)
+        .filter(models.Product.is_active.is_(True), models.Product.cost_price <= 0, models.Product.is_service.is_(False))
         .scalar()
     ) or 0
 

@@ -775,7 +775,7 @@ function renderResults(products) {
       '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span>' +
       (p.is_vat ? '<span class="pill">VAT</span>' : '') + perPieceTag(p) + '</div>' +
       '<div class="pos-item-sub">' + peso(p.units[0].price) + ' / ' + escapeHtml(p.base_unit) +
-      ' · <span class="' + (p.on_hand <= 0 ? 'oos' : '') + '">' + fmtStockQty(p, p.on_hand) + ' on hand</span>' +
+      (p.is_service ? ' · <span class="muted">service</span>' : ' · <span class="' + (p.on_hand <= 0 ? 'oos' : '') + '">' + fmtStockQty(p, p.on_hand) + ' on hand</span>') +
       (p.container ? '<span class="open-bag">📦 ' + p.container.sealed + ' ' + escapeHtml(p.container.pack_name) +
         ' + <b>' + fmtQty(p.container.open) + ' ' + escapeHtml(p.container.loose_name) +
         '</b> in open bag</span>' : '') +
@@ -872,7 +872,7 @@ function renderCart() {
   cart.forEach((line, i) => {
     const unit = line.product.units[line.unitIndex];
     const total = lineTotalOf(line);
-    const over = needed[line.product.id] > line.product.on_hand + 1e-9;
+    const over = !line.product.is_service && needed[line.product.id] > line.product.on_hand + 1e-9;
     const opts = line.product.units.map((u, ui) =>
       '<option value="' + ui + '"' + (ui === line.unitIndex ? ' selected' : '') + '>' +
       escapeHtml(u.label || u.name) + ' (' + peso(u.price) + ')</option>').join('');
@@ -908,7 +908,7 @@ function refreshCartComputed() {
   cart.forEach((line, i) => {
     const tr = rows[i];
     if (!tr) return;
-    const over = needed[line.product.id] > line.product.on_hand + 1e-9;
+    const over = !line.product.is_service && needed[line.product.id] > line.product.on_hand + 1e-9;
     tr.children[0].innerHTML = escapeHtml(line.product.name) + perPieceTag(line.product) +
       (over ? ' <span class="warn-tag" title="Selling beyond stock (allowed)">⚠ over stock</span>' : '');
     tr.children[5].textContent = peso(lineTotalOf(line));

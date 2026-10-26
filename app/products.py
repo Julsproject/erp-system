@@ -342,7 +342,7 @@ def low_stock_expr(default_pct):
     if days:
         rules.append(_selling_out_expr(days))
     # A "Don't restock / order on request" item is expected to run out.
-    return and_(models.Product.no_restock.is_(False), or_(*rules))
+    return and_(models.Product.no_restock.is_(False), models.Product.is_service.is_(False), or_(*rules))
 
 
 # Sales-based low stock looks at this many days of selling. Movement reasons
@@ -497,7 +497,8 @@ def _no_stock_filter():
     rule the dashboard's "Out of stock" count uses. A "Don't restock /
     order on request" item is left off: running out of it is expected."""
     return (models.Product.beginning_stock + models.Product.stock_qty <= 0,
-            models.Product.no_restock.is_(False))
+            models.Product.no_restock.is_(False),
+            models.Product.is_service.is_(False))   # a service (rental) never has stock
 
 
 def _no_cost_filter():
@@ -516,6 +517,7 @@ def _no_cost_filter():
     return (
         models.Product.cost_price <= 0,
         (models.Product.beginning_stock + models.Product.stock_qty) != 0,
+        models.Product.is_service.is_(False),
     )
 
 
@@ -1091,6 +1093,10 @@ def _render_form(request, db, user, product=None, error=None, back=""):
             "unit_types": unit_types,
             "shelves": shelves,
             "adjustment_reasons": ADJUSTMENT_REASONS,
+            # Where a service's income can go (Other income first: 4500–4899).
+            "income_accounts": db.query(models.Account).filter(
+                models.Account.account_type == "revenue", models.Account.is_active.is_(True),
+                models.Account.code.notin_(("4900", "4100"))).order_by(models.Account.code.desc()).all(),
             # The parts a set is made up from, for the "Made up of" box.
             "components_json": json.dumps([
                 {"id": c.component_id,
@@ -1452,6 +1458,15 @@ def _save_from_form(product: models.Product, db: Session, form):
     product.reorder_level = _to_decimal(form.get("reorder_level"))
     product.no_restock = bool(form.get("no_restock"))
     product.is_vat = bool(form.get("is_vat"))
+    # A service (mixer rental): sold at the POS but never stocked or costed;
+    # its income posts to the chosen income account instead of Sales.
+    product.is_service = bool(form.get("is_service"))
+    raw_income = (form.get("income_account_id") or "").strip()
+    product.income_account_id = int(raw_income) if product.is_service and raw_income.isdigit() else None
+    if product.is_service:
+        if (product.beginning_stock or 0) or (product.stock_qty or 0):
+            raise ValueError("A service can't hold stock — set Actual Beginning Stocks and Stocks Qty to 0 first.")
+        product.cost_price = Decimal("0")
 
     # Open/retail counterpart link — see Product.replenish_from_id. Kept a
     # flat 2-tier relationship (a linked source can't itself be a linked

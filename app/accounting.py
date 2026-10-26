@@ -392,7 +392,11 @@ def post_sale(db: Session, sale: models.Sale, *, method_rows: list, receivable_a
     net = Decimal(str(sale.net_amount or 0))
     vat = Decimal(str(sale.vat_amount or 0))
     if net > 0:
-        lines.append({"function_key": "SALES_REVENUE", "amount": net, "side": "credit"})
+        for account_id, amount, memo in _service_income_split(db, sale, net):
+            lines.append({"_account_id": account_id, "amount": amount, "side": "credit", "memo": memo})
+            net -= amount
+        if net > 0:
+            lines.append({"function_key": "SALES_REVENUE", "amount": net, "side": "credit"})
     if vat > 0:
         lines.append({"function_key": "OUTPUT_VAT", "amount": vat, "side": "credit"})
     lines.extend(_sale_cost_lines(db, sale))
@@ -405,6 +409,29 @@ def post_sale(db: Session, sale: models.Sale, *, method_rows: list, receivable_a
         description=f"Sale {sale.invoice_no}", reference_no=sale.invoice_no,
         lines=lines, entered_by_id=entered_by_id,
     )
+
+
+def _service_income_split(db: Session, sale: models.Sale, net: Decimal) -> list:
+    """[(account_id, amount, memo)] — the part of a sale's net-of-VAT revenue
+    that belongs to service items (mixer rental → Rental Income) instead of
+    Sales. Each service line gets its share of `net` in proportion to its
+    line total, so header discounts and VAT are spread the same way."""
+    gross = sum((Decimal(str(l.line_total or 0)) for l in sale.lines), ZERO)
+    if gross <= 0:
+        return []
+    by_account = {}
+    for line in sale.lines:
+        product = db.get(models.Product, line.product_id) if line.product_id else None
+        if not product or not product.is_service or not product.income_account_id:
+            continue
+        account = db.get(models.Account, product.income_account_id)
+        if not account or not account.is_active:
+            continue
+        share = (net * Decimal(str(line.line_total or 0)) / gross).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if share > 0:
+            amt, names = by_account.get(account.id, (ZERO, []))
+            by_account[account.id] = (amt + share, names + [product.name])
+    return [(aid, min(amt, net), ", ".join(dict.fromkeys(names))[:255]) for aid, (amt, names) in by_account.items()]
 
 
 def post_return(db: Session, sale: models.Sale, *, method: str = None, credit_applied: Decimal = ZERO,

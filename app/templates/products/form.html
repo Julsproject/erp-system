@@ -193,6 +193,22 @@ try { localStorage.setItem('last_product_view', {{ ('/products/' ~ product.id ~ 
     </span>
   </label>
 
+  <label style="display:flex;gap:8px;align-items:flex-start;">
+    <input type="checkbox" name="is_service" value="1" id="isServiceChk" style="width:auto;margin-top:3px;"
+           {{ 'checked' if product and product.is_service }} onchange="document.getElementById('incomeAcctRow').style.display = this.checked ? '' : 'none'">
+    <span>Service — no stock (e.g. mixer rental)
+      <small class="hint" style="display:block;">Sold at the POS like an item, on a DR or SI, but nothing is taken from stock and it costs no goods. Its income goes to the account below instead of Sales.</small>
+    </span>
+  </label>
+  <label id="incomeAcctRow" style="{{ '' if product and product.is_service else 'display:none;' }}">Income account
+    <select name="income_account_id">
+      {% for a in income_accounts %}
+      <option value="{{ a.id }}" {{ 'selected' if product and product.income_account_id == a.id }}>{{ a.code }} · {{ a.name }}</option>
+      {% endfor %}
+    </select>
+    <small class="hint">Rental income → 4500 Rental Income. Leave on Sales only if it's really a sale of goods.</small>
+  </label>
+
   {# Parts this product is made up from, when it's sold as a set (an
      expansion bolt "w/ shield" = 1 bolt + 1 shield). Selling it assembles
      it from these — see pos._build_from_components. #}

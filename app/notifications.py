@@ -77,7 +77,7 @@ def _current_alerts(db: Session) -> dict:
     # ---- stock -----------------------------------------------------------
     out = (
         db.query(models.Product)
-        .filter(models.Product.is_active.is_(True), _qty_expr() <= 0, models.Product.no_restock.is_(False))
+        .filter(models.Product.is_active.is_(True), _qty_expr() <= 0, models.Product.no_restock.is_(False), models.Product.is_service.is_(False))
         .all()
     )
     for p in out:
