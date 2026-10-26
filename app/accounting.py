@@ -2133,6 +2133,13 @@ JOURNAL_TEMPLATES = {
         ("SALE_CASH", "debit"), ("SALES_REVENUE", "debit"),
         ("AR", "credit"), ("OUTPUT_VAT", "credit"),
     ],
+    # Other income (renting out the mixer, etc.): money in, credited to
+    # Rental Income — plus Output VAT only when an SI was issued for it.
+    "other_income": [
+        ("code:4500", "credit", "Rental income — before VAT if an SI was issued, else the full amount"),
+        ("code:2100", "credit", "Output VAT — only if an SI was issued, else leave blank"),
+        ("code:1000", "debit", "Cash received (fills itself in) — change to Bank/GCash if paid that way", "auto"),
+    ],
     # Payday: gross salaries out, employees' shares held back as payables.
     "payroll": [
         ("code:6200", "debit", "Gross pay — total salaries before deductions"),
@@ -2182,6 +2189,7 @@ def _can_use_journal_form(user, template: str) -> bool:
 
 
 JOURNAL_TEMPLATE_DESCRIPTIONS = {
+    "other_income": "Mixer rental — ",
     "payroll": "Salaries for ",
     "gov_remittance": "SSS / PhilHealth / Pag-IBIG payment for ",
 }

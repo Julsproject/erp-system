@@ -49,13 +49,23 @@
     </tbody>
   </table>
 
+  {% if other_income_lines %}
+  <h3 class="ex-h" style="margin-top:22px;">Other income</h3>
+  <table class="grid" style="box-shadow:none;border:none;">
+    <tbody>
+      {% for r in other_income_lines %}<tr><td>{{ r.name }}</td><td class="num">{{ r.amount|peso }}</td></tr>{% endfor %}
+      <tr><td class="strong" style="border-top:1px solid var(--line);padding-top:10px;">Total Other income</td><td class="num strong" style="border-top:1px solid var(--line);padding-top:10px;">{{ other_income|peso }}</td></tr>
+    </tbody>
+  </table>
+  {% endif %}
+
   <table class="grid" style="box-shadow:none;border:none;margin-top:18px;">
     <tbody>
       <tr>
         <td class="strong" style="font-size:16px;border-top:2px solid var(--ink);padding-top:14px;">Net Profit</td>
         <td class="num strong {{ 'neg' if net_profit < 0 }}" style="font-size:16px;border-top:2px solid var(--ink);padding-top:14px;">{{ net_profit|peso }}</td>
       </tr>
-      <tr><td class="muted" style="padding-left:18px;">Gross Profit − Total Expenses</td><td></td></tr>
+      <tr><td class="muted" style="padding-left:18px;">Gross Profit{{ ' + Other income' if other_income_lines }} − Total Expenses</td><td></td></tr>
     </tbody>
   </table>
 </div>

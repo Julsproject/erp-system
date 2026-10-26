@@ -138,6 +138,10 @@ def _ledger_shrinkage(db: Session, period_start: date, period_end: date) -> Deci
     return (net("INV_ADJ_LOSS") + net("INV_ADJ_GAIN")).quantize(Decimal("0.01"))
 
 
+# Revenue account codes counted as Other income (below Gross Profit).
+OTHER_INCOME_CODES = ("4500", "4899")
+
+
 def _pl_data(db: Session, period_start: date, period_end: date):
     """The P&L straight from the ledger — the same journal entries Accounting
     → Profit & Loss adds up, so the two always agree to the peso. (It used
@@ -165,7 +169,21 @@ def _pl_data(db: Session, period_start: date, period_end: date):
             q = q.filter(JL.account_id != exclude)
         return Decimal(str(q.scalar() or 0)).quantize(Decimal("0.01"))
 
-    sales = -total("revenue", exclude=gain_id)
+    # Other income (Rental Income, …) = revenue accounts coded 4500–4899:
+    # money earned outside selling goods, shown below Gross Profit instead of
+    # inside Sales. (4900 Inventory Gain is netted into cost of goods sold.)
+    other_income_ids = [a.id for a in db.query(Acc).filter(
+        Acc.account_type == "revenue", Acc.code >= OTHER_INCOME_CODES[0], Acc.code <= OTHER_INCOME_CODES[1])]
+    other_rows = (
+        db.query(Acc.name, func.sum(JL.credit - JL.debit))
+        .join(JL, JL.account_id == Acc.id).join(JE, JL.entry_id == JE.id)
+        .filter(Acc.id.in_(other_income_ids or [-1]), *in_period)
+        .group_by(Acc.code, Acc.name).order_by(Acc.code).all()
+    )
+    other_income_lines = [{"name": n, "amount": Decimal(str(a or 0)).quantize(Decimal("0.01"))} for n, a in other_rows if a]
+    other_income = sum((r["amount"] for r in other_income_lines), ZERO)
+
+    sales = -total("revenue", exclude=gain_id) - other_income
     cogs = total("cost_of_sales", exclude=loss_id)
     shrinkage = _ledger_shrinkage(db, period_start, period_end)
     total_cogs = cogs + shrinkage
@@ -207,7 +225,9 @@ def _pl_data(db: Session, period_start: date, period_end: date):
         "gross_profit": gross_profit,
         "expenses_by_category": expenses_by_category,
         "total_expenses": total_expenses,
-        "net_profit": gross_profit - total_expenses,
+        "other_income": other_income,
+        "other_income_lines": other_income_lines,
+        "net_profit": gross_profit + other_income - total_expenses,
         "unbooked": _unbooked(db, period_start, period_end),
     }
 
@@ -304,10 +324,12 @@ def export_profit_loss(
         ws.append([row["name"], float(row["amount"])])
     ws.append(["Total Expenses", float(data["total_expenses"])])
     ws.append([])
-    ws.append(["Net Profit (Gross Profit − Expenses)", float(data["net_profit"])])
+    for row in data["other_income_lines"]:
+        ws.append([f"Other income — {row['name']}", float(row["amount"])])
+    ws.append(["Net Profit (Gross Profit + Other income − Expenses)", float(data["net_profit"])])
 
     for cell in ws["A"]:
-        if cell.value in ("Total Expenses", "Net Profit (Gross Profit − Expenses)"):
+        if cell.value in ("Total Expenses", "Net Profit (Gross Profit + Other income − Expenses)"):
             cell.font = Font(bold=True)
     ws.column_dimensions["A"].width = 40
     ws.column_dimensions["B"].width = 18

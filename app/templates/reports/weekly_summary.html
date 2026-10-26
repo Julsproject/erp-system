@@ -126,6 +126,7 @@
         <div class="row"><span>Revenue</span><b>{{ revenue|peso }}</b></div>
         <div class="row"><span>Gross profit</span><b>{{ gross_profit|peso }}</b></div>
         {% if shrinkage %}<div class="row" style="font-size:12px;color:#64748b;"><span>&nbsp;&nbsp;after inventory shrinkage (net of gains)</span><span>{{ shrinkage|peso }}</span></div>{% endif %}
+        {% if other_income %}<div class="row"><span>Other income</span><b>+ {{ other_income|peso }}</b></div>{% endif %}
         <div class="row"><span>Expenses</span><b>− {{ total_expenses|peso }}</b></div>
         <div class="row grand"><span>Net profit</span><span>{{ net_profit|peso }}</span></div>
       </div>

@@ -180,7 +180,7 @@ def dashboard(
         "period": _sales_between(db, period_start, period_end),
         "profit": period_profit,
         "expenses": period_expenses,
-        "net_profit": period_profit - period_expenses,
+        "net_profit": pl_now["net_profit"],   # includes Other income (rental, etc.)
     }
 
     # ---- period-over-period comparison ("are we moving or not") ----------
@@ -197,8 +197,8 @@ def dashboard(
         "sales": {"now": kpi["period"], "prev": prev_sales, "pct": _pct_change(kpi["period"], prev_sales)},
         "profit": {"now": period_profit, "prev": prev_profit, "pct": _pct_change(period_profit, prev_profit)},
         "expenses": {"now": period_expenses, "prev": prev_expenses, "pct": _pct_change(period_expenses, prev_expenses)},
-        "net_profit": {"now": kpi["net_profit"], "prev": prev_profit - prev_expenses,
-                       "pct": _pct_change(kpi["net_profit"], prev_profit - prev_expenses)},
+        "net_profit": {"now": kpi["net_profit"], "prev": pl_prev["net_profit"],
+                       "pct": _pct_change(kpi["net_profit"], pl_prev["net_profit"])},
     }
 
     inv_cost, inv_retail, sku_count = (
