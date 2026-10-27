@@ -401,7 +401,7 @@ function rowHtml(l, i) {
     '<td style="position:relative;">' +
       '<input class="row-name" type="text" autocomplete="off" placeholder="Type to search or create…" value="' + escapeHtml(l.name) + '" ' +
       'oninput="onNameInput(' + i + ', this.value)" onfocus="onNameInput(' + i + ', this.value)" onblur="setTimeout(function(){hideRowResults(' + i + ')}, 150)">' +
-      '<div class="pos-results row-results" id="rowResults' + i + '" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:30;max-height:220px;overflow:auto;"></div>' +
+      '<div class="pos-results row-results" id="rowResults' + i + '" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:30;max-height:min(460px,60vh);overflow:auto;"></div>' +
       '<span class="hint row-hint" style="display:' + (l.productId || l.name.trim() ? 'block' : 'none') + ';">' +
       (l.productId ? 'matched existing product' : 'will be created as a new product') + '</span>' +
     '</td>' +
