@@ -137,7 +137,7 @@
     <div class="table-wrap">
       <table class="grid cart-table">
         <thead>
-          <tr><th class="num">Qty</th><th>Unit</th><th>Product Name</th><th class="num">Unit Price</th><th class="num">Subtotal</th>{% if can_set_alert and not return_against_po %}<th class="num" title="Low Stock Alert At — warn when Total Qty drops to this. Saving the purchase updates the item.">Low Stock Alert</th>{% endif %}<th></th></tr>
+          <tr><th class="num">Qty</th><th>Unit</th><th style="width:56%;">Product Name</th><th class="num">Unit Price</th><th class="num">Subtotal</th>{% if can_set_alert and not return_against_po %}<th class="num" title="Low Stock Alert At — warn when Total Qty drops to this. Saving the purchase updates the item.">Alert</th>{% endif %}<th></th></tr>
         </thead>
         <tbody id="linesBody"></tbody>
       </table>
@@ -346,7 +346,7 @@ function alertHint(l) {
 }
 function alertCell(l, i) {
   if (!canSetAlert) return '';
-  return '<td class="num"><input class="cart-disc row-alert" type="number" step="any" min="0" inputmode="decimal" style="width:70px;"' +
+  return '<td class="num"><input class="cart-disc row-alert" type="number" step="any" min="0" inputmode="decimal" style="width:52px;padding:6px 5px;"' +
     ' value="' + escapeHtml(l.alertAt || '') + '" placeholder="—" title="Warn when Total Qty drops to this. Blank = no alert."' +
     ' oninput="setRAlert(' + i + ', this.value)">' +
     '<div class="hint row-alert-hint">' + alertHint(l) + '</div></td>';

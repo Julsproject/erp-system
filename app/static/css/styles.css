@@ -696,7 +696,12 @@ table.grid tr:last-child td { border-bottom: none; }
 input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size: 14.5px; }
 /* New Purchase's table sits inside .pos-cart-panel, whose narrow
    .cart-disc rule (58px) otherwise wins and clips the amount. */
-.pos-cart-panel input.line-cost, .pos-cart-panel input.line-total { width: 130px; padding: 8px 10px; font-size: 14px; }
+.pos-cart-panel input.line-cost, .pos-cart-panel input.line-total { padding: 8px 10px; font-size: 14px; }
+/* Sized to the amounts they hold: Unit Price up to 4 digits (1,234.56),
+   Subtotal up to 6 (123,456.00) — the room left goes to Product Name. */
+.pos-cart-panel input.line-cost { width: 100px; }
+.pos-cart-panel input.line-total { width: 120px; }
+.pos-cart-panel .cart-unit-txt { width: 92px; }
 
 .totals { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
 .totals-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 0; font-size: 14px; color: var(--muted); }
