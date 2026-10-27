@@ -702,6 +702,10 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
 .pos-cart-panel input.line-cost { width: 100px; }
 .pos-cart-panel input.line-total { width: 120px; }
 .pos-cart-panel .cart-unit-txt { width: 92px; }
+/* The product search list drops down out of the table; on wide screens
+   (no sideways scroll needed) let it spill past the table's edge instead of
+   being cut off inside it. */
+@media (min-width: 901px) { .table-wrap.buy-lines { overflow: visible; } }
 
 .totals { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
 .totals-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 0; font-size: 14px; color: var(--muted); }

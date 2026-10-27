@@ -134,7 +134,7 @@
     </p>
     {% endif %}
 
-    <div class="table-wrap">
+    <div class="table-wrap buy-lines">
       <table class="grid cart-table">
         <thead>
           <tr><th class="num">Qty</th><th>Unit</th><th style="width:56%;">Product Name</th><th class="num">Unit Price</th><th class="num">Subtotal</th>{% if can_set_alert and not return_against_po %}<th class="num" title="Low Stock Alert At — warn when Total Qty drops to this. Saving the purchase updates the item.">Alert</th>{% endif %}<th></th></tr>
@@ -412,9 +412,14 @@ function rowHtml(l, i) {
   );
 }
 
+/* Always show at least this many rows, so a new purchase starts with room
+   to type (and room for the search list to open). Blank rows aren't saved. */
+const MIN_RECEIVE_ROWS = 4;
+
 function renderReceiveLines() {
   const body = document.getElementById('linesBody');
   body.innerHTML = '';
+  while (receiveLines.length < MIN_RECEIVE_ROWS) receiveLines.push(blankRow());
   receiveLines.forEach((l, i) => {
     const tr = document.createElement('tr');
     tr.innerHTML = rowHtml(l, i);
