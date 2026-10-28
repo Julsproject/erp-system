@@ -649,6 +649,33 @@ class Payment(Base):
     sale = relationship("Sale", back_populates="payments")
 
 
+class CustomerCredit(Base):
+    """A customer's credit balance (an advance the shop owes back to them),
+    one signed row per movement: + an overpayment kept, or a paid invoice
+    whose total went down; - credit used to pay an invoice, or refunded in
+    cash. Balance = SUM(amount). Booked to the CUSTOMER_CREDIT liability
+    account (2050 Customer Deposits / Advances), never to Sales."""
+    __tablename__ = "customer_credits"
+
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    amount = Column(Numeric(12, 2), nullable=False)
+    kind = Column(String(20), nullable=False)  # overpayment | invoice_reduced | applied | refund
+    method = Column(String(20), nullable=True)  # money method for overpayment / refund
+    ref_no = Column(String(60), nullable=True)
+    note = Column(String(255), nullable=True)
+    # The invoice it came from (invoice_reduced) or paid (applied).
+    sale_id = Column(Integer, ForeignKey("sales.id"), nullable=True)
+    # The settlement it made (applied) — undoing that payment removes this row.
+    settlement_id = Column(Integer, ForeignKey("receivable_settlements.id", ondelete="CASCADE"), nullable=True)
+    journal_entry_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    customer = relationship("Customer")
+    sale = relationship("Sale")
+
+
 class ReceivableSettlement(Base):
     """A payment collected against a sale's outstanding credit."""
     __tablename__ = "receivable_settlements"

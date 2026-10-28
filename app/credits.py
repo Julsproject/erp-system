@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import accounting, audit, models, settings_store
+from . import accounting, audit, customer_credit, models, settings_store
 from .database import get_db
 from .deps import get_current_user, is_admin, is_staff, safe_back_url, url_with
 from .pos import _invoice_taken, _money, _vat_of
@@ -179,6 +179,7 @@ def credit_references(
 @router.get("/credits/{customer_id:int}", response_class=HTMLResponse)
 def credit_statement(
     customer_id: int, request: Request, undone: int = 0, undo_error: int = 0, back: str = "",
+    credit_error: int = 0, credit_done: int = 0,
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """`back` is the page the statement was opened from (the Credits list,
@@ -263,8 +264,25 @@ def credit_statement(
             "orig_total": orig_total, "paid_total": paid_total, "out_total": out_total,
             "undoable": undoable, "undone": undone, "undo_error": undo_error,
             "back": safe_back_url(back, "/credits"),
+            **_credit_ctx(db, user, customer), "credit_error": credit_error, "credit_done": credit_done,
+            "methods": SETTLE_METHODS, "today_iso": datetime.now(MANILA).date().isoformat(),
         },
     )
+
+
+def _credit_ctx(db: Session, user, customer) -> dict:
+    rows = (
+        db.query(models.CustomerCredit)
+        .filter(models.CustomerCredit.customer_id == customer.id)
+        .order_by(models.CustomerCredit.created_at, models.CustomerCredit.id)
+        .all()
+    )
+    return {
+        "credit_rows": rows,
+        "credit_balance": sum((r.amount for r in rows), Decimal("0")),
+        "credit_labels": customer_credit.KIND_LABELS,
+        "credit_undoable": {r.id: is_staff(user) and _credit_undoable(db, r) for r in rows},
+    }
 
 
 @router.get("/credits/{customer_id:int}/pdf")
@@ -449,6 +467,7 @@ def _render_collect(request: Request, db: Session, user, *, q: str = "", custome
             "si_eligible_ids": si_eligible_ids, "si_error": si_error,
             "today_iso": datetime.now(MANILA).date().isoformat(),
             "is_admin": is_admin(user), "error": error, "posted": posted,
+            "credit_balance": customer_credit.balance(db, customer.id) if customer else Decimal("0"),
         },
         status_code=status_code,
     )
@@ -632,6 +651,88 @@ def _apply_batch_payment(db: Session, user, customer, targets, method: str, ref_
     return None
 
 
+def _parse_amount(raw) -> Decimal | None:
+    raw = (raw or "").replace(",", "").replace("₱", "").strip()
+    if not raw:
+        return None
+    try:
+        return Decimal(raw).quantize(Decimal("0.01"))
+    except Exception:
+        return Decimal("-1")
+
+
+def _apply_collection(db: Session, user, customer, targets, method: str, ref_no, form,
+                      received, use_credit: bool) -> str | None:
+    """Collect Payment with the amount the customer actually handed over
+    (cash / e-wallet / bank — not a cheque, which still covers the ticked
+    invoices exactly). Pays the ticked invoices oldest first: their credit
+    balance first when "use credit" is ticked, then the money received.
+      - short: the last invoice reached is paid partly, the rest stays owed;
+      - over:  whatever's left is kept as the customer's credit balance
+               (Dr money / Cr Customer Deposits) — never as sales.
+    Returns an error string, or None (caller commits)."""
+    payment_dt, date_err = _resolve_settlement_datetime(form.get("payment_date"))
+    if date_err:
+        return date_err
+    total = sum((o for _, o in targets), Decimal("0"))
+    credit_left = customer_credit.balance(db, customer.id) if use_credit else Decimal("0")
+    credit_left = max(min(credit_left, total), Decimal("0"))
+    if received is None:
+        received = total - credit_left
+    if received < 0:
+        return "Enter the amount received as a number, e.g. 66,720.00."
+    if received == 0 and credit_left == 0:
+        return "Enter the amount received."
+    if method not in accounting.SALE_FUNCTION_KEYS and received > 0:
+        return "Choose how the customer paid."
+
+    money_left, credit_used = received, credit_left
+    for sale, outstanding in targets:
+        owed = outstanding
+        take_credit = min(credit_left, owed)
+        if take_credit > 0:
+            st = models.ReceivableSettlement(sale_id=sale.id, method="customer_credit", amount=take_credit,
+                                             ref_no="credit balance", cashier_id=user.id)
+            if payment_dt:
+                st.created_at = payment_dt
+            db.add(st)
+            db.flush()
+            row = customer_credit.record(db, kind="applied", amount=take_credit, customer=customer, user=user,
+                                         sale=sale, settlement=st, when=payment_dt)
+            st.journal_entry_id = row.journal_entry_id
+            credit_left -= take_credit
+            owed -= take_credit
+        take_money = min(money_left, owed)
+        if take_money > 0:
+            st = models.ReceivableSettlement(sale_id=sale.id, method=method, amount=take_money, ref_no=ref_no,
+                                             cashier_id=user.id)
+            if payment_dt:
+                st.created_at = payment_dt
+            db.add(st)
+            try:
+                entry = accounting.post_receivable_settlement(
+                    db, sale, amount=take_money, method=method, entered_by_id=user.id,
+                    txn_date=payment_dt.date() if payment_dt else None,
+                )
+                if entry:
+                    st.journal_entry_id = entry.id
+            except accounting.PostingError:
+                pass
+            money_left -= take_money
+    if money_left > 0:
+        invoices = ", ".join(s.invoice_no or "?" for s, _ in targets)
+        customer_credit.record(db, kind="overpayment", amount=money_left, customer=customer, user=user,
+                               method=method, ref_no=ref_no, note=f"Paid {received:,.2f} for {invoices}"[:255],
+                               when=payment_dt)
+    audit.record(
+        db, user=user, action="create", entity_type="customer", entity_id=customer.id, entity_label=customer.name,
+        summary=(f"Collected {received:,.2f} ({method}) on {len(targets)} invoice(s) owing {total:,.2f}"
+                 + (f"; credit balance used {credit_used:,.2f}" if credit_used > 0 else "")
+                 + (f"; {money_left:,.2f} kept as credit" if money_left > 0 else "")),
+    )
+    return None
+
+
 @router.post("/credits/{customer_id:int}/pay-full")
 def pay_full_submit(
     customer_id: int, request: Request,
@@ -709,6 +810,7 @@ def pay_selected_submit(
     method: str = Form("cash"), ref_no: str = Form(""), payment_date: str = Form(""),
     cheque_date: str = Form(""), bank: str = Form(""), cheque_no: str = Form(""),
     from_collect: str = Form(""), back: str = Form(""),
+    amount_received: str = Form(""), use_credit: str = Form(""),
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     if not user:
@@ -732,13 +834,18 @@ def pay_selected_submit(
     ref_no = (ref_no or "").strip() or None
     form = {"cheque_date": cheque_date, "payment_date": payment_date, "bank": bank, "cheque_no": cheque_no}
 
-    error = _apply_batch_payment(db, user, customer, owed, method, ref_no, form)
+    received = _parse_amount(amount_received)
+    if from_collect and method != "cheque" and (received is not None or use_credit):
+        error = _apply_collection(db, user, customer, owed, method, ref_no, form, received, bool(use_credit))
+    else:
+        error = _apply_batch_payment(db, user, customer, owed, method, ref_no, form)
     if error and from_collect:
         # Back to Collect Payment itself, as it was — not the bare Pay
         # Selected screen, which would drop the method and cheque details.
         return _render_collect(request, db, user, customer=customer, error=error, status_code=400, posted={
             "sale_ids": sorted(ids), "method": method, "ref_no": ref_no or "",
             "payment_date": payment_date, "bank": bank, "cheque_no": cheque_no, "cheque_date": cheque_date,
+            "amount_received": amount_received, "use_credit": bool(use_credit),
         })
     if error:
         return templates.TemplateResponse(
@@ -773,7 +880,9 @@ def _settlement_is_undoable(db: Session, settlement: models.ReceivableSettlement
         effect worth protecting (same reasoning as a cancelled return/PDC).
     Everything else — a plain Collect Payment / Pay Full / Pay Selected
     entry — is fair game."""
-    if settlement.method in ("cheque", "credit_note"):
+    # to_credit: the part of a paid invoice moved to the customer's credit
+    # balance when its total was corrected down — undo the credit instead.
+    if settlement.method in ("cheque", "credit_note", "to_credit"):
         return False
     if db.query(models.PostDatedCheque.id).filter(models.PostDatedCheque.settlement_id == settlement.id).first():
         return False
@@ -817,3 +926,69 @@ def undo_settlement(settlement_id: int, request: Request, back: str = Form(""), 
     db.delete(settlement)
     db.commit()
     return RedirectResponse(url_with(back_url, undone=1, undo_error=None), status_code=status.HTTP_302_FOUND)
+
+
+def _credit_undoable(db: Session, row: models.CustomerCredit) -> bool:
+    """Only the two that stand on their own: an overpayment (if the balance
+    hasn't been spent below it) and a refund. Credit used on an invoice is
+    undone through that payment's own Undo; one from a corrected invoice
+    goes with that invoice."""
+    if row.kind == "refund":
+        return True
+    if row.kind == "overpayment":
+        return customer_credit.balance(db, row.customer_id) >= row.amount
+    return False
+
+
+@router.post("/credits/{customer_id:int}/credit/refund")
+def refund_credit(
+    customer_id: int, request: Request,
+    amount: str = Form(""), method: str = Form("cash"), ref_no: str = Form(""), payment_date: str = Form(""),
+    back: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    """Pays a customer's credit balance back to them (Dr Customer Deposits /
+    Cr the money account)."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    customer = db.get(models.Customer, customer_id)
+    if not customer:
+        return RedirectResponse("/credits", status_code=302)
+    back_url = safe_back_url(back, f"/credits/{customer_id}")
+    amt = _parse_amount(amount)
+    bal = customer_credit.balance(db, customer_id)
+    method = (method or "cash").strip().lower()
+    payment_dt, date_err = _resolve_settlement_datetime(payment_date)
+    if date_err or amt is None or amt <= 0 or amt > bal or method not in accounting.SALE_FUNCTION_KEYS or method == "cheque":
+        return RedirectResponse(url_with(back_url, credit_error=1), status_code=status.HTTP_302_FOUND)
+    customer_credit.record(db, kind="refund", amount=amt, customer=customer, user=user, method=method,
+                           ref_no=(ref_no or "").strip() or None, when=payment_dt)
+    audit.record(db, user=user, request=request, action="create", entity_type="customer", entity_id=customer.id,
+                 entity_label=customer.name, summary=f"Refunded {amt:,.2f} of {customer.name}'s credit balance ({method})")
+    db.commit()
+    return RedirectResponse(url_with(back_url, credit_done=1), status_code=status.HTTP_302_FOUND)
+
+
+@router.post("/credits/credit/{credit_id:int}/undo")
+def undo_credit(credit_id: int, request: Request, back: str = Form(""),
+                db: Session = Depends(get_db), user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    row = db.get(models.CustomerCredit, credit_id)
+    if not row:
+        return RedirectResponse("/credits", status_code=302)
+    customer = row.customer
+    back_url = safe_back_url(back, f"/credits/{customer.id}")
+    if not _credit_undoable(db, row):
+        return RedirectResponse(url_with(back_url, credit_error=2), status_code=status.HTTP_302_FOUND)
+    label = customer_credit.KIND_LABELS.get(row.kind, row.kind)
+    amount = abs(row.amount)
+    customer_credit.undo(db, row, user=user, reason=f"{label} undone — {customer.name}")
+    audit.record(db, user=user, request=request, action="delete", entity_type="customer", entity_id=customer.id,
+                 entity_label=customer.name, summary=f"Undid credit balance entry: {label} {amount:,.2f} — recorded by mistake")
+    db.commit()
+    return RedirectResponse(url_with(back_url, credit_done=2), status_code=status.HTTP_302_FOUND)

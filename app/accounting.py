@@ -711,6 +711,47 @@ def post_receivable_settlement(db: Session, sale: models.Sale, *, amount: Decima
     )
 
 
+def post_customer_credit(db: Session, *, kind: str, amount: Decimal, customer: models.Customer,
+                         method: str = None, sale: models.Sale = None, entered_by_id: int = None, txn_date=None):
+    """A customer credit balance movement (see models.CustomerCredit), always
+    against CUSTOMER_CREDIT (2050 Customer Deposits / Advances):
+      overpayment     — Dr money received   / Cr Customer Deposits
+      refund          — Dr Customer Deposits / Cr money paid out
+      applied         — Dr Customer Deposits / Cr AR   (credit pays an invoice)
+      invoice_reduced — Dr AR / Cr Customer Deposits   (a paid invoice went down)
+    The two that touch AR are tagged to the sale, so the AR-by-customer
+    report still finds the customer; the other two to the customer."""
+    amount = Decimal(str(amount))
+    if amount <= 0:
+        return None
+    if kind in ("overpayment", "refund"):
+        fkey = SALE_FUNCTION_KEYS.get(method)
+        if not fkey:
+            return None
+        money = {"function_key": fkey, "amount": amount, "memo": method}
+        credit_line = {"function_key": "CUSTOMER_CREDIT", "amount": amount}
+        if kind == "overpayment":
+            lines = [dict(money, side="debit"), dict(credit_line, side="credit")]
+            desc = f"Overpayment kept as credit — {customer.name}"
+        else:
+            lines = [dict(credit_line, side="debit"), dict(money, side="credit")]
+            desc = f"Credit balance refunded — {customer.name}"
+        return post_journal(db, txn_date=txn_date or _today(), source_type="customer_credit", source_id=customer.id,
+                            description=desc, lines=lines, entered_by_id=entered_by_id)
+    if kind == "applied":
+        lines = [{"function_key": "CUSTOMER_CREDIT", "amount": amount, "side": "debit"},
+                 {"function_key": "AR", "amount": amount, "side": "credit"}]
+        desc = f"Credit balance applied to {sale.invoice_no}"
+    elif kind == "invoice_reduced":
+        lines = [{"function_key": "AR", "amount": amount, "side": "debit"},
+                 {"function_key": "CUSTOMER_CREDIT", "amount": amount, "side": "credit"}]
+        desc = f"{sale.invoice_no} corrected below what was paid — excess kept as credit"
+    else:
+        raise ValueError(kind)
+    return post_journal(db, txn_date=txn_date or _today(), source_type="sale_settlement", source_id=sale.id,
+                        description=desc, reference_no=sale.invoice_no, lines=lines, entered_by_id=entered_by_id)
+
+
 def reverse_receivable_settlement(db: Session, settlement: models.ReceivableSettlement, *, reason: str = None, entered_by_id: int = None, txn_date=None):
     """Undoes one accidental payment — reverses the specific journal entry
     this settlement posted (via journal_entry_id, not source_type/source_id,
@@ -2321,6 +2362,7 @@ _SOURCE_PAGES = {
     "sale": ("Sale", "Sale receipt", "/pos/receipt/{}"),
     "sale_cogs": ("Sale", "Sale receipt", "/pos/receipt/{}"),
     "sale_settlement": ("Sale", "Sale receipt", "/pos/receipt/{}"),
+    "customer_credit": ("Customer", "Customer statement", "/credits/{}"),
     "purchase": ("Purchase", "Delivery", "/purchases/{}"),
     "purchase_settlement": ("Purchase", "Delivery", "/purchases/{}"),
     "expense": ("Expense", "Expense", "/expenses/{}/edit"),
@@ -2368,7 +2410,7 @@ def je_source_links(entries) -> dict:
                 model_name, label, url = _SOURCE_PAGES[t.source_type]
                 rec = found.get(model_name, {}).get(t.source_id)
                 if rec is not None:
-                    ref = getattr(rec, "ref_no", None) or getattr(rec, "invoice_no", None) or f"#{rec.id}"
+                    ref = getattr(rec, "ref_no", None) or getattr(rec, "invoice_no", None) or getattr(rec, "name", None) or f"#{rec.id}"
                     links[e.id] = (f"{label} {ref}", url.format(rec.id))
             elif t.source_type in ("cost_variance", "stock_correction"):
                 mv = found.get("StockMovement", {}).get(t.source_id)

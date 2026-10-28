@@ -54,7 +54,7 @@
 {% set pv = posted or {} %}
 
 {% if not owed %}
-<div class="card"><p class="empty" style="margin:0;">Nothing outstanding — already paid in full.</p></div>
+<div class="card"><p class="empty" style="margin:0;">Nothing outstanding — already paid in full.{% if credit_balance > 0 %} Credit balance held for this customer: <strong>{{ credit_balance|peso }}</strong> — <a class="btn-link" href="/credits/{{ customer.id }}?back={{ back_here() }}">refund or view it</a>.{% endif %}</p></div>
 {% else %}
 <!-- Two independent forms share this one table: paying (#collectForm, the
      usual sale_ids checkboxes) and issuing an SI to recognize Output VAT on
@@ -127,13 +127,40 @@
   </table>
 </div>
 
-<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:16px;">
-  <div class="card" style="max-width:340px;flex:1;min-width:280px;">
+<style>
+  /* Labels above their boxes, one field per line (these cards sit outside
+     the <form>, so the .form styles don't reach them). */
+  .pay-card label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); font-weight: 500; margin-bottom: 12px; }
+  .pay-card label.checkbox { flex-direction: row; align-items: center; gap: 8px; color: var(--ink); }
+  .pay-card input[type=text], .pay-card input[type=date], .pay-card select {
+    width: 100%; padding: 9px 11px; border: 1px solid var(--line-2); border-radius: var(--radius-sm); font-size: 14px; color: var(--ink); background: var(--surface);
+  }
+  .pay-card input:focus, .pay-card select:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79,70,229,.14); }
+  .pay-card .hint { color: var(--faint); font-weight: 400; font-size: 11.5px; line-height: 1.35; }
+  .pay-card input#amountReceived { font-size: 16px; font-weight: 700; text-align: right; }
+  .pay-card .cheque-grid { display: grid; grid-template-columns: 1fr; gap: 0; }
+  .pay-note { font-size: 12.5px; padding: 8px 10px; border-radius: 8px; margin: -4px 0 12px; line-height: 1.4; }
+  .pay-note.over { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+  .pay-note.short { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
+</style>
+<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:16px;align-items:flex-start;">
+  <div class="card pay-card" style="max-width:360px;flex:1;min-width:280px;">
     <label>Method
       <select name="method" id="method" onchange="toggleCheque()" form="collectForm">
         {% for value, label in methods %}<option value="{{ value }}" {{ 'selected' if posted and value == pv.method }}>{{ label }}</option>{% endfor %}
       </select>
     </label>
+    <label id="amountField">Amount received
+      <input id="amountReceived" name="amount_received" type="text" inputmode="decimal" autocomplete="off" value="{{ pv.amount_received or '' }}" placeholder="0.00" oninput="amountTyped = true; liveCommas(this); updateTotal()" form="collectForm">
+      <small class="hint">Fills in with the invoices ticked above — change it if the customer paid more or less.</small>
+    </label>
+    {% if credit_balance > 0 %}
+    <label class="checkbox" id="useCreditField">
+      <input type="checkbox" id="useCredit" name="use_credit" value="1" {{ 'checked' if (not posted) or pv.use_credit }} onchange="amountTyped = false; updateTotal()" form="collectForm">
+      Use credit balance first ({{ credit_balance|peso }})
+    </label>
+    {% endif %}
+    <div id="payNote" class="pay-note" style="display:none;"></div>
     <label id="refNoField">Reference # <span class="muted">(optional)</span>
       <input name="ref_no" type="text" value="{{ pv.ref_no or '' }}" placeholder="Reference No." form="collectForm">
     </label>
@@ -158,7 +185,7 @@
   </div>
 
   {% if si_eligible_ids %}
-  <div class="card" style="max-width:340px;flex:1;min-width:280px;">
+  <div class="card pay-card" style="max-width:360px;flex:1;min-width:280px;">
     <p class="muted" style="margin:0 0 10px;font-size:12.5px;">
       A Delivery Receipt never carries VAT on its own — tick the ones above whose VAT you need to formally recognize now, then issue the SI that documents them. Rows marked <strong>paid</strong> can still be ticked: an SI is paperwork, so issuing it doesn't change what was collected.
     </p>
@@ -305,14 +332,53 @@
     updateTotal();
   }
 
+  const CREDIT_BALANCE = {{ '%.2f'|format(credit_balance or 0) }};
+  // Typed by hand: left alone when invoices are ticked/unticked. Otherwise
+  // it follows the ticked total (less any credit balance being used).
+  let amountTyped = {{ 'true' if pv.amount_received else 'false' }};
+
+  function plainNum(v) { return parseFloat(String(v || '').replace(/,/g, '')) || 0; }
+  function money2(n) { return (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
+  function liveCommas(input) {
+    const raw = input.value, caret = input.selectionStart, digitsBefore = raw.slice(0, caret).replace(/[^0-9.]/g, '').length;
+    let clean = raw.replace(/[^0-9.]/g, '');
+    const dot = clean.indexOf('.');
+    if (dot >= 0) clean = clean.slice(0, dot + 1) + clean.slice(dot + 1).replace(/\./g, '').slice(0, 2);
+    const [whole, frac] = clean.split('.');
+    const out = (whole ? Number(whole).toLocaleString('en-PH') : (frac !== undefined ? '0' : '')) + (frac !== undefined ? '.' + frac : '');
+    input.value = out;
+    let pos = 0, seen = 0;
+    while (pos < out.length && seen < digitsBefore) { if (/[0-9.]/.test(out[pos])) seen++; pos++; }
+    try { input.setSelectionRange(pos, pos); } catch (e) {}
+  }
+
   function updateTotal() {
     const checked = Array.from(document.querySelectorAll('.payChk:checked'));
     let total = 0;
     checked.forEach(c => { total += parseFloat(c.dataset.outstanding) || 0; });
+    total = Math.round(total * 100) / 100;
     document.getElementById('selTotal').textContent = peso(total);
+    const isCheque = document.getElementById('method').value === 'cheque';
+    const useCreditEl = document.getElementById('useCredit');
+    const credit = (!isCheque && useCreditEl && useCreditEl.checked) ? Math.min(CREDIT_BALANCE, total) : 0;
+    const amountEl = document.getElementById('amountReceived');
+    if (!amountTyped || isCheque) amountEl.value = checked.length ? money2(Math.max(total - credit, 0)) : '';
+    const received = isCheque ? total : plainNum(amountEl.value);
+    const diff = Math.round((received + credit - total) * 100) / 100;
+    const note = document.getElementById('payNote');
+    if (!checked.length || isCheque || diff === 0) {
+      note.style.display = 'none';
+    } else if (diff > 0) {
+      note.className = 'pay-note over'; note.style.display = 'block';
+      note.innerHTML = 'Over by <b>' + peso(diff) + '</b> — kept as the customer\'s <b>credit balance</b> (not sales). It can be used on their next payment or refunded from their statement.';
+    } else {
+      note.className = 'pay-note short'; note.style.display = 'block';
+      note.innerHTML = 'Short by <b>' + peso(-diff) + '</b> — the oldest invoices ticked are paid first; the rest stays owed.';
+    }
     const btn = document.getElementById('collectSubmit');
-    btn.textContent = 'Pay Selected — ' + peso(total);
-    btn.disabled = checked.length === 0;
+    btn.textContent = isCheque || !checked.length ? 'Pay Selected — ' + peso(total)
+      : 'Record ' + peso(received) + (credit > 0 ? ' + ' + peso(credit) + ' credit' : '');
+    btn.disabled = checked.length === 0 || (!isCheque && received <= 0 && credit <= 0);
     saveDraft();
   }
 
@@ -321,6 +387,13 @@
     document.getElementById('chequeFields').style.display = isCheque ? 'block' : 'none';
     document.getElementById('refNoField').style.display = isCheque ? 'none' : 'flex';
     document.getElementById('paymentDateField').style.display = isCheque ? 'none' : 'flex';
+    document.getElementById('amountField').style.display = isCheque ? 'none' : 'flex';
+    const ucf = document.getElementById('useCreditField');
+    if (ucf) ucf.style.display = isCheque ? 'none' : 'flex';
+    // A cheque covers the ticked invoices exactly; don't send a typed amount with it.
+    document.getElementById('amountReceived').disabled = isCheque;
+    if (document.getElementById('useCredit')) document.getElementById('useCredit').disabled = isCheque;
+    updateTotal();
     // A cheque needs its details before it's sent, so nothing ticked is lost
     // to a turned-back form.
     ['bank', 'cheque_no', 'cheque_date'].forEach(n => {
@@ -370,7 +443,9 @@
     collectForm.addEventListener('submit', function (e) {
       const checked = document.querySelectorAll('.payChk:checked').length;
       if (!checked) { e.preventDefault(); return; }
-      if (!confirm('Mark ' + checked + ' invoice(s) totaling ' + document.getElementById('selTotal').textContent + ' as paid?')) {
+      const note = document.getElementById('payNote');
+      const extra = note.style.display !== 'none' ? '\n\n' + note.textContent : '';
+      if (!confirm(document.getElementById('collectSubmit').textContent + ' on ' + checked + ' invoice(s) totaling ' + document.getElementById('selTotal').textContent + '?' + extra)) {
         e.preventDefault();
         return;
       }

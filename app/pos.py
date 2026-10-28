@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import accounting, audit, models, settings_store, stock_books, stock_dates
+from . import accounting, audit, customer_credit, models, settings_store, stock_books, stock_dates
 from .customers import get_or_create_customer
 from .database import get_db
 from .deps import get_current_user, is_floor_staff, is_staff, safe_back_url, url_with
@@ -2080,7 +2080,7 @@ def pos_receipt(
          "can_edit_customer": is_staff(user), "edit_customer_error": EDIT_CUSTOMER_ERRORS.get(edit_customer_error),
          "customer_names": customer_names,
          "today_iso": datetime.now(MANILA).date().isoformat(),
-         "can_edit_items": is_staff(user) and _can_edit_sale_items(db, sale) is None,
+         "can_edit_items": is_staff(user) and _can_edit_sale_items(db, sale, allow_paid=True) is None,
          "edit_items_error": EDIT_ITEMS_ERRORS.get(edit_items_error),
          "can_edit_payment": is_staff(user) and _can_edit_sale_payment(db, sale) is None,
          "edit_payment_error": EDIT_ITEMS_ERRORS.get(edit_payment_error),
@@ -2154,7 +2154,7 @@ EDIT_ITEMS_ERRORS = {
 }
 
 
-def _can_edit_sale_items(db: Session, sale: models.Sale):
+def _can_edit_sale_items(db: Session, sale: models.Sale, allow_paid: bool = False):
     """Returns an EDIT_ITEMS_ERRORS key, or None if this sale is eligible for
     in-place item editing. Same underlying restrictions as void (see
     void_sale) — an edit is really "reverse the old lines, apply new ones to
@@ -2163,13 +2163,16 @@ def _can_edit_sale_items(db: Session, sale: models.Sale):
     has been paid against it yet — once the customer's started paying it
     down, correcting the total here would leave a settlement referring to
     an amount that no longer matches (same "partially_paid" idea as
-    switching a credit sale's payment method back to direct-tender)."""
+    switching a credit sale's payment method back to direct-tender).
+    `allow_paid` lifts that for Edit Items itself: the corrected total just
+    becomes what's owed, and anything already paid above it goes to the
+    customer's credit balance (see edit_sale_items)."""
     if sale.is_voided:
         return "voided"
     if sale.txn_type != "sale":
         return "type"
     is_credit = (sale.receivable_amount or 0) > 0
-    if is_credit:
+    if is_credit and not allow_paid:
         settled = (
             db.query(func.coalesce(func.sum(models.ReceivableSettlement.amount), 0))
             .filter(models.ReceivableSettlement.sale_id == sale.id)
@@ -2934,7 +2937,7 @@ def edit_sale_items_form(
     ctx = _receipt_ctx(from_, back, cust, quote)
     if not is_staff(user):
         return RedirectResponse(_receipt_url(sale_id, ctx, edit_items_error="denied"), status_code=302)
-    block_reason = _can_edit_sale_items(db, sale)
+    block_reason = _can_edit_sale_items(db, sale, allow_paid=True)
     if block_reason:
         return RedirectResponse(_receipt_url(sale_id, ctx, edit_items_error=block_reason), status_code=302)
 
@@ -2970,7 +2973,7 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
         return JSONResponse({"ok": False, "error": "Sale not found."}, status_code=404)
     if not is_staff(user):
         return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS["denied"]}, status_code=403)
-    block_reason = _can_edit_sale_items(db, sale)
+    block_reason = _can_edit_sale_items(db, sale, allow_paid=True)
     if block_reason:
         return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS[block_reason]}, status_code=400)
 
@@ -3151,10 +3154,33 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
     except accounting.PostingError:
         pass
 
+    # A credit invoice already paid (part or all) and now corrected below
+    # what was paid: the excess is the customer's money — move it off the
+    # invoice (a negative "to_credit" settlement, so it reads fully paid)
+    # into their credit balance (Dr AR / Cr Customer Deposits). Corrected
+    # upward instead, the difference simply shows as owed again.
+    moved_to_credit = Decimal("0")
+    if (sale.receivable_amount or 0) > 0 and sale.customer:
+        paid = Decimal(str(
+            db.query(func.coalesce(func.sum(models.ReceivableSettlement.amount), 0))
+            .filter(models.ReceivableSettlement.sale_id == sale.id).scalar() or 0
+        ))
+        if paid > sale.receivable_amount:
+            moved_to_credit = paid - sale.receivable_amount
+            st = models.ReceivableSettlement(sale_id=sale.id, method="to_credit", amount=-moved_to_credit,
+                                             ref_no="to credit balance", cashier_id=user.id)
+            db.add(st)
+            db.flush()
+            row = customer_credit.record(db, kind="invoice_reduced", amount=moved_to_credit, customer=sale.customer,
+                                         user=user, sale=sale, settlement=st,
+                                         note=f"Total corrected {old_total:,.2f} → {sale.total:,.2f}")
+            st.journal_entry_id = row.journal_entry_id
+
     audit.record(
         db, user=user, request=request, action="update", entity_type="sale",
         entity_id=sale.id, entity_label=sale.invoice_no,
-        summary=f"Corrected items on sale {sale.invoice_no}: {old_line_count} line(s) → {len(sale.lines)}, total {old_total:g} → {sale.total:g}",
+        summary=f"Corrected items on sale {sale.invoice_no}: {old_line_count} line(s) → {len(sale.lines)}, total {old_total:g} → {sale.total:g}"
+                + (f"; {moved_to_credit:,.2f} already paid moved to the customer's credit balance" if moved_to_credit else ""),
         changes={"total": [str(old_total), str(sale.total)]},
     )
     db.commit()

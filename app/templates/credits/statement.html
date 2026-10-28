@@ -140,6 +140,10 @@
                 {% for it in items %}{{ it.qty|qty }} {{ it.unit or '' }} {{ it.name }}{{ ', ' if not loop.last }}{% endfor %}
               </div>
               {% endif %}
+            {% elif st.method == 'customer_credit' %}
+              Paid from credit balance
+            {% elif st.method == 'to_credit' %}
+              Invoice corrected below what was paid — excess moved to credit balance
             {% else %}
               Payment via {{ st.method|replace('_',' ')|title }}
             {% endif %}
@@ -158,6 +162,56 @@
         {% endfor %}
       </tbody>
     </table>
+    {% endif %}
+
+    {% if credit_rows or credit_error or credit_done %}
+    <div class="s-title" style="margin:26px 0 8px;">Credit Balance (advance held for customer)</div>
+    {% if credit_done == 1 %}<div class="alert no-print" style="background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;padding:10px 14px;border-radius:8px;margin-bottom:12px;">Refund recorded.</div>{% endif %}
+    {% if credit_done == 2 %}<div class="alert no-print" style="background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;padding:10px 14px;border-radius:8px;margin-bottom:12px;">Credit entry undone.</div>{% endif %}
+    {% if credit_error == 1 %}<div class="alert no-print" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:10px 14px;border-radius:8px;margin-bottom:12px;">Refund not recorded — the amount must be more than zero and not more than the credit balance.</div>{% endif %}
+    {% if credit_error == 2 %}<div class="alert no-print" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:10px 14px;border-radius:8px;margin-bottom:12px;">That entry can't be undone here — credit used on an invoice is undone with that payment's Undo above, and an overpayment can't be undone once part of it was used.</div>{% endif %}
+    {% if credit_rows %}
+    <table>
+      <thead><tr><th>Date</th><th>Description</th><th>Reference #</th><th class="num">Amount</th><th class="no-print"></th></tr></thead>
+      <tbody>
+        {% for c in credit_rows %}
+        <tr>
+          <td>{{ c.created_at.strftime('%b %d, %Y') if c.created_at else '' }}</td>
+          <td>{{ credit_labels.get(c.kind, c.kind) }}{% if c.sale %} — Invoice {{ c.sale.invoice_no }}{% endif %}{% if c.method %} ({{ c.method|replace('_',' ')|title }}){% endif %}
+            {% if c.note %}<div style="color:var(--muted);font-size:12px;margin-top:2px;">{{ c.note }}</div>{% endif %}</td>
+          <td class="mut">{{ c.ref_no or '—' }}</td>
+          <td class="num" style="{{ 'color:#15803d;' if c.amount > 0 }}">{{ '+' if c.amount > 0 }}{{ c.amount|peso }}</td>
+          <td class="no-print">
+            {% if credit_undoable.get(c.id) %}
+            <form method="post" action="/credits/credit/{{ c.id }}/undo" onsubmit="return confirm('Undo this {{ c.amount|peso }} credit entry?');" style="display:inline;">
+              <input type="hidden" name="back" value="{{ request.url.path }}">
+              <button type="submit" class="pay-link" style="background:none;border:none;cursor:pointer;color:#b91c1c;">Undo</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    <div class="s-balance">Credit balance: <b style="color:#15803d;">{{ credit_balance|peso }}</b></div>
+    {% if credit_balance > 0 %}
+    <form class="no-print" method="post" action="/credits/{{ customer.id }}/credit/refund"
+          onsubmit="return confirm('Refund ' + this.amount.value + ' of the credit balance to {{ customer.name }}?');"
+          style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;justify-content:flex-end;margin-top:10px;font-size:12.5px;">
+      <input type="hidden" name="back" value="{{ request.url.path }}">
+      <label style="display:flex;flex-direction:column;gap:3px;color:var(--muted);">Refund amount
+        <input name="amount" type="text" inputmode="decimal" value="{{ '%.2f'|format(credit_balance) }}" style="width:120px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;text-align:right;"></label>
+      <label style="display:flex;flex-direction:column;gap:3px;color:var(--muted);">Paid out by
+        <select name="method" style="padding:6px 8px;border:1px solid var(--line);border-radius:6px;">
+          {% for value, label in methods if value != 'cheque' %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+        </select></label>
+      <label style="display:flex;flex-direction:column;gap:3px;color:var(--muted);">Date
+        <input name="payment_date" type="date" max="{{ today_iso }}" style="padding:5px 8px;border:1px solid var(--line);border-radius:6px;"></label>
+      <button type="submit" class="btn back">Refund credit</button>
+    </form>
+    <p class="mut no-print" style="text-align:right;font-size:12px;margin:6px 0 0;">Or leave it — it can be used on their next payment in Collect Payment.</p>
+    {% endif %}
     {% endif %}
 
     <div class="s-foot">This statement reflects credit purchases and payments recorded in {{ app_name }}.</div>
