@@ -11,7 +11,7 @@ from . import accounting, models
 # Which way each kind moves the balance.
 SIGN = {"overpayment": 1, "invoice_reduced": 1, "applied": -1, "refund": -1}
 KIND_LABELS = {
-    "overpayment": "Overpayment kept as credit",
+    "overpayment": "Advance / overpayment kept as credit",
     "invoice_reduced": "Invoice corrected below what was paid",
     "applied": "Used to pay an invoice",
     "refund": "Refunded to customer",

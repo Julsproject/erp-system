@@ -166,6 +166,8 @@
 
     {% if credit_rows or credit_error or credit_done %}
     <div class="s-title" style="margin:26px 0 8px;">Credit Balance (advance held for customer)</div>
+    {% if credit_done == 3 %}<div class="alert no-print" style="background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;padding:10px 14px;border-radius:8px;margin-bottom:12px;">Advance recorded as credit balance.</div>{% endif %}
+    {% if credit_error == 3 %}<div class="alert no-print" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:10px 14px;border-radius:8px;margin-bottom:12px;">Not recorded — enter an amount more than zero (cheques go through Collect Payment).</div>{% endif %}
     {% if credit_done == 1 %}<div class="alert no-print" style="background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;padding:10px 14px;border-radius:8px;margin-bottom:12px;">Refund recorded.</div>{% endif %}
     {% if credit_done == 2 %}<div class="alert no-print" style="background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;padding:10px 14px;border-radius:8px;margin-bottom:12px;">Credit entry undone.</div>{% endif %}
     {% if credit_error == 1 %}<div class="alert no-print" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:10px 14px;border-radius:8px;margin-bottom:12px;">Refund not recorded — the amount must be more than zero and not more than the credit balance.</div>{% endif %}
@@ -213,6 +215,27 @@
     <p class="mut no-print" style="text-align:right;font-size:12px;margin:6px 0 0;">Or leave it — it can be used on their next payment in Collect Payment.</p>
     {% endif %}
     {% endif %}
+
+    <details class="no-print" style="margin-top:14px;font-size:12.5px;" {{ 'open' if credit_error == 3 }}>
+      <summary style="cursor:pointer;color:#4f46e5;font-weight:600;text-align:right;">+ Record advance / overpayment</summary>
+      <p class="mut" style="margin:8px 0;">Money received with no invoice to pay — paid in advance, or extra on top of a collection already recorded. It's kept as their credit balance (2050 Customer Deposits / Advances), not as sales.</p>
+      <form method="post" action="/credits/{{ customer.id }}/credit/advance"
+            onsubmit="return confirm('Record ' + this.amount.value + ' as {{ customer.name }}'s credit balance?');"
+            style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;justify-content:flex-end;">
+        <input type="hidden" name="back" value="{{ request.url.path }}">
+        <label style="display:flex;flex-direction:column;gap:3px;color:var(--muted);">Amount
+          <input name="amount" type="text" inputmode="decimal" required style="width:120px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;text-align:right;"></label>
+        <label style="display:flex;flex-direction:column;gap:3px;color:var(--muted);">Received by
+          <select name="method" style="padding:6px 8px;border:1px solid var(--line);border-radius:6px;">
+            {% for value, label in methods if value != 'cheque' %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+          </select></label>
+        <label style="display:flex;flex-direction:column;gap:3px;color:var(--muted);">Date
+          <input name="payment_date" type="date" max="{{ today_iso }}" style="padding:5px 8px;border:1px solid var(--line);border-radius:6px;"></label>
+        <label style="display:flex;flex-direction:column;gap:3px;color:var(--muted);flex-basis:100%;">Note
+          <input name="note" type="text" maxlength="255" placeholder="e.g. extra paid with the Oct 28 collection — to verify" style="padding:6px 8px;border:1px solid var(--line);border-radius:6px;"></label>
+        <button type="submit" class="btn back">Record as credit</button>
+      </form>
+    </details>
 
     <div class="s-foot">This statement reflects credit purchases and payments recorded in {{ app_name }}.</div>
   </div>

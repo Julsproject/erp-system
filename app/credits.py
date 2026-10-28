@@ -971,6 +971,37 @@ def refund_credit(
     return RedirectResponse(url_with(back_url, credit_done=1), status_code=status.HTTP_302_FOUND)
 
 
+@router.post("/credits/{customer_id:int}/credit/advance")
+def record_advance(
+    customer_id: int, request: Request,
+    amount: str = Form(""), method: str = Form("cash"), ref_no: str = Form(""), payment_date: str = Form(""),
+    note: str = Form(""), back: str = Form(""),
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    """Money received with no invoice to pay — an advance, or extra paid on
+    top of a collection already recorded. Kept as the customer's credit
+    balance (Dr money / Cr Customer Deposits), never as sales."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    customer = db.get(models.Customer, customer_id)
+    if not customer:
+        return RedirectResponse("/credits", status_code=302)
+    back_url = safe_back_url(back, f"/credits/{customer_id}")
+    amt = _parse_amount(amount)
+    method = (method or "cash").strip().lower()
+    payment_dt, date_err = _resolve_settlement_datetime(payment_date)
+    if date_err or amt is None or amt <= 0 or method not in accounting.SALE_FUNCTION_KEYS or method == "cheque":
+        return RedirectResponse(url_with(back_url, credit_error=3), status_code=status.HTTP_302_FOUND)
+    customer_credit.record(db, kind="overpayment", amount=amt, customer=customer, user=user, method=method,
+                           ref_no=(ref_no or "").strip() or None, note=(note or "").strip()[:255] or None, when=payment_dt)
+    audit.record(db, user=user, request=request, action="create", entity_type="customer", entity_id=customer.id,
+                 entity_label=customer.name, summary=f"Recorded {amt:,.2f} ({method}) as {customer.name}'s credit balance")
+    db.commit()
+    return RedirectResponse(url_with(back_url, credit_done=3), status_code=status.HTTP_302_FOUND)
+
+
 @router.post("/credits/credit/{credit_id:int}/undo")
 def undo_credit(credit_id: int, request: Request, back: str = Form(""),
                 db: Session = Depends(get_db), user=Depends(get_current_user)):
