@@ -335,7 +335,7 @@
   const CREDIT_BALANCE = {{ '%.2f'|format(credit_balance or 0) }};
   // Typed by hand: left alone when invoices are ticked/unticked. Otherwise
   // it follows the ticked total (less any credit balance being used).
-  let amountTyped = {{ 'true' if pv.amount_received else 'false' }};
+  let amountTyped = {{ 'true' if posted and posted.amount_received else 'false' }};
 
   function plainNum(v) { return parseFloat(String(v || '').replace(/,/g, '')) || 0; }
   function money2(n) { return (Number(n) || 0).toLocaleString('en-PH', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
