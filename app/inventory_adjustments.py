@@ -316,11 +316,13 @@ def cancel_adjustment(db: Session, adj: models.InventoryAdjustment, *, user, rea
     by_product = {}
     for m in originals:
         by_product.setdefault(m.product_id, []).append(m)
-    for line in adj.lines:
+    used = set()   # an item on two lines (a move in + a found qty) has two movements — each line takes its own
+    for line in sorted(adj.lines, key=lambda l: l.id):
         product = db.get(models.Product, line.product_id, with_for_update=True)
-        mvs = by_product.get(line.product_id, [])
-        qty_mv = next((m for m in mvs if m.reason in (MV_PNL, MV_CORRECTION)), None)
-        reval_mv = next((m for m in mvs if m.reason == MV_REVAL), None)
+        mvs = [m for m in by_product.get(line.product_id, []) if m.id not in used]
+        qty_mv = next((m for m in mvs if m.reason in (MV_PNL, MV_CORRECTION)), None) if line.qty_base else None
+        reval_mv = next((m for m in mvs if m.reason == MV_REVAL), None) if line.value_reval else None
+        used.update(m.id for m in (qty_mv, reval_mv) if m is not None)
         if qty_mv is not None:
             count_date = latest_count_date(db, product.id)
             if count_date and count_date >= adj.adj_date:
