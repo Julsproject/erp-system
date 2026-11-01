@@ -7,12 +7,13 @@ A receive-type purchase has a status lifecycle, same idea as Quotations:
   paid      -> payment was later settled with the supplier; no stock effect.
 A return has no staging — it removes stock immediately, same as before.
 """
+import io
 import json
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from urllib.parse import quote, quote_plus
 
-from fastapi import APIRouter, Depends, Form, Request, status as http_status
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status as http_status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -326,6 +327,240 @@ def purchase_product(product_id: int, db: Session = Depends(get_db), user=Depend
     if not p or not p.is_active:
         return {"found": False}
     return {"found": True, "product": _purchase_product_payload(db, p, sold=recent_sold(db, [p.id]).get(p.id))}
+
+
+# Excel import on New Purchase — column titles it recognises, lower-cased.
+_XL_COLUMNS = {
+    "qty": ("qty", "quantity"),
+    "unit": ("unit", "uom"),
+    "name": ("product name", "product", "item", "item name", "description"),
+    "cost": ("unit price", "unit cost", "price", "cost"),
+    "subtotal": ("subtotal", "amount", "line total"),
+}
+_XL_SUPPLIER = ("supplier", "supplier name")
+_XL_INVOICE = ("invoice / dr #", "invoice/dr #", "invoice", "invoice #", "invoice no", "dr", "dr #", "dr no", "reference", "ref")
+_XL_DATE = ("delivery date", "date")
+_XL_MAX_BYTES = 5 * 1024 * 1024
+_XL_MAX_LINES = 500
+_XL_UNIT_ALIASES = {"pc": "piece", "pcs": "piece", "pieces": "piece", "pairs": "pair"}
+
+
+def _xl_key(value) -> str:
+    return " ".join(str(value if value is not None else "").split()).lower()
+
+
+def _xl_unit_key(value) -> str:
+    key = _xl_key(value).rstrip(".")
+    return _XL_UNIT_ALIASES.get(key, key)
+
+
+def _xl_number(value) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = Decimal(str(value).replace(",", "").replace("₱", "").strip())
+    except InvalidOperation:
+        return None
+    return number if number.is_finite() else None
+
+
+def _xl_text(value) -> str:
+    """A cell as text — an invoice typed as a number comes back 16986.0."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return " ".join(str(value if value is not None else "").split())
+
+
+def _xl_date(value) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = _xl_text(value)
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%m/%d/%y", "%m-%d-%y", "%b %d, %Y", "%B %d, %Y"):
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return ""
+
+
+def _xl_read_sheet(rows: list) -> dict | None:
+    """Finds the header row and reads the sheet: the Supplier / Invoice / Date
+    labels above it, and one dict per item row below it. None if no row here
+    has the needed column titles."""
+    for header_at, row in enumerate(rows[:40]):
+        titles = {}
+        for col, cell in enumerate(row):
+            key = _xl_key(cell)
+            for field, names in _XL_COLUMNS.items():
+                if key in names and field not in titles:
+                    titles[field] = col
+        if "qty" in titles and "name" in titles and ("cost" in titles or "subtotal" in titles):
+            break
+    else:
+        return None
+
+    head = {"supplier": "", "invoice_no": "", "delivery_date": ""}
+    for row in rows[:header_at]:
+        for col, cell in enumerate(row):
+            key = _xl_key(cell).rstrip(":").strip()
+            value = next((v for v in row[col + 1:] if v not in (None, "")), None)
+            if value is None:
+                continue
+            if key in _XL_SUPPLIER and not head["supplier"]:
+                head["supplier"] = _xl_text(value)
+            elif key in _XL_INVOICE and not head["invoice_no"]:
+                head["invoice_no"] = _xl_text(value)
+            elif key in _XL_DATE and not head["delivery_date"]:
+                head["delivery_date"] = _xl_date(value)
+
+    def cell(row, field):
+        col = titles.get(field)
+        return row[col] if col is not None and col < len(row) else None
+
+    items = []
+    for offset, row in enumerate(rows[header_at + 1:], start=header_at + 2):
+        name = _xl_text(cell(row, "name"))
+        qty, cost, subtotal = _xl_number(cell(row, "qty")), _xl_number(cell(row, "cost")), _xl_number(cell(row, "subtotal"))
+        # A Total line or a note under the table has no item name.
+        if not name or (qty is None and cost is None and subtotal is None):
+            continue
+        if cost is None and subtotal is not None and qty:
+            cost = (subtotal / qty).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        items.append({"row": offset, "name": name, "qty": qty, "unit": _xl_text(cell(row, "unit")), "cost": cost})
+    return {**head, "items": items}
+
+
+@router.post("/purchases/import-excel")
+def purchase_import_excel(file: UploadFile = File(...), db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Reads a delivery from an .xlsx into the New Purchase form. Saves
+    nothing — the page fills its rows from this, and the delivery is only
+    recorded when someone checks it and presses Save Purchase, so it goes
+    through the same checks as one typed by hand."""
+    if not user:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    if not is_floor_staff(user):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+
+    def fail(message):
+        return JSONResponse({"ok": False, "error": message}, status_code=400)
+
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        return fail("Choose an Excel .xlsx file. An older .xls file has to be saved as .xlsx first.")
+    contents = file.file.read(_XL_MAX_BYTES + 1)
+    if len(contents) > _XL_MAX_BYTES:
+        return fail("That file is too big — it should be under 5 MB.")
+
+    from openpyxl import load_workbook
+    try:
+        book = load_workbook(io.BytesIO(contents), data_only=True, read_only=True)
+        sheets = [book.active] + [ws for ws in book.worksheets if ws is not book.active]
+        parsed = None
+        for sheet in sheets:
+            parsed = _xl_read_sheet([list(r) for r in sheet.iter_rows(values_only=True)])
+            if parsed:
+                break
+        book.close()
+    except Exception:
+        return fail("That file couldn't be read. Open it in Excel, save it as .xlsx and try again.")
+    if not parsed:
+        return fail("No item table found. The sheet needs columns titled Qty, Product Name and Unit Price.")
+    items = parsed["items"]
+    if not items:
+        return fail("The item table is empty.")
+    if len(items) > _XL_MAX_LINES:
+        return fail(f"That's {len(items)} rows — the most one delivery can import is {_XL_MAX_LINES}.")
+
+    warnings = []
+    active, archived = {}, set()
+    for pid, name, is_active in db.query(models.Product.id, models.Product.name, models.Product.is_active):
+        if is_active:
+            active.setdefault(_xl_key(name), pid)
+        else:
+            archived.add(_xl_key(name))
+
+    matched_ids = {active[_xl_key(i["name"])] for i in items if _xl_key(i["name"]) in active}
+    products = {p.id: p for p in db.query(models.Product).filter(models.Product.id.in_(matched_ids))} if matched_ids else {}
+    sold = recent_sold(db, list(matched_ids))
+
+    lines = []
+    for item in items:
+        where = f"Row {item['row']}, {item['name']}"
+        pid = active.get(_xl_key(item["name"]))
+        payload = None
+        if pid:
+            payload = _purchase_product_payload(db, products[pid], sold=sold.get(pid))
+            offered = {_xl_unit_key(u["name"]) for u in payload["units"]}
+            if item["unit"] and payload["has_unit_type"] and _xl_unit_key(item["unit"]) not in offered:
+                warnings.append(f"{where}: this item isn't sold by “{item['unit']}” in the system, so the qty may be "
+                                f"in the wrong unit. It's set up in: {', '.join(u['name'] for u in payload['units'])}.")
+        elif _xl_key(item["name"]) in archived:
+            warnings.append(f"{where}: an archived item has this name. It would be created as a new item.")
+        qty = item["qty"]
+        if qty is None or qty <= 0:
+            warnings.append(f"{where}: the qty is missing, so this row won't save until it's filled in.")
+            qty = None
+        if item["cost"] is None or item["cost"] < 0:
+            warnings.append(f"{where}: the unit price is missing." + (" It starts from the current cost." if pid else ""))
+            item["cost"] = None
+        lines.append({
+            "product": payload, "name": item["name"], "unit": item["unit"],
+            "qty": float(qty) if qty is not None else None,
+            "unit_cost": float(item["cost"]) if item["cost"] is not None else None,
+        })
+
+    supplier_id = None
+    if parsed["supplier"]:
+        want = _xl_key(parsed["supplier"])
+        supplier = next((s for s in db.query(models.Supplier).filter(models.Supplier.is_active.is_(True))
+                         if _xl_key(s.name) == want), None)
+        if supplier:
+            supplier_id = supplier.id
+        else:
+            warnings.append(f"Supplier “{parsed['supplier']}” isn't on file — choose it above.")
+    if supplier_id and parsed["invoice_no"]:
+        duplicate = _duplicate_dr(db, supplier_id, parsed["invoice_no"])
+        if duplicate:
+            warnings.append(f"{parsed['invoice_no']} is already saved for this supplier as {duplicate.ref_no}.")
+
+    return {
+        "ok": True, "supplier_id": supplier_id, "invoice_no": parsed["invoice_no"],
+        "delivery_date": parsed["delivery_date"], "lines": lines, "warnings": warnings,
+        "new_items": sum(1 for l in lines if not l["product"]),
+    }
+
+
+@router.get("/purchases/import-template")
+def purchase_import_template(user=Depends(get_current_user)):
+    """A blank Excel layout the import above reads."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_floor_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Delivery"
+    sheet.append(["Supplier", ""])
+    sheet.append(["Invoice / DR #", ""])
+    sheet.append(["Delivery date", ""])
+    sheet.append([])
+    sheet.append(["Qty", "Unit", "Product Name", "Unit Price"])
+    sheet.append([10, "Piece", "Example: type the item name exactly as in Inventory", 25.5])
+    for ref in ("A1", "A2", "A3", "A5", "B5", "C5", "D5"):
+        sheet[ref].font = Font(name="Arial", bold=True)
+    for col, width in zip("ABCD", (16, 14, 52, 12)):
+        sheet.column_dimensions[col].width = width
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return Response(
+        buffer.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="purchase_import_template.xlsx"'},
+    )
 
 
 @router.get("/purchases", response_class=HTMLResponse)

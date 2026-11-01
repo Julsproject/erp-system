@@ -132,6 +132,12 @@
       Type the Product Name to find an existing item, or type a new one to create it automatically when you save —
       no extra steps. A new row appears as soon as you start the last one.
     </p>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px;font-size:12px;">
+      <button type="button" class="btn-secondary" id="importExcelBtn" style="padding:5px 12px;font-size:12.5px;" onclick="document.getElementById('importExcelFile').click()">Import from Excel</button>
+      <input type="file" id="importExcelFile" accept=".xlsx" style="display:none;" onchange="importFromExcel(this)">
+      <a class="btn-link" href="/purchases/import-template">Download template</a>
+    </div>
+    <div id="importWarnings" class="alert" style="display:none;background:#fffbeb;border-color:#fde68a;color:#92400e;margin-bottom:10px;font-size:12.5px;"></div>
     {% endif %}
 
     <div class="table-wrap buy-lines">
@@ -811,7 +817,7 @@ async function loadFromOrderSlip() {
   slip.rows.forEach((r, k) => {
     const d = found[k];
     if (!d || !d.found) return;
-    const i = receiveLines.length - 1;   // always the trailing blank row
+    const i = firstEmptyRow();
     pickRowProduct(i, d.product);         // adds a new trailing blank itself
     const l = receiveLines[i];
     const want = String(r.unit || '').trim().toLowerCase();
@@ -845,6 +851,86 @@ async function loadFromOrderSlip() {
     + '. Check the quantities and costs against the delivery receipt before saving.';
   note.style.display = 'block';
   document.getElementById('purchaseDraftBanner').style.display = 'none';
+}
+
+/* The next row with nothing typed on it — rows can't just be taken from the
+   end, since every render keeps at least MIN_RECEIVE_ROWS on the page. */
+function firstEmptyRow() {
+  let i = receiveLines.findIndex(l => !(l.name || '').trim());
+  if (i < 0) { receiveLines.push(blankRow()); i = receiveLines.length - 1; }
+  return i;
+}
+
+/* Import from Excel: the server reads the file and matches each row to an
+   item by its exact name (saving nothing). The rows land here as if typed,
+   with the sheet's own qty and price, so they're checked and saved the
+   normal way. A name it can't match stays as a new item. */
+async function importFromExcel(input) {
+  const file = input.files[0];
+  input.value = '';   // choosing the same file again must still fire onchange
+  if (!file) return;
+  if (receiveLines.some(l => (l.name || '').trim())
+      && !confirm('Replace the items on this page with the ones in ' + file.name + '?')) return;
+
+  const btn = document.getElementById('importExcelBtn');
+  const warnBox = document.getElementById('importWarnings');
+  const note = document.getElementById('slipLoadedNote');
+  warnBox.style.display = 'none';
+  note.style.display = 'none';
+  btn.disabled = true;
+  btn.textContent = 'Reading…';
+  let d = null;
+  try {
+    const body = new FormData();
+    body.append('file', file);
+    const res = await fetch('/purchases/import-excel', { method: 'POST', body });
+    d = await res.json();
+  } catch (e) {
+    d = { ok: false, error: 'The file could not be uploaded. Check the connection and try again.' };
+  }
+  btn.disabled = false;
+  btn.textContent = 'Import from Excel';
+  if (!d.ok) {
+    warnBox.textContent = d.error || 'That file could not be read.';
+    warnBox.style.display = 'block';
+    return;
+  }
+
+  receiveLines = [blankRow()];
+  d.lines.forEach(r => {
+    const i = firstEmptyRow();
+    if (r.product) pickRowProduct(i, r.product);
+    else { receiveLines[i].name = r.name; ensureTrailingBlankRow(); }
+    const l = receiveLines[i];
+    const want = String(r.unit || '').trim().toLowerCase();
+    if (l.units) {
+      const ui = l.units.findIndex(u => String(u.name).toLowerCase() === want);
+      if (ui >= 0) l.unitIndex = ui;
+    } else if (!l.unitLocked && want) {
+      l.unitName = r.unit;
+    }
+    if (r.unit_cost != null) l.unitCost = r.unit_cost;
+    else if (l.units && l.knownCost != null) l.unitCost = Number(l.knownCost) * (l.units[l.unitIndex].factor || 1);
+    l.qty = r.qty != null ? r.qty : '';
+  });
+
+  if (d.supplier_id) document.getElementById('supplierId').value = d.supplier_id;
+  if (d.invoice_no) document.getElementById('invoiceNo').value = d.invoice_no;
+  if (d.delivery_date) document.getElementById('deliveryDate').value = d.delivery_date;
+  renderLines();
+  savePurchaseDraft();
+
+  const count = d.lines.length;
+  note.textContent = 'Filled in ' + count + ' item' + (count === 1 ? '' : 's') + ' from ' + file.name
+    + (d.new_items ? ', ' + d.new_items + ' of them new (not in Inventory yet)' : '')
+    + '. Nothing is saved yet: check them against the delivery receipt, then press Save Purchase.';
+  note.style.display = 'block';
+  document.getElementById('purchaseDraftBanner').style.display = 'none';
+  if (d.warnings.length) {
+    warnBox.innerHTML = '<strong>Please check:</strong><ul style="margin:4px 0 0;padding-left:18px;">'
+      + d.warnings.map(w => '<li>' + escapeHtml(w) + '</li>').join('') + '</ul>';
+    warnBox.style.display = 'block';
+  }
 }
 if (document.getElementById('paymentMethod')) onPaymentMethodChange();
 </script>
