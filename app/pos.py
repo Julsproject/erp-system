@@ -13,12 +13,12 @@ from datetime import date, datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from . import accounting, audit, customer_credit, models, settings_store, stock_books, stock_dates
+from . import accounting, audit, customer_credit, doc_import, models, photo_reader, settings_store, stock_books, stock_dates
 from .customers import get_or_create_customer
 from .database import get_db
 from .deps import get_current_user, is_floor_staff, is_staff, safe_back_url, url_with
@@ -812,6 +812,128 @@ def pos_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_curr
             query = query.filter(or_(name_match, models.Product.selling_price == price, unit_priced))
     products = query.order_by(models.Product.name).limit(30).all()
     return {"products": [_product_payload_for_pos(db, p) for p in products]}
+
+
+def _guess_receipt_type(db: Session, invoice_no: str) -> str:
+    """The booklet a bare number on a DR/SI photo belongs to — whichever
+    booklet holds the nearest number already encoded (DRS 50160-50171 makes
+    50172 a DRS too). Blank when nothing near it has been encoded."""
+    if not invoice_no.isdigit():
+        return ""
+    n, width = int(invoice_no), len(invoice_no)
+    near = [str(n + d).zfill(width) for d in range(-300, 301) if d and n + d > 0]
+    rows = (
+        db.query(models.Sale.invoice_no, models.Sale.receipt_type)
+        .filter(models.Sale.invoice_no.in_(near), models.Sale.receipt_type.isnot(None))
+        .all()
+    )
+    if not rows:
+        return ""
+    return min(rows, key=lambda r: abs(int(r[0]) - n))[1] or ""
+
+
+def _pos_import_result(db: Session, parsed: dict) -> dict:
+    """The POS cart from an imported sheet or photo (see doc_import): each
+    matched line with the product's POS payload, the unit it was written in
+    and the paper's price; lines with no matching item are listed for the
+    cashier to add by hand. Saves nothing."""
+    warnings = list(parsed["warnings"])
+    ids = {i["product_id"] for i in parsed["items"] if i["product_id"]}
+    products = {p.id: p for p in db.query(models.Product).filter(models.Product.id.in_(ids))} if ids else {}
+    lines, unmatched = [], []
+    for item in parsed["items"]:
+        product = products.get(item["product_id"])
+        qty, price = item["qty"], item["price"]
+        if not product:
+            unmatched.append({"text": item["text"], "qty": float(qty) if qty is not None else None,
+                              "unit": item["unit"], "price": float(price) if price is not None else None})
+            continue
+        payload = _product_payload_for_pos(db, product)
+        unit_index = 0
+        if item["unit"]:
+            want = doc_import.unit_key(item["unit"])
+            found = next((ui for ui, u in enumerate(payload["units"])
+                          if doc_import.unit_key(u["name"]) == want and u.get("tier", "fixed") == "fixed"), None)
+            if found is None and len(payload["units"]) > 1:
+                warnings.append(f"{item['where']}: {product.name} isn't sold by “{item['unit']}” in the system — "
+                                f"check the unit and qty.")
+            unit_index = found or 0
+        if qty is None or qty <= 0:
+            warnings.append(f"{item['where']}: no qty could be read — set to 1, please check.")
+            qty = Decimal("1")
+        system_price = Decimal(str(payload["units"][unit_index]["price"]))
+        if price is not None and abs(price - system_price) >= Decimal("0.01"):
+            warnings.append(f"{item['where']}: the paper says ₱{price:,.2f}; the system price is ₱{system_price:,.2f}. "
+                            f"The paper's price is used.")
+        lines.append({"product": payload, "unit_index": unit_index, "qty": float(qty),
+                      "price": float(price) if price is not None else None})
+
+    invoice_no = parsed["doc_no"]
+    receipt_type = (parsed["receipt_type"] or "").upper()
+    for prefix in ("DRS", "DRB", "SI"):
+        if not receipt_type and invoice_no.upper().startswith(prefix) and invoice_no[len(prefix):].strip().isdigit():
+            receipt_type, invoice_no = prefix, invoice_no[len(prefix):].strip()
+    if receipt_type not in ("DRS", "DRB", "SI"):
+        receipt_type = _guess_receipt_type(db, invoice_no) if invoice_no else ""
+    if invoice_no:
+        q = db.query(models.Sale).filter(models.Sale.invoice_no == invoice_no, models.Sale.is_voided.is_(False))
+        if receipt_type:
+            q = q.filter(models.Sale.receipt_type == receipt_type)
+        existing = q.first()
+        if existing:
+            warnings.append(f"{(existing.receipt_type or '') + existing.invoice_no} is already encoded "
+                            f"({existing.created_at:%b %d, %Y}, ₱{existing.total:,.2f}) — check it isn't a duplicate.")
+
+    customer = parsed["party"]
+    if customer:
+        match = (db.query(models.Customer)
+                 .filter(func.lower(func.regexp_replace(models.Customer.name, r"\s+", " ", "g")) == doc_import.key(customer))
+                 .first())
+        if match:
+            customer = match.name
+        else:
+            warnings.append(f"Customer “{customer}” isn't on file yet — it's added as a new customer when the sale is "
+                            f"saved. Change it if it's someone already listed under another spelling.")
+    return {"ok": True, "receipt_type": receipt_type, "invoice_no": invoice_no, "date": parsed["date"],
+            "customer": customer, "lines": lines, "unmatched": unmatched, "warnings": warnings}
+
+
+def _pos_import_upload(file: UploadFile, db: Session, user, source: str):
+    if not user:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    if not is_floor_staff(user):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+    contents = file.file.read(photo_reader.MAX_UPLOAD_BYTES + 1)
+    try:
+        if source == "photo":
+            parsed = doc_import.from_photo(db, contents, "sale")
+        else:
+            parsed = doc_import.from_excel(db, file.filename, contents)
+    except doc_import.ImportProblem as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return _pos_import_result(db, parsed)
+
+
+@router.post("/pos/import-photo")
+def pos_import_photo(file: UploadFile = File(...), db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """A photo of a DR/SI read into the cart — see photo_reader."""
+    return _pos_import_upload(file, db, user, "photo")
+
+
+@router.post("/pos/import-excel")
+def pos_import_excel(file: UploadFile = File(...), db: Session = Depends(get_db), user=Depends(get_current_user)):
+    return _pos_import_upload(file, db, user, "excel")
+
+
+@router.get("/pos/import-template")
+def pos_import_template(user=Depends(get_current_user)):
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    return Response(
+        doc_import.template("sale"),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="pos_import_template.xlsx"'},
+    )
 
 
 @router.get("/pos/product/{product_id:int}")

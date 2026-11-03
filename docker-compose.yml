@@ -32,6 +32,8 @@ services:
       APP_NAME: ${APP_NAME:-Hardware ERP}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      # Reads DR/SI and delivery photos (Upload photo on POS / New Purchase).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:
       - "8000:8000"
     volumes:

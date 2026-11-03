@@ -133,8 +133,10 @@
       no extra steps. A new row appears as soon as you start the last one.
     </p>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px;font-size:12px;">
+      <button type="button" class="btn-secondary" id="importPhotoBtn" style="padding:5px 12px;font-size:12.5px;" onclick="document.getElementById('importPhotoFile').click()" title="Take or choose a photo of the supplier's delivery receipt — its lines fill in below for you to check.">Upload photo</button>
+      <input type="file" id="importPhotoFile" accept="image/*" style="display:none;" onchange="importDocument(this, 'photo')">
       <button type="button" class="btn-secondary" id="importExcelBtn" style="padding:5px 12px;font-size:12.5px;" onclick="document.getElementById('importExcelFile').click()">Import from Excel</button>
-      <input type="file" id="importExcelFile" accept=".xlsx" style="display:none;" onchange="importFromExcel(this)">
+      <input type="file" id="importExcelFile" accept=".xlsx" style="display:none;" onchange="importDocument(this, 'excel')">
       <a class="btn-link" href="/purchases/import-template">Download template</a>
     </div>
     <div id="importWarnings" class="alert" style="display:none;background:#fffbeb;border-color:#fde68a;color:#92400e;margin-bottom:10px;font-size:12.5px;"></div>
@@ -861,35 +863,37 @@ function firstEmptyRow() {
   return i;
 }
 
-/* Import from Excel: the server reads the file and matches each row to an
-   item by its exact name (saving nothing). The rows land here as if typed,
-   with the sheet's own qty and price, so they're checked and saved the
-   normal way. A name it can't match stays as a new item. */
-async function importFromExcel(input) {
+/* Upload photo / Import from Excel: the server reads the file and matches
+   each row to an item — a sheet by exact name, a photo by reading it (see
+   photo_reader) — saving nothing. The rows land here as if typed, with the
+   paper's own qty and price, so they're checked and saved the normal way.
+   A name it can't match stays as a new item. */
+async function importDocument(input, source) {
   const file = input.files[0];
   input.value = '';   // choosing the same file again must still fire onchange
   if (!file) return;
   if (receiveLines.some(l => (l.name || '').trim())
       && !confirm('Replace the items on this page with the ones in ' + file.name + '?')) return;
 
-  const btn = document.getElementById('importExcelBtn');
+  const btn = document.getElementById(source === 'photo' ? 'importPhotoBtn' : 'importExcelBtn');
+  const label = btn.textContent;
   const warnBox = document.getElementById('importWarnings');
   const note = document.getElementById('slipLoadedNote');
   warnBox.style.display = 'none';
   note.style.display = 'none';
   btn.disabled = true;
-  btn.textContent = 'Reading…';
+  btn.textContent = source === 'photo' ? 'Reading photo… (up to a minute)' : 'Reading…';
   let d = null;
   try {
     const body = new FormData();
     body.append('file', file);
-    const res = await fetch('/purchases/import-excel', { method: 'POST', body });
+    const res = await fetch('/purchases/import-' + source, { method: 'POST', body });
     d = await res.json();
   } catch (e) {
     d = { ok: false, error: 'The file could not be uploaded. Check the connection and try again.' };
   }
   btn.disabled = false;
-  btn.textContent = 'Import from Excel';
+  btn.textContent = label;
   if (!d.ok) {
     warnBox.textContent = d.error || 'That file could not be read.';
     warnBox.style.display = 'block';
@@ -921,7 +925,7 @@ async function importFromExcel(input) {
   savePurchaseDraft();
 
   const count = d.lines.length;
-  note.textContent = 'Filled in ' + count + ' item' + (count === 1 ? '' : 's') + ' from ' + file.name
+  note.textContent = 'Filled in ' + count + ' item' + (count === 1 ? '' : 's') + ' from ' + (source === 'photo' ? 'the photo' : file.name)
     + (d.new_items ? ', ' + d.new_items + ' of them new (not in Inventory yet)' : '')
     + '. Nothing is saved yet: check them against the delivery receipt, then press Save Purchase.';
   note.style.display = 'block';
