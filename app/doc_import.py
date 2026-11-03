@@ -96,8 +96,10 @@ def _read_sheet(rows: list) -> dict | None:
     for row in rows[:header_at]:
         for col, cell in enumerate(row):
             label = key(cell).rstrip(":").strip()
-            value = next((v for v in row[col + 1:] if v not in (None, "")), None)
-            if value is None:
+            # Only the cell right beside the label — a blank one stays blank
+            # instead of picking up a note further along the row.
+            value = row[col + 1] if col + 1 < len(row) else None
+            if value in (None, ""):
                 continue
             for field, names in _LABELS.items():
                 if label in names and not head[field]:
