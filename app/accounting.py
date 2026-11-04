@@ -2232,6 +2232,33 @@ JOURNAL_TEMPLATES = {
 # limited to that template's own accounts; the admin checks and Posts it.
 # Everything else about Journal Entries stays admin-only.
 STAFF_JOURNAL_TEMPLATES = ("payroll", "gov_remittance")
+# Templates that open with the amounts of the last posted entry of the same
+# kind (payroll and remittances repeat almost unchanged), to be edited where
+# this time differs. An entry counts as "the same kind" when it uses only the
+# template's accounts and includes the ones named here.
+TEMPLATE_PREFILL_FROM_LAST = {"payroll": ("6200", "2300"), "gov_remittance": ("6210",)}
+
+
+def _last_entry_like(db: Session, template: str, account_ids: set):
+    """The newest posted entry that is this template's kind — see
+    TEMPLATE_PREFILL_FROM_LAST — or None."""
+    needed = TEMPLATE_PREFILL_FROM_LAST.get(template)
+    if not needed or not account_ids:
+        return None
+    needed_ids = {a.id for a in db.query(models.Account).filter(models.Account.code.in_(needed))}
+    candidates = (
+        db.query(models.JournalEntry)
+        .filter(models.JournalEntry.status == "posted", models.JournalEntry.source_type == "manual",
+                models.JournalEntry.id.in_(
+                    db.query(models.JournalLine.entry_id).filter(models.JournalLine.account_id.in_(needed_ids))))
+        .order_by(models.JournalEntry.txn_date.desc(), models.JournalEntry.id.desc())
+        .limit(50)
+    )
+    for entry in candidates:
+        used = {l.account_id for l in entry.lines}
+        if needed_ids <= used <= account_ids:
+            return entry
+    return None
 
 
 def _template_lines(db: Session, template: str) -> list:
@@ -2248,8 +2275,23 @@ def _template_lines(db: Session, template: str) -> list:
             except PostingError:
                 continue  # not set up yet — fall back to a blank form instead of a half-filled one
         lines.append({"account_id": account.id, "side": side,
-                      "memo": extra[0] if extra else "", "auto": "auto" in extra[1:]})
+                      "memo": extra[0] if extra else "", "auto": "auto" in extra[1:], "amount": None})
     return lines
+
+
+def _prefill_from_last(db: Session, template: str, lines: list):
+    """Fills each line (except the self-balancing one) with what the last
+    entry of this kind had on that account and side. Returns that entry."""
+    last = _last_entry_like(db, template, {l["account_id"] for l in lines})
+    if not last:
+        return None
+    for line in lines:
+        if line["auto"]:
+            continue
+        total = sum((Decimal(str(jl.debit if line["side"] == "debit" else jl.credit) or 0)
+                     for jl in last.lines if jl.account_id == line["account_id"]), Decimal("0"))
+        line["amount"] = total if total > 0 else None
+    return last
 
 
 def _can_use_journal_form(user, template: str) -> bool:
@@ -2271,6 +2313,7 @@ def journal_entry_new(request: Request, error: str = "", description: str = "", 
     if not _can_use_journal_form(user, template):
         return RedirectResponse("/pos", status_code=302)
     template_lines = _template_lines(db, template)
+    prefilled_from = _prefill_from_last(db, template, template_lines)
     accounts = db.query(models.Account).filter(models.Account.is_active.is_(True)).order_by(models.Account.code).all()
     if not is_admin(user):
         # A manager only ever sees the template's own accounts.
@@ -2282,7 +2325,7 @@ def journal_entry_new(request: Request, error: str = "", description: str = "", 
         "accounting/journal_entry_form.html",
         {"request": request, "app_name": request.app.title, "user": user, "accounts": accounts,
          "today": _today().isoformat(), "error": error, "prefill_description": description,
-         "template_lines": template_lines, "je_template": template, "saved": saved,
+         "template_lines": template_lines, "je_template": template, "saved": saved, "prefilled_from": prefilled_from,
          "is_admin_user": is_admin(user),
          "back": safe_back_url(back, "/accounting/journal-entries" if is_admin(user) else "/expenses")},
     )
