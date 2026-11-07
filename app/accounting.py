@@ -2237,11 +2237,20 @@ JOURNAL_TEMPLATES = {
         ("INPUT_VAT", "debit", "VAT shown on the bills (both added together)", "vat"),
         ("code:1000", "credit", "Total paid in cash (fills itself in) — change to Bank/GCash if paid that way", "auto"),
     ],
+    # Monthly light and water: the Meralco bill carries VAT (typed VAT-included
+    # and split, like the phone bills); the KVAI water bill has none, so it's
+    # entered at its full amount.
+    "utilities": [
+        ("code:6320", "debit", "Meralco (light) bill — before VAT", "vatin"),
+        ("code:6330", "debit", "KVAI (water) bill — no VAT, the full amount"),
+        ("INPUT_VAT", "debit", "VAT on the Meralco bill", "vat"),
+        ("code:1000", "credit", "Total paid in cash (fills itself in) — change to Bank/GCash if paid that way", "auto"),
+    ],
 }
 # Templates a manager (not just admin) may open and save — as a draft only,
 # limited to that template's own accounts; the admin checks and Posts it.
 # Everything else about Journal Entries stays admin-only.
-STAFF_JOURNAL_TEMPLATES = ("payroll", "gov_remittance", "communication")
+STAFF_JOURNAL_TEMPLATES = ("payroll", "gov_remittance", "communication", "utilities")
 # Templates that open with the amounts of the last posted entry of the same
 # kind (payroll and remittances repeat almost unchanged), to be edited where
 # this time differs. An entry counts as "the same kind" when it uses only the
@@ -2249,7 +2258,7 @@ STAFF_JOURNAL_TEMPLATES = ("payroll", "gov_remittance", "communication")
 TEMPLATE_PREFILL_FROM_LAST = {"payroll": ("6200", "2300"), "gov_remittance": ("6210",)}
 # Templates that always open with one fixed month's bills from Expenses (the
 # owner's choice: August 2026 for the PLDT and Smart bills), to be edited.
-TEMPLATE_PREFILL_MONTH = {"communication": date(2026, 8, 1)}
+TEMPLATE_PREFILL_MONTH = {"communication": date(2026, 8, 1), "utilities": date(2026, 8, 1)}
 
 
 def _last_entry_like(db: Session, template: str, account_ids: set):
@@ -2316,29 +2325,34 @@ def _prefill_from_last(db: Session, template: str, lines: list):
 def _prefill_from_expenses(db: Session, lines: list, month: date):
     """Each bill account's Expenses in `month` (the first of it) under the
     category linked to that account — its bills before VAT — and the VAT on
-    them, so the form opens with that month's figures to correct."""
+    them, so the form opens with that month's figures to correct. A bill with
+    nothing in that month (water, first entered in September) uses its latest
+    month instead."""
     vat_total, months = Decimal("0"), []
     for line in lines:
         category = db.query(models.ExpenseCategory).filter_by(account_id=line["account_id"]).first()
         if not category or line["side"] != "debit":
             continue
-        bills = [e for e in db.query(models.Expense).filter_by(category_id=category.id)
-                 if e.expense_date and e.expense_date.replace(day=1) == month]
-        if not bills:
+        all_bills = [e for e in db.query(models.Expense).filter_by(category_id=category.id) if e.expense_date]
+        if not all_bills:
             continue
+        bill_month = month
+        if not any(e.expense_date.replace(day=1) == month for e in all_bills):
+            bill_month = max(e.expense_date for e in all_bills).replace(day=1)
+        bills = [e for e in all_bills if e.expense_date.replace(day=1) == bill_month]
         gross = sum((Decimal(str(e.amount or 0)) for e in bills), Decimal("0"))
         vat = sum((Decimal(str(e.vat_amount or 0)) for e in bills), Decimal("0"))
         line["amount"] = gross - vat
         line["gross"] = gross
         vat_total += vat
-        months.append(category.name)
+        months.append(f"{category.name} {bill_month:%b %Y}")
     if not months:
         return None
     vat_line = next((l for l in lines if l["side"] == "debit" and l["account_id"] not in
                      {c.account_id for c in db.query(models.ExpenseCategory).filter(models.ExpenseCategory.account_id.isnot(None))}), None)
     if vat_line and vat_total:
         vat_line["amount"] = vat_total
-    return (f"the {month:%B %Y} bills entered under Expenses ({', '.join(months)})", "/expenses")
+    return ("the bills entered under Expenses: " + ", ".join(months), "/expenses")
 
 
 def _can_use_journal_form(user, template: str) -> bool:
@@ -2350,6 +2364,7 @@ JOURNAL_TEMPLATE_DESCRIPTIONS = {
     "payroll": "Salaries for ",
     "gov_remittance": "SSS / PhilHealth / Pag-IBIG payment for ",
     "communication": "PLDT & Smart bills for ",
+    "utilities": "Meralco & KVAI bills for ",
 }
 
 
