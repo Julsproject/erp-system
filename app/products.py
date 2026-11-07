@@ -1899,7 +1899,7 @@ def price_search(
         products = [exact] if exact else []
         flagged_rows = []
         for p in products:
-            flagged, reason = pricing.needs_review(p.selling_price, p.cost_price, min_margin)
+            flagged, reason = pricing.needs_review(p.selling_price, p.cost_price, min_margin, p.total_qty)
             flagged_rows.append({
                 "id": p.id, "name": p.name, "barcode": p.barcode,
                 "cost_price": float(p.cost_price or 0),
@@ -1925,7 +1925,7 @@ def price_search(
 
     rows = []
     for p in products:
-        flagged, reason = pricing.needs_review(p.selling_price, p.cost_price, min_margin)
+        flagged, reason = pricing.needs_review(p.selling_price, p.cost_price, min_margin, p.total_qty)
         rows.append({
             "id": p.id, "name": p.name, "barcode": p.barcode,
             "cost_price": float(p.cost_price or 0),
@@ -2041,7 +2041,7 @@ def update_pricing(product_id: int, data: dict, request: Request, db: Session = 
     )
     db.commit()
     min_margin = settings_store.min_margin_pct()
-    flagged, reason = pricing.needs_review(product.selling_price, product.cost_price, min_margin)
+    flagged, reason = pricing.needs_review(product.selling_price, product.cost_price, min_margin, product.total_qty)
     return {
         "ok": True,
         "cost_price": float(product.cost_price or 0),

@@ -86,19 +86,23 @@ def needs_review_expr(min_margin):
     at the database level — the one place that definition lives, so the
     sidebar badge, the dashboard widget, and the Selling Price tab's own
     count and filter never drift apart."""
-    from sqlalchemy import and_, or_
+    from sqlalchemy import and_, func, not_, or_
     from . import models
 
     price = models.Product.selling_price
     cost = models.Product.cost_price
-    conditions = [price <= 0, and_(cost > 0, price <= cost)]
+    on_hand = func.coalesce(models.Product.beginning_stock, 0) + func.coalesce(models.Product.stock_qty, 0)
+    # An item with no price, no cost and none in stock isn't asking for a
+    # price yet — it's left out until it gets a cost or stock (owner's rule).
+    unused = and_(func.coalesce(cost, 0) <= 0, on_hand == 0)
+    conditions = [and_(price <= 0, not_(unused)), and_(cost > 0, price <= cost)]
     if min_margin is not None:
         margin_expr = (price - cost) / price * 100
         conditions.append(and_(cost > 0, price > cost, margin_expr < min_margin))
     return or_(*conditions)
 
 
-def needs_review(price, cost, min_margin_pct=None):
+def needs_review(price, cost, min_margin_pct=None, on_hand=None):
     """Whether a product's pricing needs attention, and why. Three triggers:
       1. No selling price set (price <= 0).
       2. Selling at or below cost (zero or negative profit).
@@ -108,6 +112,8 @@ def needs_review(price, cost, min_margin_pct=None):
     """
     price, cost = _dec(price), _dec(cost)
     if price <= 0:
+        if cost <= 0 and on_hand is not None and _dec(on_hand) == 0:
+            return False, None  # no price, no cost, none in stock: not flagged
         return True, "No selling price set"
     if cost > 0 and price <= cost:
         return True, "Selling at or below cost"
