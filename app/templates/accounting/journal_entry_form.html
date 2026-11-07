@@ -28,8 +28,8 @@
 
   {% if prefilled_from and not entry %}
   <p class="full hint" style="margin:0;padding:8px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;color:#1d4ed8;font-size:12.5px;">
-    Amounts copied from the last one, <a href="/accounting/journal-entries/{{ prefilled_from.id }}/view">{{ prefilled_from.journal_no }}</a>
-    ({{ prefilled_from.txn_date.strftime('%b %d, %Y') }} — {{ prefilled_from.description }}). Change any that are different this time; the cash line works itself out.
+    Amounts copied from <a href="{{ prefilled_from[1] }}">{{ prefilled_from[0] }}</a>.
+    Change any that are different this time; the cash line works itself out.
   </p>
   {% endif %}
   <div class="full">

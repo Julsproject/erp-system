@@ -2227,16 +2227,24 @@ JOURNAL_TEMPLATES = {
         ("code:6230", "debit", "Pag-IBIG — employer's share"),
         ("code:1000", "credit", "Total paid in cash (fills itself in)", "auto"),
     ],
+    # Monthly phone/internet bills: each provider's bill before VAT on its
+    # own account (its own P&L line), the VAT on the bills as Input VAT.
+    "communication": [
+        ("code:6300", "debit", "PLDT bill — before VAT (leave blank if none this month)"),
+        ("code:6310", "debit", "Smart bill — before VAT (leave blank if none this month)"),
+        ("INPUT_VAT", "debit", "VAT shown on the bills (both added together)"),
+        ("code:1000", "credit", "Total paid in cash (fills itself in) — change to Bank/GCash if paid that way", "auto"),
+    ],
 }
 # Templates a manager (not just admin) may open and save — as a draft only,
 # limited to that template's own accounts; the admin checks and Posts it.
 # Everything else about Journal Entries stays admin-only.
-STAFF_JOURNAL_TEMPLATES = ("payroll", "gov_remittance")
+STAFF_JOURNAL_TEMPLATES = ("payroll", "gov_remittance", "communication")
 # Templates that open with the amounts of the last posted entry of the same
 # kind (payroll and remittances repeat almost unchanged), to be edited where
 # this time differs. An entry counts as "the same kind" when it uses only the
 # template's accounts and includes the ones named here.
-TEMPLATE_PREFILL_FROM_LAST = {"payroll": ("6200", "2300"), "gov_remittance": ("6210",)}
+TEMPLATE_PREFILL_FROM_LAST = {"payroll": ("6200", "2300"), "gov_remittance": ("6210",), "communication": ("1300",)}
 
 
 def _last_entry_like(db: Session, template: str, account_ids: set):
@@ -2281,17 +2289,49 @@ def _template_lines(db: Session, template: str) -> list:
 
 def _prefill_from_last(db: Session, template: str, lines: list):
     """Fills each line (except the self-balancing one) with what the last
-    entry of this kind had on that account and side. Returns that entry."""
+    entry of this kind had on that account and side. Returns (label, url)
+    naming where the amounts came from, or None."""
     last = _last_entry_like(db, template, {l["account_id"] for l in lines})
     if not last:
-        return None
+        return _prefill_from_expenses(db, lines) if template == "communication" else None
     for line in lines:
         if line["auto"]:
             continue
         total = sum((Decimal(str(jl.debit if line["side"] == "debit" else jl.credit) or 0)
                      for jl in last.lines if jl.account_id == line["account_id"]), Decimal("0"))
         line["amount"] = total if total > 0 else None
-    return last
+    return (f"{last.journal_no} ({last.txn_date:%b %d, %Y} — {last.description})",
+            f"/accounting/journal-entries/{last.id}/view")
+
+
+def _prefill_from_expenses(db: Session, lines: list):
+    """Before the first bills entry: each bill account's latest month of
+    Expenses in the category linked to it (its bill before VAT), and the VAT
+    on those, so the form still opens with figures to correct."""
+    vat_total, months = Decimal("0"), []
+    for line in lines:
+        category = db.query(models.ExpenseCategory).filter_by(account_id=line["account_id"]).first()
+        if not category or line["side"] != "debit":
+            continue
+        latest = (db.query(models.Expense).filter_by(category_id=category.id)
+                  .order_by(models.Expense.expense_date.desc()).first())
+        if not latest:
+            continue
+        month = latest.expense_date.replace(day=1)
+        bills = [e for e in db.query(models.Expense).filter_by(category_id=category.id)
+                 if e.expense_date.replace(day=1) == month]
+        gross = sum((Decimal(str(e.amount or 0)) for e in bills), Decimal("0"))
+        vat = sum((Decimal(str(e.vat_amount or 0)) for e in bills), Decimal("0"))
+        line["amount"] = gross - vat
+        vat_total += vat
+        months.append(f"{category.name} {month:%b %Y}")
+    if not months:
+        return None
+    vat_line = next((l for l in lines if l["side"] == "debit" and l["account_id"] not in
+                     {c.account_id for c in db.query(models.ExpenseCategory).filter(models.ExpenseCategory.account_id.isnot(None))}), None)
+    if vat_line and vat_total:
+        vat_line["amount"] = vat_total
+    return ("the last bills entered under Expenses: " + ", ".join(months), "/expenses")
 
 
 def _can_use_journal_form(user, template: str) -> bool:
@@ -2302,6 +2342,7 @@ JOURNAL_TEMPLATE_DESCRIPTIONS = {
     "other_income": "Mixer rental — ",
     "payroll": "Salaries for ",
     "gov_remittance": "SSS / PhilHealth / Pag-IBIG payment for ",
+    "communication": "PLDT & Smart bills for ",
 }
 
 
