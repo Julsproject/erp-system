@@ -41,7 +41,9 @@
       <tr>
         <td class="strong">{{ e.journal_no }}</td>
         <td>{{ e.txn_date.strftime('%b %d, %Y') }}</td>
-        <td>{{ e.description }}{% if e.reference_no %} <span class="muted">({{ e.reference_no }})</span>{% endif %}</td>
+        {# Long catch-up descriptions wrap onto more lines instead of
+           pushing the table off the side of the screen. #}
+        <td style="white-space:normal;min-width:220px;line-height:1.4;">{{ e.description }}{% if e.reference_no %} <span class="muted">({{ e.reference_no }})</span>{% endif %}</td>
         <td>
           {% if e.status == 'draft' %}<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:4px;font-size:12px;">Draft</span>
           {% elif e.status == 'reversed' %}<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:4px;font-size:12px;">Reversed</span>
