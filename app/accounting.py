@@ -2244,7 +2244,10 @@ STAFF_JOURNAL_TEMPLATES = ("payroll", "gov_remittance", "communication")
 # kind (payroll and remittances repeat almost unchanged), to be edited where
 # this time differs. An entry counts as "the same kind" when it uses only the
 # template's accounts and includes the ones named here.
-TEMPLATE_PREFILL_FROM_LAST = {"payroll": ("6200", "2300"), "gov_remittance": ("6210",), "communication": ("1300",)}
+TEMPLATE_PREFILL_FROM_LAST = {"payroll": ("6200", "2300"), "gov_remittance": ("6210",)}
+# Templates that always open with one fixed month's bills from Expenses (the
+# owner's choice: August 2026 for the PLDT and Smart bills), to be edited.
+TEMPLATE_PREFILL_MONTH = {"communication": date(2026, 8, 1)}
 
 
 def _last_entry_like(db: Session, template: str, account_ids: set):
@@ -2291,9 +2294,11 @@ def _prefill_from_last(db: Session, template: str, lines: list):
     """Fills each line (except the self-balancing one) with what the last
     entry of this kind had on that account and side. Returns (label, url)
     naming where the amounts came from, or None."""
+    if template in TEMPLATE_PREFILL_MONTH:
+        return _prefill_from_expenses(db, lines, TEMPLATE_PREFILL_MONTH[template])
     last = _last_entry_like(db, template, {l["account_id"] for l in lines})
     if not last:
-        return _prefill_from_expenses(db, lines) if template == "communication" else None
+        return None
     for line in lines:
         if line["auto"]:
             continue
@@ -2304,34 +2309,31 @@ def _prefill_from_last(db: Session, template: str, lines: list):
             f"/accounting/journal-entries/{last.id}/view")
 
 
-def _prefill_from_expenses(db: Session, lines: list):
-    """Before the first bills entry: each bill account's latest month of
-    Expenses in the category linked to it (its bill before VAT), and the VAT
-    on those, so the form still opens with figures to correct."""
+def _prefill_from_expenses(db: Session, lines: list, month: date):
+    """Each bill account's Expenses in `month` (the first of it) under the
+    category linked to that account — its bills before VAT — and the VAT on
+    them, so the form opens with that month's figures to correct."""
     vat_total, months = Decimal("0"), []
     for line in lines:
         category = db.query(models.ExpenseCategory).filter_by(account_id=line["account_id"]).first()
         if not category or line["side"] != "debit":
             continue
-        latest = (db.query(models.Expense).filter_by(category_id=category.id)
-                  .order_by(models.Expense.expense_date.desc()).first())
-        if not latest:
-            continue
-        month = latest.expense_date.replace(day=1)
         bills = [e for e in db.query(models.Expense).filter_by(category_id=category.id)
-                 if e.expense_date.replace(day=1) == month]
+                 if e.expense_date and e.expense_date.replace(day=1) == month]
+        if not bills:
+            continue
         gross = sum((Decimal(str(e.amount or 0)) for e in bills), Decimal("0"))
         vat = sum((Decimal(str(e.vat_amount or 0)) for e in bills), Decimal("0"))
         line["amount"] = gross - vat
         vat_total += vat
-        months.append(f"{category.name} {month:%b %Y}")
+        months.append(category.name)
     if not months:
         return None
     vat_line = next((l for l in lines if l["side"] == "debit" and l["account_id"] not in
                      {c.account_id for c in db.query(models.ExpenseCategory).filter(models.ExpenseCategory.account_id.isnot(None))}), None)
     if vat_line and vat_total:
         vat_line["amount"] = vat_total
-    return ("the last bills entered under Expenses: " + ", ".join(months), "/expenses")
+    return (f"the {month:%B %Y} bills entered under Expenses ({', '.join(months)})", "/expenses")
 
 
 def _can_use_journal_form(user, template: str) -> bool:
