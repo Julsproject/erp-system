@@ -2191,11 +2191,13 @@ def journal_entries_list(request: Request, date_from: str = "", date_to: str = "
 # instead of a blank 2-line form. Amounts are deliberately left blank —
 # this exists precisely for a transaction the system has no figures for.
 #
-# Each line is (account, side) or (account, side, note[, "auto"]). The
+# Each line is (account, side) or (account, side, note[, flag]). The
 # account is a mapping function key, or "code:XXXX" for a plain chart
 # account. The note pre-fills the memo so whoever is typing knows what goes
 # on that line; "auto" makes that line fill itself with whatever balances the
 # entry (e.g. the cash actually paid out), so only the known figures are typed.
+# "vatin" marks a bill typed VAT-included in a "Total bill" box above the
+# lines — the form splits it into this line (before VAT) and the "vat" line.
 JOURNAL_TEMPLATES = {
     "customer_payment": [
         ("SALE_CASH", "debit"), ("SALES_REVENUE", "debit"),
@@ -2230,9 +2232,9 @@ JOURNAL_TEMPLATES = {
     # Monthly phone/internet bills: each provider's bill before VAT on its
     # own account (its own P&L line), the VAT on the bills as Input VAT.
     "communication": [
-        ("code:6300", "debit", "PLDT bill — before VAT (leave blank if none this month)"),
-        ("code:6310", "debit", "Smart bill — before VAT (leave blank if none this month)"),
-        ("INPUT_VAT", "debit", "VAT shown on the bills (both added together)"),
+        ("code:6300", "debit", "PLDT bill — before VAT (leave blank if none this month)", "vatin"),
+        ("code:6310", "debit", "Smart bill — before VAT (leave blank if none this month)", "vatin"),
+        ("INPUT_VAT", "debit", "VAT shown on the bills (both added together)", "vat"),
         ("code:1000", "credit", "Total paid in cash (fills itself in) — change to Bank/GCash if paid that way", "auto"),
     ],
 }
@@ -2285,8 +2287,10 @@ def _template_lines(db: Session, template: str) -> list:
                 account = _resolve_mapping(db, function_key)
             except PostingError:
                 continue  # not set up yet — fall back to a blank form instead of a half-filled one
-        lines.append({"account_id": account.id, "side": side,
-                      "memo": extra[0] if extra else "", "auto": "auto" in extra[1:], "amount": None})
+        lines.append({"account_id": account.id, "side": side, "memo": extra[0] if extra else "",
+                      "auto": "auto" in extra[1:], "amount": None, "gross": None,
+                      "role": next((f for f in extra[1:] if f in ("vatin", "vat")), ""),
+                      "label": f"{account.code} {account.name}"})
     return lines
 
 
@@ -2325,6 +2329,7 @@ def _prefill_from_expenses(db: Session, lines: list, month: date):
         gross = sum((Decimal(str(e.amount or 0)) for e in bills), Decimal("0"))
         vat = sum((Decimal(str(e.vat_amount or 0)) for e in bills), Decimal("0"))
         line["amount"] = gross - vat
+        line["gross"] = gross
         vat_total += vat
         months.append(category.name)
     if not months:

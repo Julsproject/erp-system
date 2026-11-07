@@ -32,6 +32,19 @@
     Change any that are different this time; the cash line works itself out.
   </p>
   {% endif %}
+  {% set vat_bills = (template_lines if not entry else [])|selectattr('role', 'equalto', 'vatin')|list %}
+  {% if vat_bills %}
+  <div class="full" style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;padding:10px 12px;background:#f8fafc;border:1px solid var(--line);border-radius:8px;">
+    {% for b in vat_bills %}
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;">{{ b.label }} — total bill (VAT included)
+      <input class="vat-gross" data-account="{{ b.account_id }}" type="text" inputmode="decimal" autocomplete="off"
+             value="{{ '{:,.2f}'.format(b.gross) if b.gross else '' }}" placeholder="amount on the bill"
+             style="width:200px;text-align:right;font-weight:700;" oninput="formatAmount(this); splitVatBills()">
+    </label>
+    {% endfor %}
+    <span class="muted" style="font-size:12px;max-width:340px;">Type the total printed on each bill — the before-VAT amount and the 12% VAT fill themselves in below.</span>
+  </div>
+  {% endif %}
   <div class="full">
     <table class="grid" id="lineTable">
       <thead>
@@ -71,7 +84,7 @@ const EXISTING_LINES = [
 ];
 
 const TEMPLATE_LINES = [
-  {% if not entry %}{% for line in template_lines %}{accountId: {{ line.account_id }}, side: {{ line.side|tojson }}, memo: {{ line.memo|tojson }}, auto: {{ 'true' if line.auto else 'false' }}, amount: {{ line.amount|float if line.amount else 'null' }}},{% endfor %}{% endif %}
+  {% if not entry %}{% for line in template_lines %}{accountId: {{ line.account_id }}, side: {{ line.side|tojson }}, memo: {{ line.memo|tojson }}, auto: {{ 'true' if line.auto else 'false' }}, amount: {{ line.amount|float if line.amount else 'null' }}, role: {{ line.role|tojson }}},{% endfor %}{% endif %}
 ];
 
 function accountOptions(selected) {
@@ -84,6 +97,8 @@ function addLine(prefill) {
   const tbody = document.getElementById('lineBody');
   const row = document.createElement('tr');
   if (prefill.auto) row.dataset.auto = '1';
+  if (prefill.role) row.dataset.role = prefill.role;
+  if (prefill.accountId) row.dataset.account = prefill.accountId;
   row.innerHTML = `
     <td><select name="account_id">${accountOptions(prefill.accountId || null)}</select></td>
     <td><select name="side">
@@ -129,6 +144,23 @@ const peso = n => n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumF
 document.getElementById('jeForm').addEventListener('submit', () => {
   document.querySelectorAll('#lineBody input[name=amount]').forEach(i => { i.value = i.value.replace(/,/g, ''); });
 });
+
+/* "Total bill (VAT included)" boxes: each bill's VAT is 12/112 of it (VAT
+   inclusive, the same math as the rest of the app); the bill's line gets
+   what's left, and the VAT line the VATs added together. */
+function splitVatBills() {
+  let vatTotal = 0;
+  document.querySelectorAll('.vat-gross').forEach(box => {
+    const gross = amountOf(box);
+    const vat = Math.round(gross * 12 / 112 * 100) / 100;
+    vatTotal += vat;
+    const row = document.querySelector('#lineBody tr[data-role="vatin"][data-account="' + box.dataset.account + '"]');
+    if (row) row.querySelector('input[name=amount]').value = gross ? withCommas((gross - vat).toFixed(2)) : '';
+  });
+  const vatRow = document.querySelector('#lineBody tr[data-role="vat"]');
+  if (vatRow) vatRow.querySelector('input[name=amount]').value = vatTotal ? withCommas(vatTotal.toFixed(2)) : '';
+  recalc();
+}
 
 /* A template's "auto" line (e.g. the cash paid out) holds whatever balances
    the entry, until someone types in it themselves. */
