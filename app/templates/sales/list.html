@@ -93,6 +93,8 @@
     </div>
   </details>
 
+  {% set si_missing = si_missing_count() %}
+  <a class="btn-secondary" href="/sales/si-numbers" title="Every SI number in order, with skipped numbers flagged">SI Numbers{% if si_missing %} <span class="warn-tag">{{ si_missing }} missing</span>{% endif %}</a>
   <a class="btn-secondary" href="/pos/invoice-gaps" title="Check a range of a booklet's numbers for anything unaccounted for">🔍 Find Missing Numbers</a>
 
   <a class="btn-secondary" style="margin-left:auto;" href="/sales/export?{{ qs[1:] }}">⬇ Download Excel</a>

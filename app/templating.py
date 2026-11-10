@@ -270,6 +270,23 @@ templates.env.filters["quarter_qty"] = quarter_qty
 templates.env.filters["split_qty"] = split_qty
 templates.env.globals["price_alert_count"] = price_alert_count
 templates.env.globals["pdc_due_count"] = pdc_due_count
+
+
+def si_missing_count() -> int:
+    """How many SI numbers are skipped (see si_numbers.py) — for the SI
+    Numbers button on the Sales page. Never breaks a page render."""
+    from .database import SessionLocal
+    db = SessionLocal()
+    try:
+        from .si_numbers import missing_numbers
+        return len(missing_numbers(db, "SI"))
+    except Exception:
+        return 0
+    finally:
+        db.close()
+
+
+templates.env.globals["si_missing_count"] = si_missing_count
 templates.env.globals["check_month_end_rollover"] = check_month_end_rollover
 templates.env.globals["asset_version"] = asset_version
 templates.env.globals["notif_unread_count"] = notif_unread_count

@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}{{ booklet }} Numbers · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{{ booklet }} Numbers</h1>
+    <p class="muted">Every {{ booklet }} number in order{% if first %}, {{ first }} to {{ last }}{% endif %}. A number that was never saved as a sale and never logged as cancelled shows as <b style="color:#dc2626;">MISSING</b>.</p>
+  </div>
+  <div class="head-actions">
+    <a class="btn-secondary" href="/pos/cancelled-receipts">Cancelled Receipts</a>
+    <a class="btn-secondary" href="/sales">← Sales</a>
+  </div>
+</div>
+
+<div class="tabs">
+  {% for b in booklets %}
+  <a class="tab {{ 'active' if b == booklet }}" href="/sales/si-numbers?booklet={{ b }}{{ '&missing_only=1' if missing_only }}">{{ b }}</a>
+  {% endfor %}
+</div>
+
+<div class="stat-row">
+  <div class="mini-stat"><span class="mini-num">{{ sold_count }}</span><span>Used (sale / refund / exchange)</span></div>
+  <div class="mini-stat"><span class="mini-num">{{ cancelled_count }}</span><span>Logged as cancelled</span></div>
+  <div class="mini-stat"><span class="mini-num" style="{{ 'color:#dc2626;' if missing }}">{{ missing|length }}</span><span>Missing</span></div>
+</div>
+
+{% if missing %}
+<div class="alert" style="background:#fee2e2;color:#991b1b;">
+  <b>{{ missing|length }} {{ booklet }} number{{ 's' if missing|length != 1 }} missing:</b>
+  {% for n in missing %}<a href="#n{{ n }}" style="color:#991b1b;font-weight:700;">{{ n }}</a>{{ ', ' if not loop.last }}{% endfor %}.
+  Find the paper copy and encode it in the POS (with its real date), or if it was spoiled, click <b>Log as cancelled</b> on its row.
+</div>
+{% else %}
+<div class="alert" style="background:#dcfce7;color:#15803d;">No missing {{ booklet }} numbers — every number{% if first %} from {{ first }} to {{ last }}{% endif %} is accounted for.</div>
+{% endif %}
+
+<form class="toolbar" method="get" action="/sales/si-numbers">
+  <input type="hidden" name="booklet" value="{{ booklet }}">
+  <label class="checkbox" style="display:flex;align-items:center;gap:7px;font-size:13px;cursor:pointer;">
+    <input type="checkbox" name="missing_only" value="1" {{ 'checked' if missing_only }} onchange="this.form.submit()"> Show missing numbers only
+  </label>
+</form>
+
+<div class="table-wrap">
+  <table class="grid">
+    <thead><tr><th>{{ booklet }} #</th><th>Status</th><th>Date</th><th>Customer / reason</th><th class="num">Total</th><th></th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      {% if r.get('break') %}
+      <tr><td colspan="6" class="muted" style="background:#f8fafc;font-size:12px;">— another pad starts at {{ r.number }} —</td></tr>
+      {% elif r.state == 'missing' %}
+      <tr id="n{{ r.number }}" style="background:#fef2f2;">
+        <td class="strong" style="color:#dc2626;">{{ r.number }}</td>
+        <td><span class="txn" style="background:#fee2e2;color:#b91c1c;">MISSING</span></td>
+        <td colspan="3" class="muted">Not encoded and not logged as cancelled</td>
+        <td class="row-actions"><a class="btn-link" href="/pos/cancelled-receipts?log_type={{ booklet }}&log_no={{ r.number }}&back={{ back_here() }}">Log as cancelled</a></td>
+      </tr>
+      {% elif r.state == 'cancelled' %}
+      <tr id="n{{ r.number }}">
+        <td class="strong">{{ r.number }}</td>
+        <td><span class="txn" style="background:#e5e7eb;color:#374151;">Cancelled</span></td>
+        <td>{{ r.cancelled.cancelled_date.strftime('%b %d, %Y') if r.cancelled.cancelled_date else '' }}</td>
+        <td class="muted">{{ r.cancelled.reason or '—' }}</td>
+        <td></td><td></td>
+      </tr>
+      {% else %}
+      {% for s in r.sales %}
+      <tr id="n{{ r.number }}">
+        <td class="strong">{{ s.invoice_no }}</td>
+        <td>
+          {% if s.is_voided %}<span class="txn" style="background:#fee2e2;color:#b91c1c;">Voided</span>
+          {% else %}<span class="txn txn-{{ s.txn_type }}">{{ s.txn_type|capitalize }}</span>{% endif %}
+        </td>
+        <td>{{ s.created_at.strftime('%b %d, %Y') if s.created_at else '' }}</td>
+        <td>{{ s.customer_name or 'Walk-in' }}</td>
+        <td class="num">{{ s.total|peso }}</td>
+        <td class="row-actions"><a class="btn-link" href="/pos/receipt/{{ s.id }}?from=sales&back={{ back_here() }}">Receipt</a></td>
+      </tr>
+      {% endfor %}
+      {% endif %}
+      {% else %}
+      <tr><td colspan="6" class="empty">No {{ booklet }} numbers yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

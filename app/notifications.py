@@ -286,6 +286,20 @@ def _current_alerts(db: Session) -> dict:
             "link": f"/pos/receipt/{s.id}",
         }
 
+    # ---- missing SI numbers -----------------------------------------------
+    # A number skipped in the SI booklet — never encoded, never logged as
+    # cancelled. One alert per number; it resolves itself once the sale is
+    # encoded or the number is logged as cancelled.
+    from .si_numbers import missing_numbers
+    for n in missing_numbers(db, "SI"):
+        alerts[f"si_missing:{n}"] = {
+            "category": "pos", "severity": "warning",
+            "title": f"Missing SI number: {n}",
+            "body": f"SI {n} is skipped — it isn't encoded and isn't logged as cancelled. "
+                    "Encode it from the paper copy, or log it as cancelled if it was spoiled.",
+            "link": f"/sales/si-numbers?missing_only=1#n{n}",
+        }
+
     # ---- backup health (singleton) --------------------------------------
     lb = latest_backup()
     if not lb:
