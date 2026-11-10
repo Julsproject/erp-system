@@ -1691,6 +1691,42 @@ def _vat_period_total(db: Session, system_key: str, period_start: date, period_e
     return (debit - credit) if account.normal_balance == "debit" else (credit - debit)
 
 
+def _manual_bill_vat_rows(db: Session, entry, vat_amount: Decimal):
+    """A bills entry made from a Journal Entries template (PLDT & Smart,
+    Light & water) as one VAT-report row per bill — payee, TIN, before-VAT
+    and total — the same as when each bill is logged on the Expenses page,
+    instead of one nameless row for the whole entry. The bills are the lines
+    on the templates' VAT-included accounts; the entry's VAT is shared over
+    them by amount (the last takes the odd centavo). None when the entry has
+    no such line, so it keeps the plain one-row form."""
+    codes = {key[5:] for lines in JOURNAL_TEMPLATES.values() for key, _side, *extra in lines
+             if key.startswith("code:") and "vatin" in extra[1:]}
+    bills = [l for l in entry.lines if l.account and l.account.code in codes and l.debit != l.credit]
+    if not bills:
+        return None
+    sign = 1 if vat_amount > 0 else -1
+    nets = [abs(l.debit - l.credit) for l in bills]
+    total_net, vat_left = sum(nets), abs(vat_amount)
+    rows = []
+    for i, (line, net) in enumerate(zip(bills, nets)):
+        vat = vat_left if i == len(bills) - 1 else (abs(vat_amount) * net / total_net).quantize(Decimal("0.01"))
+        vat_left -= vat
+        # Payee and TIN from the latest bill of that kind on the Expenses page.
+        same_kind = (db.query(models.Expense).join(models.ExpenseCategory, models.Expense.category_id == models.ExpenseCategory.id)
+                     .filter(models.ExpenseCategory.account_id == line.account_id)
+                     .order_by(models.Expense.expense_date.desc(), models.Expense.id.desc()))
+        last = same_kind.filter(models.Expense.payee.isnot(None), models.Expense.payee != "").first()
+        with_tin = same_kind.filter(models.Expense.tin.isnot(None), models.Expense.tin != "").first()
+        rows.append({
+            "date": entry.txn_date, "supplier_invoice": entry.reference_no or entry.journal_no,
+            "supplier_name": (last.payee if last else None) or line.account.name,
+            "supplier_tin": with_tin.tin if with_tin else "",
+            "source_link": f"/accounting/journal-entries/{entry.id}/view",
+            "amount": sign * vat, "net_of_vat": sign * net, "total_due": sign * (net + vat),
+        })
+    return rows
+
+
 def _vat_input_detail(db: Session, period_start: date, period_end: date):
     """Per-transaction breakdown of what fed the Input VAT account this
     period — a Purchase receive or an Expense, resolved back through a
@@ -1727,6 +1763,11 @@ def _vat_input_detail(db: Session, period_start: date, period_end: date):
                 source_type, source_id = original.source_type, original.source_id
         supplier_invoice, supplier_name, supplier_tin, source_link = entry.description, "Unspecified", "", None
         net_of_vat, total_due = None, None
+        if source_type == "manual":
+            bill_rows = _manual_bill_vat_rows(db, entry, amount)
+            if bill_rows:
+                detail.extend(bill_rows)
+                continue
         if source_type == "purchase" and source_id:
             purchase = db.get(models.Purchase, source_id)
             if purchase:
