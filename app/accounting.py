@@ -2314,7 +2314,8 @@ STAFF_JOURNAL_TEMPLATES = ("payroll", "gov_remittance", "communication", "utilit
 TEMPLATE_PREFILL_FROM_LAST = {"payroll": ("6200", "2300"), "gov_remittance": ("6210",)}
 # Templates that always open with one fixed month's bills from Expenses (the
 # owner's choice: August 2026 for the PLDT and Smart bills), to be edited.
-TEMPLATE_PREFILL_MONTH = {"communication": date(2026, 8, 1), "utilities": date(2026, 8, 1)}
+# PLDT & Smart opens with September (PLDT 3,932.39, the 2 Smart bills); light & water with August.
+TEMPLATE_PREFILL_MONTH = {"communication": date(2026, 9, 1), "utilities": date(2026, 8, 1)}
 
 
 def _last_entry_like(db: Session, template: str, account_ids: set):
