@@ -1727,6 +1727,19 @@ def _manual_bill_vat_rows(db: Session, entry, vat_amount: Decimal):
     return rows
 
 
+def _drop_cancelled_pairs(rows):
+    """Leaves out an entry and its reversal when both fall in the period — a
+    bill re-dated or corrected (posted, reversed, posted again) nets to zero
+    and only clutters the VAT report. A reversal in a later period than its
+    entry stays, since it changes that period's VAT."""
+    ids = {entry.id for _line, entry in rows}
+    cancelled = {entry.is_reversal_of_id for _line, entry in rows
+                 if entry.source_type == "reversal" and entry.is_reversal_of_id in ids}
+    return [(line, entry) for line, entry in rows
+            if entry.id not in cancelled
+            and not (entry.source_type == "reversal" and entry.is_reversal_of_id in cancelled)]
+
+
 def _vat_input_detail(db: Session, period_start: date, period_end: date):
     """Per-transaction breakdown of what fed the Input VAT account this
     period — a Purchase receive or an Expense, resolved back through a
@@ -1750,6 +1763,7 @@ def _vat_input_detail(db: Session, period_start: date, period_end: date):
         .order_by(models.JournalEntry.txn_date, models.JournalEntry.id)
         .all()
     )
+    rows = _drop_cancelled_pairs(rows)
     detail = []
     for line, entry in rows:
         amount = line.debit - line.credit
@@ -1821,6 +1835,7 @@ def _vat_output_detail(db: Session, period_start: date, period_end: date):
         .order_by(models.JournalEntry.txn_date, models.JournalEntry.id)
         .all()
     )
+    rows = _drop_cancelled_pairs(rows)
     detail = []
     for line, entry in rows:
         amount = line.credit - line.debit
