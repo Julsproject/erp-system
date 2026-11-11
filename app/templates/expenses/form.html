@@ -94,7 +94,7 @@
 
 {% if expense %}
 <form method="post" action="/expenses/{{ expense.id }}/void" style="margin-top:14px;"
-      onsubmit="return confirm('Void this expense? It will no longer count toward totals.');">
+      onsubmit="return confirm('Void this expense? It is cancelled on its own date, as if it was never entered.');">
   <input type="hidden" name="back" value="{{ back }}">
   <button class="btn-link danger" type="submit">Void this expense</button>
 </form>

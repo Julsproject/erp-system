@@ -464,7 +464,10 @@ def void_expense(
     expense = db.get(models.Expense, expense_id)
     if expense:
         expense.is_voided = True
-        accounting.reverse_expense_posting(db, expense, reason=f"Voided {expense.ref_no}", entered_by_id=user.id)
+        # Dated the expense's own day, not today: a voided expense is one that
+        # never happened (usually saved by mistake), so it and its void cancel
+        # out inside the same month and drop off that month's VAT report.
+        accounting.reverse_expense_posting(db, expense, reason=f"Voided {expense.ref_no}", entered_by_id=user.id, same_date=True)
         audit.record(
             db, user=user, request=request, action="void", entity_type="expense",
             entity_id=expense.id, entity_label=expense.ref_no,
