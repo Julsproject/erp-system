@@ -882,9 +882,13 @@ function renderCart() {
     const unit = line.product.units[line.unitIndex];
     const total = lineTotalOf(line);
     const over = !line.product.is_service && needed[line.product.id] > line.product.on_hand + 1e-9;
-    const opts = line.product.units.map((u, ui) =>
-      '<option value="' + ui + '"' + (ui === line.unitIndex ? ' selected' : '') + '>' +
-      escapeHtml(u.label || u.name) + ' (' + peso(u.price) + ')</option>').join('');
+    // One entry per unit (Piece, Box …); its Fixed/Markup/Margin prices are
+    // picked under the Price box instead (priceTiersHtml).
+    const opts = line.product.units.map((u, ui) => {
+      if (line.product.units.findIndex(x => x.name === u.name) !== ui) return '';
+      return '<option value="' + ui + '"' + (u.name === unit.name ? ' selected' : '') + '>' +
+        escapeHtml(u.name) + ' (' + peso(u.price) + ')</option>';
+    }).join('');
     const tr = document.createElement('tr');
     tr.innerHTML =
       '<td class="strong cart-item" title="' + escapeHtml(line.product.name) + '">' + escapeHtml(line.product.name) + perPieceTag(line.product) +
@@ -893,6 +897,7 @@ function renderCart() {
       '<td class="num"><input class="cart-qty' + (over || fractionalCountedLine(line) ? ' over' : '') + '" type="text" inputmode="decimal" autocomplete="off" value="' + fmtQtyInput(line) + '" oninput="setQty(' + i + ', this.value)" onblur="normalizeQty(' + i + ', this)">' +
         quarterNote(line) + '</td>' +
       '<td class="num"><input class="cart-price" type="number" step="0.01" min="0" value="' + unit.price.toFixed(2) + '" oninput="setCustomPrice(' + i + ', this.value)">' +
+        priceTiersHtml(line, i) +
         (canSetPrice(line) ? '<button type="button" class="btn-link set-price-btn" style="display:' + (priceChanged(line) ? 'block' : 'none') +
           ';font-size:11.5px;margin:3px 0 0 auto;white-space:nowrap;" onclick="saveAsSellingPrice(' + i + ')" title="Use this price from now on">★ Set as new price</button>' : '') +
       '</td>' +
@@ -904,7 +909,35 @@ function renderCart() {
   computeTotals();
 }
 
-function setUnit(i, v) { cart[i].unitIndex = parseInt(v); renderCart(); }
+// Switching unit keeps the same price type (Fixed/Markup/Margin) when the new
+// unit has it, else that unit's first price.
+function setUnit(i, v) {
+  const line = cart[i], units = line.product.units;
+  const tier = units[line.unitIndex].tier || 'fixed', name = units[parseInt(v)].name;
+  const same = units.findIndex(u => u.name === name && (u.tier || 'fixed') === tier);
+  line.unitIndex = same !== -1 ? same : parseInt(v);
+  renderCart();
+}
+function setTier(i, ui) { cart[i].unitIndex = ui; renderCart(); }
+
+// Under the Price box: the line's unit at each of its prices — Fixed (typed
+// in), Markup (% on top of cost), Margin (% of the selling price). Only shown
+// when the item has a markup or margin set; tap one to sell at that price.
+const TIER_INFO = {fixed: ['Fixed', 'typed in'], markup: ['Markup', '% on top of cost'], margin: ['Margin', '% of the selling price']};
+function priceTiersHtml(line, i) {
+  if (line.customPrice) return '';
+  const unit = line.product.units[line.unitIndex];
+  const tiers = [];
+  line.product.units.forEach((u, ui) => { if (u.name === unit.name) tiers.push([u, ui]); });
+  if (tiers.length < 2) return '';
+  return '<div class="price-tiers">' + tiers.map(([u, ui]) => {
+    const t = u.tier || 'fixed', info = TIER_INFO[t] || [t, ''];
+    const pct = t !== 'fixed' && u.pct ? ' ' + (+u.pct).toFixed(u.pct % 1 ? 1 : 0) + '%' : '';
+    return '<button type="button" class="price-tier' + (ui === line.unitIndex ? ' active' : '') + '"' +
+      ' onclick="setTier(' + i + ', ' + ui + ')" title="' + info[0] + ' — ' + info[1] + '">' +
+      '<span>' + info[0] + pct + '</span><b>' + peso(u.price) + '</b></button>';
+  }).join('') + '</div>';
+}
 function setQty(i, v) { cart[i].qty = parseQty(v); refreshCartComputed(); }
 function setDisc(i, v) { cart[i].discount = parseFloat(v) || 0; refreshCartComputed(); }
 function removeLine(i) { cart.splice(i, 1); renderCart(); }

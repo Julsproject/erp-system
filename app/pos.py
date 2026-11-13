@@ -670,10 +670,10 @@ def _product_payload_for_pos(db: Session, p: models.Product) -> dict:
                       "price": float(p.selling_price or 0), "tier": "fixed"})
         if _is_set(p.markup_price, p.markup_pct):
             units.append({"name": base_unit, "label": f"{base_unit} · Markup", "factor": 1.0,
-                          "price": float(p.markup_price), "tier": "markup"})
+                          "price": float(p.markup_price), "tier": "markup", "pct": float(p.markup_pct)})
         if _is_set(p.margin_price, p.margin_pct):
             units.append({"name": base_unit, "label": f"{base_unit} · Margin", "factor": 1.0,
-                          "price": float(p.margin_price), "tier": "margin"})
+                          "price": float(p.margin_price), "tier": "margin", "pct": float(p.margin_pct)})
     for u in p.units:
         # Same "one price stays plain, markup/margin only show up once set"
         # rule as the base unit above — an existing product with a flat
@@ -685,10 +685,10 @@ def _product_payload_for_pos(db: Session, p: models.Product) -> dict:
                           "price": float(u.price or 0), "tier": "fixed"})
         if u_markup:
             units.append({"name": u.name, "label": f"{u.name} · Markup", "factor": float(u.factor_to_base or 1),
-                          "price": float(u.markup_price), "tier": "markup"})
+                          "price": float(u.markup_price), "tier": "markup", "pct": float(u.markup_pct)})
         if u_margin:
             units.append({"name": u.name, "label": f"{u.name} · Margin", "factor": float(u.factor_to_base or 1),
-                          "price": float(u.margin_price), "tier": "margin"})
+                          "price": float(u.margin_price), "tier": "margin", "pct": float(u.margin_pct)})
     if not units:
         # No pack unit priced yet on a product whose base unit was left out
         # above — fall back to the base unit rather than leaving it

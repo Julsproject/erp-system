@@ -783,6 +783,15 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
 .pos-cart-panel .cart-unit { max-width: 112px; padding: 4px 6px; font-size: 12px; }
 .pos-cart-panel .cart-disc { width: 58px; padding: 4px 6px; font-size: 12px; }
 .pos-cart-panel .disc-toggle { padding: 2px 5px; font-size: 11px; }
+/* POS price types under the Price box: Fixed / Markup / Margin, tap to pick. */
+.price-tiers { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; align-items: stretch; }
+.price-tier { display: flex; justify-content: space-between; gap: 6px; padding: 2px 6px; border: 1px solid var(--line-2);
+  border-radius: 6px; background: var(--surface, #fff); color: var(--muted); font-size: 11px; line-height: 1.35;
+  cursor: pointer; white-space: nowrap; text-align: left; }
+.price-tier b { font-weight: 600; color: var(--ink); }
+.price-tier:hover { border-color: var(--brand); }
+.price-tier.active { border-color: var(--brand); background: rgba(79,70,229,.08); color: var(--brand); }
+.price-tier.active b { color: var(--brand); }
 .pos-cart-panel .cart-table td.num.strong { font-size: 13.5px; }
 /* The unit reminder under the qty box ("whole Piece only") would add a second
    line to every row — the unit is already shown in the dropdown beside it, so
