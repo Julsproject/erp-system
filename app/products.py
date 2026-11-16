@@ -15,7 +15,6 @@ from difflib import SequenceMatcher
 from zoneinfo import ZoneInfo
 
 import barcode as barcode_lib
-from barcode.writer import SVGWriter
 import openpyxl
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -27,7 +26,7 @@ from starlette.concurrency import run_in_threadpool
 
 from . import audit, models, pricing, settings_store
 from .database import SessionLocal, get_db
-from .deps import get_current_user, is_staff, safe_back_url, url_with
+from .deps import get_current_user, is_admin, is_staff, safe_back_url, url_with
 from .double_deductions import find_all_double_deduction_candidates, find_double_deduction_candidates
 from .search_utils import multi_word_ilike
 from .templating import qty, templates
@@ -1106,7 +1105,7 @@ def _render_form(request, db, user, product=None, error=None, back=""):
                 for c in (product.components if product else [])
             ]),
             # Room for another Open/Retail level under this one (box → kg → piece)?
-            "can_add_open_level": bool(product and product.id and _open_levels_above(db, product) < MAX_OPEN_LEVELS),
+            "can_add_open_level": bool(is_admin(user) and product and product.id and _open_levels_above(db, product) < MAX_OPEN_LEVELS),
             "error": error,
             # Where Back/Cancel/after-save should land — the filtered list the
             # user came from, so a search isn't lost just because they edited
@@ -1120,7 +1119,9 @@ def _render_form(request, db, user, product=None, error=None, back=""):
 def new_product(request: Request, back: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    # Adding an item to the catalogue is the owner's call — admin only.
+    # Managers can still edit existing products; they just can't add new ones.
+    if not is_admin(user):
         return RedirectResponse("/products", status_code=302)
     return _render_form(request, db, product=None, user=user, back=back)
 
@@ -1669,7 +1670,7 @@ def _resolve_unit_chain(rows: list) -> dict:
 async def create_product(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):  # creating a product is admin only (see new_product)
         return RedirectResponse("/products", status_code=302)
     form = await request.form()
     back = (form.get("back") or "").strip()
@@ -1716,7 +1717,7 @@ def create_open_counterpart(product_id: int, request: Request, name: str = Form(
     barcode, etc.) — everything a normal Add Product would ask for."""
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if not is_staff(user):
+    if not is_admin(user):  # it creates a new product — admin only
         return RedirectResponse("/products", status_code=302)
     source = db.get(models.Product, product_id)
     if not source:
@@ -2681,10 +2682,28 @@ def _barcode_data_uri(code: str) -> str:
     """Render `code` as a Code128 barcode (works for any barcode we already
     have on file — manufacturer EAN-13 digits included, Code128 just encodes
     them as text) and return it as an inline data: URI, ready for an <img>."""
-    buf = io.BytesIO()
-    bc = barcode_lib.get("code128", code, writer=SVGWriter())
-    bc.write(buf, options={"write_text": False, "quiet_zone": 2})
-    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    # Draw the bars ourselves on a 1-unit-per-module viewBox with
+    # preserveAspectRatio="none", so the label CSS can stretch the barcode to
+    # fill any sticker size and every bar stays crisp (thicker = easier scan).
+    modules = barcode_lib.get("code128", code).build()[0]
+    quiet = 4  # small blank edge each side (the label padding adds the rest of the quiet zone)
+    rects, x, n = [], quiet, len(modules)
+    i = 0
+    while i < n:
+        if modules[i] == "1":
+            j = i
+            while j < n and modules[j] == "1":
+                j += 1
+            rects.append(f'<rect x="{x + i}" y="0" width="{j - i}" height="1"/>')
+            i = j
+        else:
+            i += 1
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {n + 2 * quiet} 1" '
+        f'preserveAspectRatio="none" shape-rendering="crispEdges">'
+        f'<rect width="100%" height="100%" fill="#fff"/><g fill="#000">{"".join(rects)}</g></svg>'
+    )
+    b64 = base64.b64encode(svg.encode("ascii")).decode("ascii")
     return f"data:image/svg+xml;base64,{b64}"
 
 
@@ -3748,13 +3767,17 @@ def _parse_upload(filename: str, contents: bytes, header_map=None, fields=None,
     return rows, None
 
 
-def _classify_import_rows(db: Session, numbered_rows):
+def _classify_import_rows(db: Session, numbered_rows, allow_create: bool = True):
     """Read-only pass over (line_no, record) pairs: figure out whether each
     row would create a new product, update an existing one (matched by
     name), or hit a barcode already used by a different product — without
     writing anything to the database. This is what the duplicate-review
     screen is built from, and it's re-run at confirm time against the
-    then-current data in case anything changed in between."""
+    then-current data in case anything changed in between.
+
+    allow_create=False (a manager importing) turns every would-be new
+    product into a 'conflict' row: only an admin can add products, so a
+    manager's import can update existing ones but never adds new ones."""
     classified = []
     for line_no, record in numbered_rows:
         name = (record["name"] or "").strip()
@@ -3781,6 +3804,11 @@ def _classify_import_rows(db: Session, numbered_rows):
             })
         elif existing:
             classified.append({"line_no": line_no, "name": name, "record": record, "action": "update", "existing": existing})
+        elif not allow_create:
+            classified.append({
+                "line_no": line_no, "name": name, "record": record, "action": "conflict",
+                "message": "Not in Inventory — only an admin can add new products.",
+            })
         else:
             classified.append({"line_no": line_no, "name": name, "record": record, "action": "create"})
     return classified
@@ -3925,7 +3953,7 @@ def import_upload(
             {"request": request, "app_name": request.app.title, "user": user, "result": {"error": error}},
         )
 
-    classified = _classify_import_rows(db, list(enumerate(rows, start=2)))  # row 2 = first data row
+    classified = _classify_import_rows(db, list(enumerate(rows, start=2)), allow_create=is_admin(user))  # row 2 = first data row
     has_duplicates = any(r["action"] == "update" for r in classified)
 
     if not has_duplicates:
@@ -3979,7 +4007,7 @@ async def import_confirm(request: Request, db: Session = Depends(get_db), user=D
         # Re-classify against the *current* data rather than trusting the preview
         # snapshot — something could have changed (or another admin could have
         # imported) in the time between rendering the review screen and this submit.
-        classified = _classify_import_rows(db, numbered_rows)
+        classified = _classify_import_rows(db, numbered_rows, allow_create=is_admin(user))
 
         skip_line_nos = {
             item["line_no"] for item in classified

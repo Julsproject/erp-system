@@ -71,8 +71,8 @@
     <script>
       const NAV_PAGES = [
         {"label": "Inventory", "href": "/products"},
-        {"label": "Add Product", "href": "/products/new"},
-        {"label": "Import Excel", "href": "/products/import"},
+        {% if is_admin %}{"label": "Add Product", "href": "/products/new"},{% endif %}
+        {% if is_staff %}{"label": "Import Excel", "href": "/products/import"},{% endif %}
         {"label": "POS", "href": "/pos"},
         {"label": "Credits", "href": "/credits"},
         {"label": "{{ 'Cashier Activity' if is_staff else 'My Activity' }}", "href": "{{ '/activity/all' if is_staff else '/activity' }}"}

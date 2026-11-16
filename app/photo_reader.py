@@ -20,7 +20,12 @@ from . import models, settings_store
 
 log = logging.getLogger(__name__)
 
-MODEL = "claude-opus-5-5"
+# Haiku: about 1/40 of Opus's price (well under ₱1 a photo with the ~40k-token
+# item list cached). Switching back to "claude-opus-5-5" reads messy
+# handwriting better; Opus can also take the server-side refusal fallback
+# (betas=["server-side-fallback-2026-07-01"], fallbacks="default" on
+# client.beta.messages.create), which Haiku doesn't support.
+MODEL = "claude-haiku-5-5"
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 MAX_SIDE_PX = 2000          # phone photos are resized to this before sending
 
@@ -158,12 +163,11 @@ def read_document(db: Session, data: bytes, kind: str) -> dict:
     ]
     client = anthropic.Anthropic(timeout=180.0)
     try:
-        response = client.beta.messages.create(
+        response = client.messages.create(
             model=MODEL,
             max_tokens=16000,
-            betas=["server-side-fallback-2026-07-01"],
-            fallbacks="default",
-            output_config={"effort": "medium", "format": {"type": "json_schema", "schema": _SCHEMA}},
+            # high: reading handwriting rewards care, and on Haiku the extra thinking costs centavos
+            output_config={"effort": "high", "format": {"type": "json_schema", "schema": _SCHEMA}},
             system=system,
             messages=[{"role": "user", "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": image_b64}},

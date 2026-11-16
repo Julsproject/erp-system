@@ -44,7 +44,7 @@
     <a class="btn-secondary" href="/shelves?back={{ cur_url|urlencode }}">🗂 Shelves</a>
     {% if is_admin_user %}
     <a class="btn-secondary" href="/products/import">⬆ Import Excel</a>
-    <a class="btn" href="/products/new?back={{ cur_url|urlencode }}">+ Add product</a>
+    {% if (user.role or '')|lower == 'admin' %}<a class="btn" href="/products/new?back={{ cur_url|urlencode }}">+ Add product</a>{% endif %}
     {% endif %}
   </div>
 </div>

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from . import accounting, audit, doc_import, models, photo_reader, pricing, settings_store, stock_books, stock_dates
 from .database import get_db
-from .deps import get_current_user, is_floor_staff, is_staff, safe_back_url
+from .deps import get_current_user, is_admin, is_floor_staff, is_staff, safe_back_url
 from .pos import MANILA, VAT_DIVISOR, VAT_RATE, _find_backdated_stock_conflicts, _resolve_txn_datetime, _resolve_unit_factor, _vat_of
 from .sales import _resolve_settlement_datetime
 from .products import LOW_STOCK_LOOKBACK_DAYS, _get_or_create_category, _get_or_create_unit_type, recent_sold
@@ -803,11 +803,12 @@ def _product_payload(db: Session, p: models.Product, *, keep_unit_name: str | No
 
 @router.post("/purchases/quick-product")
 def quick_product(data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    """Create a product that isn't in inventory yet, straight from the purchase form."""
+    """Create a product that isn't in inventory yet, straight from the purchase form.
+    Admin only, like every other way of adding a product."""
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-    if not is_floor_staff(user):
-        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+    if not is_admin(user):
+        return JSONResponse({"ok": False, "error": "Only an admin can create new products."}, status_code=403)
 
     name = (data.get("name") or "").strip()
     if not name:
@@ -862,6 +863,26 @@ def create_purchase(data: dict, request: Request, db: Session = Depends(get_db),
     supplier_id = int(supplier_id) if supplier_id else None
     if not supplier_id:
         return JSONResponse({"ok": False, "error": "Choose a supplier."}, status_code=400)
+    if txn_type == "receive" and not is_admin(user):
+        # A typed name that matches nothing would be created as a new product
+        # below — only an admin can add products, so stop before anything is
+        # saved and name the rows to fix (pick an existing item instead).
+        unknown = []
+        for ln in lines:
+            if ln.get("product_id"):
+                continue
+            name = (ln.get("product_name") or "").strip()
+            if name and not (
+                db.query(models.Product.id)
+                .filter(func.lower(models.Product.name) == name.lower(), models.Product.is_active.is_(True))
+                .first()
+            ):
+                unknown.append(name)
+        if unknown:
+            return JSONResponse({"ok": False, "error": (
+                "Not in Inventory: " + ", ".join(unknown) + ". Only an admin can add new products — "
+                "pick an existing item from the list, or ask an admin to add it first."
+            )}, status_code=400)
     if txn_type == "receive":
         dup = _duplicate_dr(db, supplier_id, data.get("invoice_no"))
         if dup:

@@ -51,7 +51,7 @@
     <div id="posResults" class="pos-results">
       <p class="pos-hint">Type a product name to begin.</p>
     </div>
-    <button type="button" class="btn-secondary np-open" id="npOpenBtn" onclick="showNewProduct()">＋ Not in inventory? Create product</button>
+    {% if (user.role or '')|lower == 'admin' %}<button type="button" class="btn-secondary np-open" id="npOpenBtn" onclick="showNewProduct()">＋ Not in inventory? Create product</button>{% endif %}
     <button type="button" class="btn-secondary np-open" id="calcOpenBtn" onclick="showCalculator()">🖩 Calculator</button>
     <!-- Fill the cart from a paper DR/SI: a photo of it, or an Excel sheet.
          Nothing is saved — the cart is checked and completed as usual. -->
@@ -1988,17 +1988,19 @@ function onTxnTypeCheck(which) {
     document.getElementById('retChequeNo').value = '';
   }
 
+  // Admin only — the button isn't on the page at all for anyone else.
+  const npOpenBtn = document.getElementById('npOpenBtn');
   if (mode === 'return') {
     // Whatever's already in the cart (added before this was checked) stays
     // exactly as-is — only further additions are turned off, by pointing
     // the one shared search box at return items instead of the cart.
-    document.getElementById('npOpenBtn').style.display = 'none';
+    if (npOpenBtn) npOpenBtn.style.display = 'none';
     setSearchTarget('return');
   } else if (mode === 'exchange') {
-    document.getElementById('npOpenBtn').style.display = 'inline-flex';
+    if (npOpenBtn) npOpenBtn.style.display = 'inline-flex';
     setSearchTarget('sale');
   } else {
-    document.getElementById('npOpenBtn').style.display = 'inline-flex';
+    if (npOpenBtn) npOpenBtn.style.display = 'inline-flex';
     setSearchTarget('sale');
   }
   updateSearchTargetSeg();

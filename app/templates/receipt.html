@@ -92,6 +92,11 @@
       @page { margin:8mm; }
     }
     {% endif %}
+    /* The "✎ edit" links (invoice no., date, customer, payment) and any edit
+       box left open are screen-only — keep them off the printed receipt. */
+    @media print {
+      a[onclick^="showEdit"], [id^="edit"][id$="Form"] { display:none !important; }
+    }
   </style>
 </head>
 <body>
@@ -428,7 +433,27 @@
     {% else %}
     <a class="btn back" href="/pos/receipt/{{ sale.id }}?{{ receipt_ctx_full ~ '&' if receipt_ctx_full }}thermal=1">🧾 Thermal receipt</a>
     {% endif %}
-    <button class="btn print" onclick="window.print()">🖨 Print</button>
+    {# One click saves the PDF; a double-click prints. In the "Leafar POS
+       (auto print)" Chrome window the print goes straight to the printer
+       with no dialog, so the single click is the way to get a file. #}
+    <button class="btn print" id="printBtn" title="Click: save as PDF · Double-click: print">🖨 Print</button>
+    <script>
+      (function () {
+        const btn = document.getElementById('printBtn');
+        let timer = null;
+        btn.addEventListener('click', function () {
+          if (timer) return;              // second click of a double-click
+          timer = setTimeout(function () {
+            timer = null;
+            window.location.href = '/pos/receipt/{{ sale.id }}/pdf';
+          }, 300);
+        });
+        btn.addEventListener('dblclick', function () {
+          clearTimeout(timer); timer = null;
+          window.print();
+        });
+      })();
+    </script>
     <a class="btn back" href="/pos/receipt/{{ sale.id }}/pdf">⬇ Download PDF</a>
     {% if can_edit_items %}
     <a class="btn back" href="/pos/receipt/{{ sale.id }}/edit{{ '?' ~ receipt_ctx_full if receipt_ctx_full }}">✎ Edit items</a>

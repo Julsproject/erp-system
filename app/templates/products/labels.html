@@ -23,19 +23,51 @@
     .label .price { font-size:14px; font-weight:800; color:#1d4ed8; margin-top:2px; }
     .label img { width:100%; max-width:160px; height:36px; margin-top:5px; }
     .label .code { font-size:10px; letter-spacing:.06em; color:#334155; margin-top:1px; }
+    .actions { display:flex; gap:8px; align-items:center; }
+    .actions select { padding:9px 10px; border-radius:10px; border:1px solid #e2e8f0; font-size:14px; background:#fff; color:#334155; }
+    /* "Product + barcode only": no shop name, no price */
+    body.compact .label .biz, body.compact .label .price { display:none; }
     @media print {
-      body { background:#fff; }
+      html, body { background:#fff; margin:0; padding:0; }
       .toolbar { display:none; }
-      .sheet { border:none; padding:0; margin:0; max-width:none; }
-      .label { border:1px solid #000; break-inside:avoid; }
-      @page { margin:8mm; }
+      .sheet { border:none; border-radius:0; padding:0; margin:0; max-width:none; }
+      /* One label = one sticker: fills the whole paper size chosen in the
+         print dialog, so nothing spills onto a second sheet. */
+      .label-grid { display:block; }
+      .label {
+        border:none; border-radius:0; padding:1mm 2mm;
+        width:100vw; height:100vh; min-height:0; overflow:hidden;
+        break-after:page; page-break-after:always; break-inside:avoid;
+        justify-content:space-between;
+      }
+      .label:last-child { break-after:auto; page-break-after:auto; }
+      /* Text sized from BOTH sticker height and width (whichever is smaller),
+         so it fits a wide or a tall sticker without cutting off. */
+      .label > div { flex:0 0 auto; max-width:100%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; line-height:1.1; color:#000; margin:0; }
+      .label .biz { font-size:min(7vh, 4.6vw); }
+      .label .name { font-size:min(10vh, 6vw); font-weight:700; }
+      .label .price { font-size:min(12vh, 9vw); font-weight:800; }
+      .label .code { font-size:min(7vh, 5.5vw); letter-spacing:.06em; }
+      /* barcode takes all the height that's left, full width = thick bars */
+      .label img { flex:1 1 0; min-height:0; width:100%; max-width:none; height:auto; margin:.5vh 0; }
+      /* compact: bigger name, barcode nearly edge to edge */
+      body.compact .label { padding:1mm 1mm; }
+      body.compact .label .name { font-size:min(13vh, 7vw); }
+      body.compact .label .code { font-size:min(9vh, 6vw); }
+      @page { margin:0; }
     }
   </style>
 </head>
 <body>
   <div class="toolbar">
     <a href="{{ back }}">← Back to inventory</a>
-    <button onclick="window.print()">🖨 Print labels</button>
+    <div class="actions">
+      <select id="labelStyle" aria-label="Label style">
+        <option value="full">Shop name + product + price + barcode</option>
+        <option value="compact">Product + barcode only</option>
+      </select>
+      <button onclick="window.print()">🖨 Print labels</button>
+    </div>
   </div>
   <div class="sheet">
     {% set biz = business_info() %}
@@ -51,5 +83,17 @@
       {% endfor %}
     </div>
   </div>
+  <script>
+    (function () {
+      var sel = document.getElementById('labelStyle');
+      function apply(v) { document.body.classList.toggle('compact', v === 'compact'); }
+      try { var saved = localStorage.getItem('labelStyle'); if (saved) sel.value = saved; } catch (e) {}
+      apply(sel.value);
+      sel.addEventListener('change', function () {
+        apply(sel.value);
+        try { localStorage.setItem('labelStyle', sel.value); } catch (e) {}
+      });
+    })();
+  </script>
 </body>
 </html>

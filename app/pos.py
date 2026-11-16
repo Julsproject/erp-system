@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from . import accounting, audit, customer_credit, doc_import, models, photo_reader, settings_store, stock_books, stock_dates
 from .customers import get_or_create_customer
 from .database import get_db
-from .deps import get_current_user, is_floor_staff, is_staff, safe_back_url, url_with
+from .deps import get_current_user, is_admin, is_floor_staff, is_staff, safe_back_url, url_with
 from .products import _get_or_create_category, _get_or_create_subcategory, _get_or_create_unit_type
 from .templating import templates
 
@@ -952,12 +952,14 @@ def pos_product(product_id: int, db: Session = Depends(get_db), user=Depends(get
 @router.post("/pos/quick-product")
 def pos_quick_product(data: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     """Create a product that isn't in inventory yet, straight from the POS
-    screen — cashiers use this too, so it deliberately has no selling-price
-    fields (that's the owner's call, not shown here). It's added to the cart
-    at ₱0; the cashier types whatever this specific sale charges directly on
-    the cart line, same as any other manually-priced line."""
+    screen. Admin only — adding an item to the catalogue is the owner's call.
+    It deliberately has no selling-price fields: it's added to the cart at ₱0
+    and this sale's price is typed directly on the cart line, same as any
+    other manually-priced line."""
     if not user:
         return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    if not is_admin(user):
+        return JSONResponse({"ok": False, "error": "Only an admin can create new products."}, status_code=403)
 
     name = (data.get("name") or "").strip()
     if not name:
@@ -2212,15 +2214,17 @@ def pos_receipt(
 
 
 # Phase 1 of Void a Sale: only a clean, standalone "sale" can be voided —
-# nothing with credit, a linked refund/exchange, or a post-dated cheque
-# already touching it. Those cases involve money that's moved somewhere
+# nothing collected on its credit, no SI issued for it, no linked
+# refund/exchange, and no post-dated cheque already touching it. (An unpaid
+# credit sale — the order that didn't push through — is fine.) Those cases involve money that's moved somewhere
 # else and need to be unwound by hand first; this covers the actual everyday
 # case (a same-day data-entry typo caught before anything else built on it).
 VOID_ERRORS = {
     "reason": "Enter a reason for voiding this sale.",
     "voided": "This sale is already voided.",
     "type": "Only a plain sale can be voided here — not a refund or exchange.",
-    "credit": "This sale has a credit balance — settle or write it off before voiding.",
+    "credit": "Payments have been collected on this sale's credit — undo them on the customer's Credits page first.",
+    "si": "An SI has been issued for this sale — void that SI first.",
     "linked": "This sale has a refund or exchange linked to it — that can't be undone, so it can't be voided.",
     "pdc": "This sale has a post-dated cheque still outstanding against it.",
     "denied": "You don't have permission to void sales.",
@@ -2384,8 +2388,16 @@ def void_sale(
     reason = (reason or "").strip()
     if not reason:
         return _back("reason")
+    # An unpaid credit sale can be voided (the order didn't push through) —
+    # but not once money was collected on it or an SI documents it: those
+    # have to be undone first, or they'd point at a sale that never happened.
     if (sale.receivable_amount or 0) > 0:
-        return _back("credit")
+        if db.query(models.ReceivableSettlement.id).filter(models.ReceivableSettlement.sale_id == sale.id).first():
+            return _back("credit")
+        if (db.query(models.SiApplication.id)
+                .join(models.Sale, models.Sale.id == models.SiApplication.si_sale_id)
+                .filter(models.SiApplication.dr_sale_id == sale.id, models.Sale.is_voided.is_(False)).first()):
+            return _back("si")
     # A voided refund/exchange already had its own effect undone, so it no
     # longer refers to anything real — only a still-live one blocks voiding.
     linked_exists = db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id, models.Sale.is_voided.is_(False)).first()
@@ -2444,6 +2456,10 @@ def void_sale(
     sale.void_reason = reason[:255]
     sale.voided_at = datetime.now(MANILA)
     sale.voided_by_id = user.id
+    # Nothing is owed on a sale that never happened: clear its credit so
+    # Credits, Receivables, the dashboard and reminders drop it. Restoring
+    # puts it back (see unvoid_sale).
+    sale.receivable_amount = Decimal("0")
 
     # Reverse whatever was posted to the ledger for this sale. A no-op if
     # this sale predates the accounting module (never had a journal entry).
@@ -2540,7 +2556,11 @@ def unvoid_sale(
                 accounting.reverse_journal(db, reversal, reason="Restored (un-voided)", entered_by_id=user.id)
 
     method_code = next((code for code, label in METHOD_LABELS.items() if label == sale.payment_method), None)
-    if method_code:
+    if method_code in ("receivable", "cheque"):
+        # A credit sale: void cleared its credit — the whole sale is owed again.
+        sale.receivable_amount = sale.total
+        db.add(models.Payment(sale_id=sale.id, method=method_code, amount=sale.total))
+    elif method_code:
         db.add(models.Payment(sale_id=sale.id, method=method_code, amount=sale.amount_tendered))
 
     sale.is_voided = False

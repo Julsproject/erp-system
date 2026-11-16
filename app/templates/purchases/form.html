@@ -182,6 +182,9 @@ const txnType = {{ 'true' if return_against_po else 'false' }} ? 'return' : 'rec
 const isReturnAgainstPo = {{ 'true' if return_against_po else 'false' }};
 const returnAgainstId = {{ return_against_po.id if return_against_po else 'null' }};
 const canSetAlert = {{ 'true' if can_set_alert else 'false' }};
+// Only an admin can add products — for anyone else an unmatched name is
+// flagged instead of promising to create it (the save is refused too).
+const NEW_PRODUCT_HINT = {{ ('will be created as a new product' if (user.role or '')|lower == 'admin' else 'not in Inventory — only an admin can add new products; pick an existing item')|tojson }};
 // Where the saved purchase's own Back returns to. Kept here because the
 // ?from_slip handler below strips this page's query string.
 const BACK = {{ back|tojson }};
@@ -411,7 +414,7 @@ function rowHtml(l, i) {
       'oninput="onNameInput(' + i + ', this.value)" onfocus="onNameInput(' + i + ', this.value)" onblur="setTimeout(function(){hideRowResults(' + i + ')}, 150)">' +
       '<div class="pos-results row-results" id="rowResults' + i + '" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:30;max-height:min(460px,60vh);overflow:auto;"></div>' +
       '<span class="hint row-hint" style="display:' + (l.productId || l.name.trim() ? 'block' : 'none') + ';">' +
-      (l.productId ? 'matched existing product' : 'will be created as a new product') + '</span>' +
+      (l.productId ? 'matched existing product' : NEW_PRODUCT_HINT) + '</span>' +
     '</td>' +
     '<td class="num"><input class="cart-disc line-cost" type="text" inputmode="decimal" autocomplete="off" value="' + (l.unitCost === '' ? '' : money2(l.unitCost)) + '" oninput="liveCommas(this); setRCost(' + i + ', plainNum(this.value))"></td>' +
     '<td class="num"><input class="cart-disc line-total" type="text" inputmode="decimal" autocomplete="off" value="' + money2(lineTotal(l)) + '" oninput="liveCommas(this); setRTotal(' + i + ', plainNum(this.value))"></td>' +
@@ -504,7 +507,7 @@ function onNameInput(i, v) {
   const alertHintEl = tr && tr.querySelector('.row-alert-hint');
   if (alertHintEl) alertHintEl.innerHTML = alertHint(receiveLines[i]);
   const hint = tr && tr.querySelector('.row-hint');
-  if (hint) { hint.style.display = v.trim() ? 'block' : 'none'; hint.textContent = 'will be created as a new product'; }
+  if (hint) { hint.style.display = v.trim() ? 'block' : 'none'; hint.textContent = NEW_PRODUCT_HINT; }
   if (ensureTrailingBlankRow()) appendRowDom(receiveLines.length - 1);
   savePurchaseDraft();  // a typed name alone (before qty/cost) still needs saving
   clearTimeout(searchTimers[i]);
