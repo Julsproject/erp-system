@@ -419,6 +419,12 @@ table.grid tr:last-child td { border-bottom: none; }
 
 /* ---------- POS ---------- */
 .pos-grid { display: grid; grid-template-columns: 0.7fr 1.8fr; gap: 20px; align-items: start; }
+/* The POS sale/quotation screen: a wider cart. The page uses the whole
+   screen width with slimmer margins, and the search list keeps just enough
+   room (240px+) for item names while the cart takes the rest. */
+.content:has(.pos-grid-wide) { max-width: none; padding-left: 20px; padding-right: 20px; }
+.pos-grid-wide { grid-template-columns: minmax(240px, 0.8fr) 3fr; gap: 16px; }
+.pos-grid-wide .pos-cart-panel .cart-unit { max-width: 180px; }
 .pos-search-panel { padding: 18px; position: sticky; top: 20px; }
 .pos-search { width: 100%; max-width: none; margin-bottom: 14px; }
 .pos-results { display: flex; flex-direction: column; gap: 8px; max-height: 64vh; overflow-y: auto; }
@@ -780,18 +786,11 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
 }
 .pos-cart-panel .cart-table td.cart-item .warn-tag { margin-left: 4px; }
 .pos-cart-panel .cart-qty, .pos-cart-panel .cart-price { width: 86px; padding: 5px 8px; font-size: 13.5px; border-radius: 7px; }
+/* Qty only needs room for 4 digits (up to 9999) — 4ch + padding + border. */
+.pos-cart-panel .cart-qty { width: calc(4ch + 21px); }
 .pos-cart-panel .cart-unit { max-width: 112px; padding: 4px 6px; font-size: 12px; }
 .pos-cart-panel .cart-disc { width: 58px; padding: 4px 6px; font-size: 12px; }
 .pos-cart-panel .disc-toggle { padding: 2px 5px; font-size: 11px; }
-/* POS price types under the Price box: Fixed / Markup / Margin, tap to pick. */
-.price-tiers { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; align-items: stretch; }
-.price-tier { display: flex; justify-content: space-between; gap: 6px; padding: 2px 6px; border: 1px solid var(--line-2);
-  border-radius: 6px; background: var(--surface, #fff); color: var(--muted); font-size: 11px; line-height: 1.35;
-  cursor: pointer; white-space: nowrap; text-align: left; }
-.price-tier b { font-weight: 600; color: var(--ink); }
-.price-tier:hover { border-color: var(--brand); }
-.price-tier.active { border-color: var(--brand); background: rgba(79,70,229,.08); color: var(--brand); }
-.price-tier.active b { color: var(--brand); }
 .pos-cart-panel .cart-table td.num.strong { font-size: 13.5px; }
 /* The unit reminder under the qty box ("whole Piece only") would add a second
    line to every row — the unit is already shown in the dropdown beside it, so
@@ -1003,6 +1002,7 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
   .cart-unit, .cart-unit-txt { width: auto; max-width: 116px; }
   .cart-disc, .disc-input { width: 74px; }
   .pos-cart-panel .cart-qty, .pos-cart-panel .cart-price { width: 72px; font-size: 13px; }
+  .pos-cart-panel .cart-qty { width: calc(4ch + 21px); }
   .pos-cart-panel .cart-table td.cart-item { min-width: 90px; }
   input.line-cost, input.line-total,
   .pos-cart-panel input.line-cost, .pos-cart-panel input.line-total { width: 110px; }
@@ -1192,6 +1192,45 @@ input.line-cost, input.line-total { width: 160px; padding: 10px 12px; font-size:
   .nav-item { min-height: 42px; }
   /* Momentum scrolling for the wide tables, whatever the screen size. */
   .table-wrap { -webkit-overflow-scrolling: touch; }
+}
+
+/* POS on a tablet (iPad): the 16px touch inputs above squeeze the cart's
+   product column down to a clipped "FLOOR ST…". Give the product name more
+   room and a bigger font, and let it wrap to a second line instead of being
+   cut off. The search list's product names get bigger too. The Unit
+   dropdown gives back some width so the row still fits without scrolling. */
+@media screen and (pointer: coarse) and (min-width: 600px) {
+  .pos-cart-panel .cart-table td.cart-item {
+    font-size: 15px; line-height: 1.3; min-width: 160px;
+    white-space: normal; overflow-wrap: anywhere; text-overflow: clip;
+  }
+  .pos-grid-wide .pos-cart-panel .cart-unit { max-width: 140px; }
+  /* The small-screen rule giving bold cells 128px also caught the line
+     Total ("₱115.00"), costing the row ~60px it doesn't need. */
+  .pos-cart-panel .cart-table td.num.strong { min-width: 0; }
+  .pos-cart-panel .cart-table td { padding-top: 7px; padding-bottom: 7px; }
+  .pos-item { padding: 16px 18px; }
+  .pos-item-name { font-size: 16.5px; }
+  .pos-item-sub { font-size: 14.5px; }
+}
+/* iPad in landscape: beside the sidebar and the search list the cart only
+   got ~430px, so Qty/Price slid off to the right. Stack search above the
+   cart (as portrait already does) so the cart gets the full width; the
+   results list is kept short so the cart stays in view. */
+@media screen and (pointer: coarse) and (min-width: 901px) and (max-width: 1180px) {
+  .pos-grid-wide { grid-template-columns: 1fr; }
+  .pos-grid-wide .pos-search-panel { position: static; }
+  .pos-grid-wide .pos-results { max-height: 40vh; }
+}
+/* iPad either way round (search above the cart): the four buttons under
+   the search list sit side by side instead of one per line, so they don't
+   push the cart off the screen. */
+@media screen and (pointer: coarse) and (min-width: 600px) and (max-width: 1180px) {
+  .pos-grid-wide .pos-search-panel { display: flex; flex-wrap: wrap; gap: 0 8px; }
+  .pos-grid-wide .pos-search-panel > .pos-search,
+  .pos-grid-wide .pos-search-panel > .pos-results,
+  .pos-grid-wide .pos-search-panel > a { flex: 0 0 100%; }
+  .pos-grid-wide .pos-search-panel > .np-open { flex: 1 1 150px; width: auto; }
 }
 
 /* ============================================================
