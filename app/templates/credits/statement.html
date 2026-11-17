@@ -8,7 +8,7 @@
     :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --warn:#b7791f; }
     * { box-sizing: border-box; }
     body { margin:0; background:#eef1f5; font-family:"Segoe UI",system-ui,sans-serif; color:var(--ink); }
-    .sheet { max-width:720px; margin:28px auto; background:#fff; border:1px solid var(--line); border-radius:12px; padding:32px 36px; box-shadow:0 6px 24px rgba(15,23,42,.08); }
+    .sheet { max-width:780px; margin:28px auto; background:#fff; border:1px solid var(--line); border-radius:12px; padding:32px 36px; box-shadow:0 6px 24px rgba(15,23,42,.08); }
     .s-head { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid var(--ink); padding-bottom:14px; margin-bottom:18px; }
     .s-store { font-size:20px; font-weight:800; }
     .s-title { font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; margin-top:2px; }
@@ -16,23 +16,23 @@
     .s-cust .nm { font-size:16px; font-weight:700; }
     .s-cust .mut { color:var(--muted); }
     table { width:100%; border-collapse:collapse; font-size:13px; margin-bottom:16px; }
-    th { text-align:left; color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.04em; padding:8px 10px; border-bottom:1px solid var(--line); }
+    th { text-align:left; color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.04em; padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
     td { padding:9px 10px; border-bottom:1px solid var(--line); }
-    .num { text-align:right; font-variant-numeric:tabular-nums; }
+    .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
     .mut { color:var(--muted); }
     tfoot td { font-weight:700; border-top:2px solid var(--ink); border-bottom:none; }
     .owed { color:var(--warn); font-weight:700; }
     .s-balance { text-align:right; font-size:16px; margin-top:8px; }
     .s-balance b { font-size:22px; }
     .s-foot { color:var(--muted); font-size:12px; margin-top:22px; border-top:1px dashed var(--line); padding-top:12px; }
-    .actions { max-width:720px; margin:0 auto 40px; display:flex; gap:10px; justify-content:flex-end; }
+    .actions { max-width:780px; margin:0 auto 40px; display:flex; gap:10px; justify-content:flex-end; }
     .pay-link { color:#4f46e5; text-decoration:none; font-weight:600; font-size:12.5px; white-space:nowrap; }
     .pay-link:hover { text-decoration:underline; }
     .btn { padding:10px 18px; border-radius:10px; border:none; cursor:pointer; font-size:14px; font-weight:600; text-decoration:none; }
     .btn.print { background:#4f46e5; color:#fff; }
     .btn.back { background:#fff; color:#334155; border:1px solid var(--line); }
     .btn[disabled] { opacity:.45; cursor:not-allowed; }
-    .batch-bar { max-width:720px; margin:0 auto 14px; display:flex; align-items:center; justify-content:flex-end; gap:14px; }
+    .batch-bar { max-width:780px; margin:0 auto 14px; display:flex; align-items:center; justify-content:flex-end; gap:14px; }
     .batch-bar .info { font-size:13px; color:var(--muted); }
     .batch-bar .info b { color:var(--ink); }
     /* Standalone page — styles.css and its responsive rules don't reach it.
@@ -79,15 +79,8 @@
           <td class="no-print">
             {% if r.outstanding > 0 %}<input type="checkbox" class="payChk" value="{{ r.sale.id }}" onchange="updateBatchBar()">{% endif %}
           </td>
-          <td>
-            {{ r.sale.invoice_no }}
-            {% if r.sold_items %}
-            <div style="color:var(--muted);font-weight:400;font-size:12px;margin-top:2px;">
-              {% for it in r.sold_items %}{{ it.qty|qty }} {{ it.unit or '' }} {{ it.name }}{{ ', ' if not loop.last }}{% endfor %}
-            </div>
-            {% endif %}
-          </td>
-          <td>{{ r.sale.created_at.strftime('%b %d, %Y') if r.sale.created_at else '' }}</td>
+          <td>{{ r.sale.invoice_no }}</td>
+          <td style="white-space:nowrap;">{{ r.sale.created_at.strftime('%b %d, %Y') if r.sale.created_at else '' }}</td>
           <td class="num">{{ r.sale.total|peso }}</td>
           <td class="num">{{ r.orig|peso }}</td>
           <td class="num">{{ r.paid|peso }}</td>
@@ -95,7 +88,7 @@
           <td class="no-print">{% if r.outstanding > 0 %}<a class="pay-link" href="/sales/receivables/{{ r.sale.id }}/pay?from_page=credits&back={{ back_here() }}">Collect payment</a>{% endif %}</td>
         </tr>
         {% else %}
-        <tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px;">No credit transactions.</td></tr>
+        <tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px;">{{ 'Nothing outstanding — every credit invoice is paid.' if paid_hidden else 'No credit transactions.' }}</td></tr>
         {% endfor %}
       </tbody>
       <tfoot>
@@ -109,6 +102,12 @@
         </tr>
       </tfoot>
     </table>
+
+    {% if show_paid %}
+    <p class="mut no-print" style="text-align:right;font-size:12.5px;margin:-8px 0 12px;">Showing paid invoices too · <a class="pay-link" href="{{ paid_toggle_url }}">Hide paid invoices</a></p>
+    {% elif paid_hidden %}
+    <p class="mut no-print" style="text-align:right;font-size:12.5px;margin:-8px 0 12px;">{{ paid_hidden }} fully paid invoice{{ 's' if paid_hidden != 1 }} not shown · <a class="pay-link" href="{{ paid_toggle_url }}">Show paid invoices</a></p>
+    {% endif %}
 
     <div class="batch-bar no-print" id="batchBar" style="display:none;">
       <span class="info"><b id="batchCount">0</b> selected · Total: <b id="batchTotal">₱0.00</b></span>
@@ -244,7 +243,8 @@
     <a class="btn back" href="{{ back }}">← Back</a>
     {% if out_total > 0 %}<a class="btn back" href="/credits/{{ customer.id }}/pay-full?back={{ back_here() }}">Pay Full</a>{% endif %}
     <button class="btn print" onclick="window.print()">🖨 Print</button>
-    <a class="btn back" href="/credits/{{ customer.id }}/pdf">⬇ Download PDF</a>
+    <a class="btn back" href="/credits/{{ customer.id }}/pdf{{ '?show_paid=1' if show_paid }}">⬇ Download PDF</a>
+    <a class="btn back" href="/credits/{{ customer.id }}/export.xlsx{{ '?show_paid=1' if show_paid }}">⬇ Download Excel</a>
   </div>
 
   <script>

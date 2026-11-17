@@ -2204,7 +2204,9 @@ def pos_receipt(
          "can_edit_customer": is_staff(user), "edit_customer_error": EDIT_CUSTOMER_ERRORS.get(edit_customer_error),
          "customer_names": customer_names,
          "today_iso": datetime.now(MANILA).date().isoformat(),
-         "can_edit_items": is_staff(user) and _can_edit_sale_items(db, sale, allow_paid=True) is None,
+         "can_edit_items": is_staff(user) and (
+             _can_edit_return_items(db, sale) if sale.txn_type in ("refund", "exchange")
+             else _can_edit_sale_items(db, sale, allow_paid=True)) is None,
          "edit_items_error": EDIT_ITEMS_ERRORS.get(edit_items_error),
          "can_edit_payment": is_staff(user) and _can_edit_sale_payment(db, sale) is None,
          "edit_payment_error": EDIT_ITEMS_ERRORS.get(edit_payment_error),
@@ -2277,7 +2279,53 @@ EDIT_ITEMS_ERRORS = {
     "invalid": "Not a valid payment method to switch to.",
     "needs_customer": "Type a customer name to put this on their credit account.",
     "partially_paid": "This credit sale already has a payment recorded against it — settle or void it instead of switching methods.",
+    "return_paid": "A payment was already collected on this exchange's balance — undo it on the customer's Credits page first.",
+    "return_si": "An SI has been issued for this exchange — void that SI first.",
+    "return_refund_new": "A refund only takes items back — to also give new items, make it an exchange in the POS.",
 }
+
+
+RETURN_METHOD_BY_LABEL = {label: key for key, label in METHOD_LABELS.items()}
+
+
+def _can_edit_return_items(db: Session, sale: models.Sale):
+    """Same idea as _can_edit_sale_items, for a refund or exchange slip — so
+    a returned item the cashier forgot can be added afterwards. Blocked only
+    where re-doing the slip would leave something else pointing at old
+    numbers: a cheque, a payment already collected on an exchange's balance,
+    an SI issued for it, or more than one payment."""
+    if sale.is_voided:
+        return "voided"
+    if sale.txn_type not in ("refund", "exchange"):
+        return "type"
+    if len(sale.payments) > 1:
+        return "split"
+    if (
+        db.query(models.PostDatedCheque.id)
+        .filter(models.PostDatedCheque.sale_id == sale.id,
+                models.PostDatedCheque.status.notin_(["cancelled", "bounced"]))
+        .first()
+    ):
+        return "pdc"
+    if db.query(models.ReceivableSettlement.id).filter(models.ReceivableSettlement.sale_id == sale.id).first():
+        return "return_paid"
+    if (db.query(models.SiApplication.id).join(models.Sale, models.Sale.id == models.SiApplication.si_sale_id)
+            .filter(models.SiApplication.dr_sale_id == sale.id, models.Sale.is_voided.is_(False)).first()):
+        return "return_si"
+    if db.query(models.Sale.id).filter(models.Sale.original_sale_id == sale.id, models.Sale.is_voided.is_(False)).first():
+        return "linked"
+    return None
+
+
+def _return_method(sale: models.Sale) -> str:
+    """The money channel a refund/exchange slip used, read back from what it
+    stored: its one payment row, Receivable, or the "<Method> refund" label."""
+    if sale.payments:
+        return sale.payments[0].method
+    if (sale.receivable_amount or 0) > 0:
+        return "receivable"
+    label = (sale.payment_method or "").replace(" + credit applied", "").replace(" refund", "").strip()
+    return RETURN_METHOD_BY_LABEL.get(label, "cash")
 
 
 def _can_edit_sale_items(db: Session, sale: models.Sale, allow_paid: bool = False):
@@ -3079,6 +3127,28 @@ def edit_sale_items_form(
     ctx = _receipt_ctx(from_, back, cust, quote)
     if not is_staff(user):
         return RedirectResponse(_receipt_url(sale_id, ctx, edit_items_error="denied"), status_code=302)
+    if sale.txn_type in ("refund", "exchange"):
+        block_reason = _can_edit_return_items(db, sale)
+        if block_reason:
+            return RedirectResponse(_receipt_url(sale_id, ctx, edit_items_error=block_reason), status_code=302)
+        return templates.TemplateResponse(
+            "edit_return.html",
+            {
+                "request": request, "app_name": request.app.title, "user": user, "sale": sale,
+                "receipt_url": _receipt_url(sale_id, ctx),
+                "lines_json": json.dumps([{
+                    "product_id": ln.product_id, "name": ln.product_name,
+                    "unit_name": ln.unit_name or "Unit", "factor": float(ln.unit_factor or 1),
+                    "qty": abs(float(ln.qty or 0)), "side": "ret" if (ln.qty or 0) < 0 else "new",
+                    "unit_price": float(ln.unit_price or 0), "discount": float(ln.discount or 0),
+                    "tier": ln.price_tier or "fixed",
+                } for ln in sale.lines]),
+                "vat_applied": any(ln.is_vat for ln in sale.lines),
+                "method": _return_method(sale),
+                "method_label": METHOD_LABELS.get(_return_method(sale), "Cash"),
+                "orig": db.get(models.Sale, sale.original_sale_id) if sale.original_sale_id else None,
+            },
+        )
     block_reason = _can_edit_sale_items(db, sale, allow_paid=True)
     if block_reason:
         return RedirectResponse(_receipt_url(sale_id, ctx, edit_items_error=block_reason), status_code=302)
@@ -3115,6 +3185,8 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
         return JSONResponse({"ok": False, "error": "Sale not found."}, status_code=404)
     if not is_staff(user):
         return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS["denied"]}, status_code=403)
+    if sale.txn_type in ("refund", "exchange"):
+        return _edit_return_items(db, sale, data, request, user)
     block_reason = _can_edit_sale_items(db, sale, allow_paid=True)
     if block_reason:
         return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS[block_reason]}, status_code=400)
@@ -3323,6 +3395,210 @@ def edit_sale_items(sale_id: int, data: dict, request: Request, db: Session = De
         entity_id=sale.id, entity_label=sale.invoice_no,
         summary=f"Corrected items on sale {sale.invoice_no}: {old_line_count} line(s) → {len(sale.lines)}, total {old_total:g} → {sale.total:g}"
                 + (f"; {moved_to_credit:,.2f} already paid moved to the customer's credit balance" if moved_to_credit else ""),
+        changes={"total": [str(old_total), str(sale.total)]},
+    )
+    db.commit()
+    return {"ok": True, "sale_id": sale.id}
+
+
+def _edit_return_items(db: Session, sale: models.Sale, data: dict, request: Request, user):
+    """Edit items on a refund/exchange slip — mainly to add a returned item
+    the cashier forgot. Same "undo, then redo" as edit_sale_items: the slip's
+    whole stock effect is reversed (keeping the old movements as history),
+    its lines are rebuilt from the edited list, and the money side is worked
+    out again the way pos_refund/pos_exchange do it, through the same
+    channel the slip used (cash, GCash, credit...). The journal entry is
+    reversed and re-posted on the slip's own date."""
+    block_reason = _can_edit_return_items(db, sale)
+    if block_reason:
+        return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS[block_reason]}, status_code=400)
+    lines_in = [ln for ln in (data.get("lines") or []) if _dec(ln.get("qty")) > 0 and ln.get("product_id")]
+    if not lines_in:
+        return JSONResponse({"ok": False, "error": "Add at least one item."}, status_code=400)
+    returned_in = [ln for ln in lines_in if ln.get("side") == "ret"]
+    new_in = [ln for ln in lines_in if ln.get("side") != "ret"]
+    is_refund = sale.txn_type == "refund"
+    if is_refund and new_in:
+        return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS["return_refund_new"]}, status_code=400)
+    if not returned_in:
+        return JSONResponse({"ok": False, "error": "A return or exchange needs at least one returned item."}, status_code=400)
+    qty_err = _whole_qty_error(db, new_in)
+    if qty_err:
+        return JSONResponse({"ok": False, "error": qty_err}, status_code=400)
+
+    vat_applied = bool(data.get("vat_applied"))
+    booklet = (sale.receipt_type or "").strip().upper()
+    if booklet in ("DRS", "DRB"):
+        vat_applied = False
+    elif booklet == "SI":
+        vat_applied = True
+
+    method = _return_method(sale)          # read before the money fields are reset below
+    old_total, old_line_count = sale.total, len(sale.lines)
+    ref = _display_invoice(sale)
+    orig = db.get(models.Sale, sale.original_sale_id) if sale.original_sale_id else None
+
+    # 1. Undo the slip's stock effect, netted off its own movements.
+    moves = (
+        db.query(models.StockMovement)
+        .filter(models.StockMovement.ref == ref,
+                models.StockMovement.reason.in_(["refund", "exchange-return", "exchange-sale",
+                                                 "return-edit-reverse", "correction"]))
+        .all()
+    )
+    display = func.concat(func.coalesce(models.Sale.receipt_type, ""), models.Sale.invoice_no)
+    if moves and db.query(models.Sale.id).filter(display == ref, models.Sale.id != sale.id).first():
+        sale_d = stock_dates.local_date(sale.created_at) if sale.created_at else None
+        moves = [m for m in moves if stock_dates.local_date(m.created_at) == sale_d]
+    effect_qty, effect_value = {}, {}
+    for m in moves:
+        effect_qty[m.product_id] = effect_qty.get(m.product_id, Decimal("0")) + Decimal(str(m.qty_base or 0))
+        effect_value[m.product_id] = effect_value.get(m.product_id, Decimal("0")) + (
+            Decimal(str(m.value)) if m.value is not None else Decimal("0"))
+    for pid in effect_qty:
+        qty_back, value_back = -effect_qty[pid], -effect_value.get(pid, Decimal("0"))
+        if not qty_back and not value_back:
+            continue
+        product = db.get(models.Product, pid, with_for_update=True)
+        if not product:
+            continue
+        value_before = Decimal(str(product.total_qty or 0)) * Decimal(str(product.cost_price or 0))
+        _add_stock(product, qty_back)
+        unit_cost = (value_back / qty_back).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if qty_back else None
+        db.add(models.StockMovement(
+            product_id=product.id, qty_base=qty_back, reason="return-edit-reverse", ref=ref,
+            unit_cost=unit_cost, value=value_back, note="Reversed for item correction", created_at=sale.created_at,
+        ))
+        stock_books.book_cost_variance(db, product, value_before=value_before, value_added=value_back, ref=ref,
+                                       note="Item correction: cost changed since the return", stamp=sale.created_at,
+                                       entered_by_id=user.id)
+
+    # 2. Undo the money side: payment row, receivable, and any amount this
+    #    slip took off the original invoice's balance (redone in step 4).
+    old_notes = (db.query(models.ReceivableSettlement)
+                 .filter(models.ReceivableSettlement.source_sale_id == sale.id,
+                         models.ReceivableSettlement.method == "credit_note").all())
+    note_stamp = old_notes[0].created_at if old_notes else sale.created_at
+    for st in old_notes:
+        db.delete(st)
+    sale.payments = []
+    sale.receivable_amount = Decimal("0")
+    sale.lines = []
+    db.flush()
+
+    # 3. Rebuild the lines — returned items back into stock, new ones out.
+    returned_total = new_total = Decimal("0")
+    for ln in returned_in:
+        product = db.get(models.Product, int(ln["product_id"]), with_for_update=True)
+        if not product:
+            continue
+        qty, unit_price = _dec(ln.get("qty")), _dec(ln.get("unit_price"))
+        factor = _resolve_unit_factor(product, ln.get("unit_name"), _dec(ln.get("factor"), "1"))
+        value = qty * unit_price
+        returned_total += value
+        cost = Decimal("0")
+        if not product.is_service:
+            _add_stock(product, qty * factor)
+            cost = Decimal(str(product.cost_price or 0))
+            db.add(models.StockMovement(
+                product_id=product.id, qty_base=qty * factor, reason="refund" if is_refund else "exchange-return",
+                ref=ref, unit_cost=cost, value=qty * factor * cost, note="Corrected item", created_at=sale.created_at,
+            ))
+        sale.lines.append(models.SaleLine(
+            product_id=product.id, product_name=product.name, unit_name=ln.get("unit_name"), unit_factor=factor,
+            qty=-qty, unit_price=unit_price, discount=Decimal("0"), line_total=_money(-value),
+            is_vat=vat_applied, unit_cost=_money(cost),
+        ))
+    for ln in new_in:
+        product = db.get(models.Product, int(ln["product_id"]), with_for_update=True)
+        if not product:
+            continue
+        qty, unit_price, discount = _dec(ln.get("qty")), _dec(ln.get("unit_price")), _dec(ln.get("discount"))
+        factor = _resolve_unit_factor(product, ln.get("unit_name"), _dec(ln.get("factor"), "1"))
+        lt = max(qty * unit_price - discount, Decimal("0"))
+        new_total += lt
+        cost = Decimal("0")
+        if not product.is_service:
+            base_qty = qty * factor
+            _make_available(db, product, base_qty, ref=ref, note="Auto-opened for a corrected item", created_at=sale.created_at)
+            _deduct_stock(product, base_qty)
+            cost = Decimal(str(product.cost_price or 0))
+            db.add(models.StockMovement(
+                product_id=product.id, qty_base=-base_qty, reason="exchange-sale", ref=ref,
+                unit_cost=cost, value=-base_qty * cost, note="Corrected item", created_at=sale.created_at,
+            ))
+        sale.lines.append(models.SaleLine(
+            product_id=product.id, product_name=product.name, unit_name=ln.get("unit_name"), unit_factor=factor,
+            qty=qty, unit_price=unit_price, discount=discount, line_total=_money(lt), is_vat=vat_applied,
+            price_tier=(ln.get("tier") or "fixed"), unit_cost=_money(cost),
+        ))
+    if not any((l.qty or 0) < 0 for l in sale.lines):
+        db.rollback()
+        return JSONResponse({"ok": False, "error": "None of the returned items matched a real product."}, status_code=400)
+
+    # 4. Money, worked out the same way as at the counter.
+    diff = _money(new_total - returned_total)        # >0 customer pays, <0 money back
+    vat_signed = Decimal("0")
+    if vat_applied:
+        vat_signed = _vat_of(abs(diff)) * (1 if diff >= 0 else -1)
+    sale.subtotal = _money(new_total) if not is_refund else diff
+    sale.vat_amount = vat_signed
+    sale.net_amount = diff - vat_signed
+    sale.total = diff
+    sale.discount_total = Decimal("0")
+    post_method, credit_applied = method, Decimal("0")
+    if diff > 0:
+        if method == "receivable":
+            if not sale.customer_id:
+                db.rollback()
+                return JSONResponse({"ok": False, "error": EDIT_ITEMS_ERRORS["needs_customer"]}, status_code=400)
+            sale.receivable_amount = diff
+            sale.amount_tendered = sale.change_amount = Decimal("0")
+            sale.payment_method = METHOD_LABELS["receivable"]
+            if not sale.due_date:
+                customer = db.get(models.Customer, sale.customer_id)
+                days = customer.credit_days if customer and customer.credit_days is not None else 15
+                sale.due_date = (stock_dates.local_date(sale.created_at) or date.today()) + timedelta(days=int(days))
+        else:
+            post_method = method if method in EDIT_PAYMENT_METHODS else "cash"
+            sale.payments.append(models.Payment(method=post_method, amount=diff))
+            sale.amount_tendered, sale.change_amount = diff, Decimal("0")
+            sale.payment_method = METHOD_LABELS[post_method]
+    elif diff < 0:
+        post_method = method if method in EDIT_PAYMENT_METHODS else "cash"
+        gross = -diff
+        if orig:
+            outstanding = _sale_outstanding(db, orig)
+            if outstanding > 0:
+                credit_applied = min(gross, outstanding)
+        cash_out = gross - credit_applied
+        sale.amount_tendered, sale.change_amount = Decimal("0"), cash_out
+        sale.payment_method = (
+            ("Applied to credit" if cash_out <= 0 else METHOD_LABELS[post_method] + " refund + credit applied")
+            if credit_applied > 0 else METHOD_LABELS[post_method] + " refund"
+        )
+        if credit_applied > 0:
+            db.add(models.ReceivableSettlement(
+                sale_id=orig.id, method="credit_note", amount=credit_applied,
+                source_sale_id=sale.id, cashier_id=user.id, created_at=note_stamp,
+            ))
+    else:
+        sale.amount_tendered = sale.change_amount = Decimal("0")
+        sale.payment_method = "Even exchange"
+
+    # 5. Books: reverse the slip's entry and post the corrected one, both on its own date.
+    accounting.reverse_sale_posting(db, sale, reason=f"Items corrected on {sale.invoice_no}",
+                                    entered_by_id=user.id, same_date=True)
+    try:
+        accounting.post_return(db, sale, method=post_method, credit_applied=credit_applied, entered_by_id=user.id)
+    except accounting.PostingError:
+        pass
+
+    audit.record(
+        db, user=user, request=request, action="update", entity_type="sale",
+        entity_id=sale.id, entity_label=sale.invoice_no,
+        summary=f"Corrected items on {sale.txn_type} {sale.invoice_no}: {old_line_count} line(s) → {len(sale.lines)}, "
+                f"total {old_total:,.2f} → {sale.total:,.2f}",
         changes={"total": [str(old_total), str(sale.total)]},
     )
     db.commit()

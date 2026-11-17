@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block title %}Edit items · {{ sale.invoice_no }} · {{ app_name }}{% endblock %}
+{% block content %}
+{% set is_refund = sale.txn_type == 'refund' %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Edit {{ 'refund' if is_refund else 'exchange' }} — {{ sale.invoice_no }}</h1>
+    <p class="muted">Add an item the customer returned that was left off, or fix a qty or price.
+      Stock and the books are redone for this {{ 'refund' if is_refund else 'exchange' }} on its own date
+      {%- if orig %} (from Invoice {{ orig.invoice_no }}){% endif %}.</p>
+  </div>
+  <a class="btn-link" href="{{ receipt_url }}">← Back to receipt</a>
+</div>
+
+<div class="pos-grid">
+  <section class="card pos-search-panel">
+    {% if not is_refund %}
+    <div class="ret-side-pick" role="group" aria-label="Add to">
+      <button type="button" id="pickRet" class="active" onclick="setAddSide('ret')">↩ Add as returned</button>
+      <button type="button" id="pickNew" onclick="setAddSide('new')">＋ Add as new item</button>
+    </div>
+    {% endif %}
+    <input id="posSearch" class="search pos-search" type="search" placeholder="Search the returned item, or scan…" autofocus autocomplete="off">
+    <div id="posResults" class="pos-results">
+      <p class="pos-hint">Type a product name to add it.</p>
+    </div>
+  </section>
+
+  <section class="card pos-cart-panel">
+    <div id="editError" class="alert" style="display:none;background:#fef2f2;border-color:#fecaca;color:#b91c1c;"></div>
+
+    <h3 class="ret-head">↩ Returned items <span class="muted">— go back into stock</span></h3>
+    <div class="table-wrap">
+      <table class="grid cart-table">
+        <thead><tr><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Amount</th><th></th></tr></thead>
+        <tbody id="retBody"></tbody>
+      </table>
+    </div>
+
+    {% if not is_refund %}
+    <h3 class="ret-head" style="margin-top:18px;">＋ New items given <span class="muted">— taken out of stock</span></h3>
+    <div class="table-wrap">
+      <table class="grid cart-table">
+        <thead><tr><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Disc</th><th class="num">Amount</th><th></th></tr></thead>
+        <tbody id="newBody"></tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    <div class="totals">
+      <div class="totals-row"><span>Returned</span><span id="tRet">₱0.00</span></div>
+      {% if not is_refund %}<div class="totals-row"><span>New items</span><span id="tNew">₱0.00</span></div>{% endif %}
+      <div class="totals-row">
+        {% set booklet = (sale.receipt_type or '')|upper %}
+        <span><label class="vat-label"><input type="checkbox" id="vatOn"
+          {{ 'checked' if vat_applied or booklet == 'SI' }}
+          {{ 'disabled' if booklet in ('SI', 'DRS', 'DRB') }}
+          onchange="computeTotals()"> VAT (12%) · included
+          {% if booklet == 'SI' %}<span class="muted" style="font-size:12px;">— always on an SI</span>
+          {% elif booklet in ('DRS', 'DRB') %}<span class="muted" style="font-size:12px;">— never on a DR</span>{% endif %}
+        </label></span>
+        <span id="tVat">₱0.00</span>
+      </div>
+      <div class="totals-row grand"><span id="tDiffLabel">Total</span><span id="tDiff">₱0.00</span></div>
+    </div>
+
+    <p class="muted" id="moneyNote" style="margin:10px 0 0;font-size:12.5px;"></p>
+
+    <div class="form-actions" style="margin-top:16px;">
+      <button class="btn" id="saveBtn" onclick="saveEdit()">Save corrections</button>
+      <a class="btn-secondary" href="{{ receipt_url }}">Cancel</a>
+    </div>
+  </section>
+</div>
+
+<style>
+  .ret-side-pick { display:flex; gap:6px; margin-bottom:10px; }
+  .ret-side-pick button { flex:1; padding:9px 10px; border-radius:10px; border:1px solid var(--border, #d0d7de);
+    background:transparent; color:inherit; font-weight:600; cursor:pointer; }
+  .ret-side-pick button.active { background:var(--brand, #4f46e5); border-color:var(--brand, #4f46e5); color:#fff; }
+  .ret-head { font-size:14px; margin:0 0 6px; }
+  .ret-head .muted { font-weight:400; font-size:12.5px; }
+</style>
+
+<script>
+const VAT_RATE = 0.12, VAT_DIV = 1.12;
+const saleId = {{ sale.id }};
+const IS_REFUND = {{ 'true' if is_refund else 'false' }};
+const METHOD = {{ method|tojson }}, METHOD_LABEL = {{ method_label|tojson }};
+const HAS_ORIG = {{ 'true' if orig else 'false' }};
+let addSide = 'ret';
+let cart = {{ lines_json|safe }}.map(l => ({
+  side: l.side,
+  product: { id: l.product_id, name: l.name,
+             units: [{ name: l.unit_name, label: l.unit_name, factor: l.factor, price: l.unit_price, tier: l.tier }] },
+  unitIndex: 0, qty: l.qty, discount: l.discount || 0, customPrice: true,
+}));
+
+function peso(v) { return '₱' + (Math.round((Number(v) || 0) * 100) / 100).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmtQty(n) { return (Math.round((Number(n) || 0) * 1000) / 1000).toString(); }
+function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function lineTotalOf(l) {
+  const u = l.product.units[l.unitIndex];
+  return Math.max(l.qty * u.price - (l.side === 'ret' ? 0 : (l.discount || 0)), 0);
+}
+
+function setAddSide(s) {
+  addSide = s;
+  document.getElementById('pickRet').classList.toggle('active', s === 'ret');
+  document.getElementById('pickNew').classList.toggle('active', s === 'new');
+  document.getElementById('posSearch').placeholder = s === 'ret' ? 'Search the returned item, or scan…' : 'Search the new item, or scan…';
+  document.getElementById('posSearch').focus();
+}
+
+const searchBox = document.getElementById('posSearch');
+let searchTimer = null;
+searchBox.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 180); });
+searchBox.addEventListener('keydown', async (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault(); clearTimeout(searchTimer);
+  const q = searchBox.value.trim(); if (!q) return;
+  const data = await (await fetch('/pos/search?q=' + encodeURIComponent(q))).json();
+  const products = data.products || [];
+  if (products.length === 1) addToCart(products[0]); else renderResults(products);
+});
+async function runSearch() {
+  const q = searchBox.value.trim();
+  if (!q) { document.getElementById('posResults').innerHTML = '<p class="pos-hint">Type a product name to add it.</p>'; return; }
+  const data = await (await fetch('/pos/search?q=' + encodeURIComponent(q))).json();
+  renderResults(data.products || []);
+}
+function renderResults(products) {
+  const box = document.getElementById('posResults');
+  if (!products.length) { box.innerHTML = '<p class="pos-hint">No products found.</p>'; return; }
+  box.innerHTML = '';
+  products.forEach(p => {
+    const el = document.createElement('button');
+    el.type = 'button'; el.className = 'pos-item'; el.onclick = () => addToCart(p);
+    el.innerHTML = '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span></div>' +
+      '<div class="pos-item-sub">' + peso(p.units[0].price) + ' / ' + escapeHtml(p.base_unit) + '</div>';
+    box.appendChild(el);
+  });
+}
+function addToCart(p) {
+  const side = IS_REFUND ? 'ret' : addSide;
+  const same = cart.find(l => l.side === side && l.product.id === p.id && l.unitIndex === 0 && !l.customPrice);
+  if (same) same.qty += 1;
+  else cart.push({ side, product: p, unitIndex: 0, qty: 1, discount: 0, customPrice: false });
+  searchBox.value = '';
+  document.getElementById('posResults').innerHTML = '<p class="pos-hint">Added. Search the next item, or scan.</p>';
+  renderCart(); searchBox.focus();
+}
+function setUnit(i, v) { cart[i].unitIndex = parseInt(v); renderCart(); }
+function setQty(i, v) { cart[i].qty = parseFloat(v) || 0; refreshComputed(); }
+function setPrice(i, v) { cart[i].product.units[cart[i].unitIndex].price = parseFloat(v) || 0; refreshComputed(); }
+function setDisc(i, v) { cart[i].discount = parseFloat(v) || 0; refreshComputed(); }
+function removeLine(i) { cart.splice(i, 1); renderCart(); }
+
+function rowHtml(line, i) {
+  const unit = line.product.units[line.unitIndex];
+  const opts = line.product.units.map((u, ui) => '<option value="' + ui + '"' + (ui === line.unitIndex ? ' selected' : '') + '>' +
+    escapeHtml(u.label || u.name) + ' (' + peso(u.price) + ')</option>').join('');
+  return '<td class="strong">' + escapeHtml(line.product.name) + '</td>' +
+    '<td>' + (line.customPrice ? escapeHtml(unit.name) : '<select class="cart-unit" onchange="setUnit(' + i + ', this.value)">' + opts + '</select>') + '</td>' +
+    '<td class="num"><input class="cart-qty" type="number" step="0.001" min="0" value="' + fmtQty(line.qty) + '" oninput="setQty(' + i + ', this.value)"></td>' +
+    '<td class="num"><input class="cart-price" type="number" step="0.01" min="0" value="' + unit.price.toFixed(2) + '" oninput="setPrice(' + i + ', this.value)"></td>' +
+    (line.side === 'ret' ? '' : '<td class="num"><input class="cart-disc" type="number" step="0.01" min="0" value="' + (line.discount || 0) + '" oninput="setDisc(' + i + ', this.value)"></td>') +
+    '<td class="num strong line-total" data-i="' + i + '">' + peso(lineTotalOf(line)) + '</td>' +
+    '<td><button type="button" class="btn-link danger" onclick="removeLine(' + i + ')">✕</button></td>';
+}
+function renderCart() {
+  const retBody = document.getElementById('retBody'), newBody = document.getElementById('newBody');
+  retBody.innerHTML = ''; if (newBody) newBody.innerHTML = '';
+  cart.forEach((line, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = rowHtml(line, i);
+    (line.side === 'ret' || !newBody ? retBody : newBody).appendChild(tr);
+  });
+  if (!retBody.children.length) retBody.innerHTML = '<tr><td colspan="6" class="empty">No returned items yet.</td></tr>';
+  if (newBody && !newBody.children.length) newBody.innerHTML = '<tr><td colspan="7" class="empty">No new items.</td></tr>';
+  computeTotals();
+}
+function refreshComputed() {
+  document.querySelectorAll('.line-total').forEach(td => { td.textContent = peso(lineTotalOf(cart[+td.dataset.i])); });
+  computeTotals();
+}
+function computeTotals() {
+  let ret = 0, neu = 0;
+  cart.forEach(l => { if (l.side === 'ret') ret += lineTotalOf(l); else neu += lineTotalOf(l); });
+  const diff = Math.round((neu - ret) * 100) / 100;
+  const vat = document.getElementById('vatOn').checked ? Math.abs(diff) * VAT_RATE / VAT_DIV : 0;
+  document.getElementById('tRet').textContent = peso(ret);
+  if (document.getElementById('tNew')) document.getElementById('tNew').textContent = peso(neu);
+  document.getElementById('tVat').textContent = peso(vat);
+  document.getElementById('tDiffLabel').textContent = diff > 0 ? 'Customer pays' : (diff < 0 ? 'Back to customer' : 'Even exchange');
+  document.getElementById('tDiff').textContent = peso(Math.abs(diff));
+  let note;
+  if (diff > 0) note = METHOD === 'receivable' ? 'Stays on the customer\'s credit account as ' + peso(diff) + '.'
+                                               : 'The ' + METHOD_LABEL + ' payment on this slip becomes ' + peso(diff) + '.';
+  else if (diff < 0) note = (HAS_ORIG ? 'Taken off what is still owed on the original invoice first; the rest is a ' : 'A ') +
+                            (METHOD === 'receivable' ? 'Cash' : METHOD_LABEL) + ' refund of up to ' + peso(-diff) + '.';
+  else note = 'No money changes hands.';
+  document.getElementById('moneyNote').textContent = note;
+  document.getElementById('saveBtn').disabled = !cart.some(l => l.side === 'ret' && l.qty > 0);
+}
+
+async function saveEdit() {
+  const btn = document.getElementById('saveBtn'), err = document.getElementById('editError');
+  err.style.display = 'none'; btn.disabled = true; btn.textContent = 'Saving…';
+  const payload = {
+    vat_applied: document.getElementById('vatOn').checked,
+    lines: cart.map(l => { const u = l.product.units[l.unitIndex];
+      return { side: l.side, product_id: l.product.id, unit_name: u.name, factor: u.factor, qty: l.qty,
+               unit_price: u.price, discount: l.side === 'ret' ? 0 : (l.discount || 0), tier: u.tier || 'fixed' }; }),
+  };
+  try {
+    const res = await fetch('/pos/receipt/' + saleId + '/edit', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+    const data = await res.json();
+    if (data.ok) { window.location = {{ receipt_url|tojson }}; return; }
+    err.textContent = data.error || 'Could not save.';
+  } catch (e) { err.textContent = 'Network error. Please try again.'; }
+  err.style.display = 'block'; btn.disabled = false; btn.textContent = 'Save corrections';
+}
+
+renderCart();
+</script>
+{% endblock %}

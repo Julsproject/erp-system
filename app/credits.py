@@ -176,10 +176,38 @@ def credit_references(
     )
 
 
+def _statement_rows(db: Session, customer_id: int, show_paid: int = 0):
+    """The statement's invoice rows and totals. Fully paid invoices are left
+    out unless `show_paid` — the statement is what the customer still owes.
+    Returns (rows, credit total, paid total, outstanding total, paid hidden)."""
+    sales = (
+        db.query(models.Sale)
+        .filter(models.Sale.customer_id == customer_id, models.Sale.receivable_amount > 0)
+        .order_by(models.Sale.id)
+        .all()
+    )
+    settled = _settled_for(db, [s.id for s in sales])
+    rows = []
+    paid_hidden = 0
+    orig_total = paid_total = out_total = Decimal("0")
+    for s in sales:
+        orig = s.receivable_amount or Decimal("0")
+        paid = settled.get(s.id, Decimal("0"))
+        outstanding = orig - paid
+        if outstanding <= 0 and not show_paid:
+            paid_hidden += 1
+            continue
+        rows.append({"sale": s, "orig": orig, "paid": paid, "outstanding": outstanding})
+        orig_total += orig
+        paid_total += paid
+        out_total += outstanding
+    return rows, orig_total, paid_total, out_total, paid_hidden
+
+
 @router.get("/credits/{customer_id:int}", response_class=HTMLResponse)
 def credit_statement(
     customer_id: int, request: Request, undone: int = 0, undo_error: int = 0, back: str = "",
-    credit_error: int = 0, credit_done: int = 0,
+    credit_error: int = 0, credit_done: int = 0, show_paid: int = 0,
     db: Session = Depends(get_db), user=Depends(get_current_user),
 ):
     """`back` is the page the statement was opened from (the Credits list,
@@ -193,24 +221,8 @@ def credit_statement(
     if not customer:
         return RedirectResponse("/credits", status_code=302)
 
-    sales = (
-        db.query(models.Sale)
-        .filter(models.Sale.customer_id == customer_id, models.Sale.receivable_amount > 0)
-        .order_by(models.Sale.id)
-        .all()
-    )
-    settled = _settled_for(db, [s.id for s in sales])
-    rows = []
-    orig_total = paid_total = out_total = Decimal("0")
-    for s in sales:
-        orig = s.receivable_amount or Decimal("0")
-        paid = settled.get(s.id, Decimal("0"))
-        outstanding = orig - paid
-        sold_items = [{"name": ln.product_name, "qty": ln.qty, "unit": ln.unit_name} for ln in s.lines if (ln.qty or 0) > 0]
-        rows.append({"sale": s, "orig": orig, "paid": paid, "outstanding": outstanding, "sold_items": sold_items})
-        orig_total += orig
-        paid_total += paid
-        out_total += outstanding
+    rows, orig_total, paid_total, out_total, paid_hidden = _statement_rows(db, customer_id, show_paid)
+    sales = [r["sale"] for r in rows]
 
     # Every individual payment AND return/exchange applied against these
     # invoices — so a customer can point at "I returned 5 hammers on the
@@ -263,6 +275,9 @@ def credit_statement(
             "customer": customer, "rows": rows, "settlements": settlements, "returned_items": returned_items,
             "orig_total": orig_total, "paid_total": paid_total, "out_total": out_total,
             "undoable": undoable, "undone": undone, "undo_error": undo_error,
+            "show_paid": show_paid, "paid_hidden": paid_hidden,
+            "paid_toggle_url": url_with(str(request.url), show_paid=None if show_paid else 1,
+                                        undone=None, undo_error=None, credit_error=None, credit_done=None),
             "back": safe_back_url(back, "/credits"),
             **_credit_ctx(db, user, customer), "credit_error": credit_error, "credit_done": credit_done,
             "methods": SETTLE_METHODS, "today_iso": datetime.now(MANILA).date().isoformat(),
@@ -286,10 +301,10 @@ def _credit_ctx(db: Session, user, customer) -> dict:
 
 
 @router.get("/credits/{customer_id:int}/pdf")
-def credit_statement_pdf(customer_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)):
-    """A simple downloadable PDF of the customer's credit statement — every
-    credit invoice, the items bought on it, and the balances. Matches the
-    on-screen statement, just as a file instead of print-to-PDF."""
+def credit_statement_pdf(customer_id: int, show_paid: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """A simple downloadable PDF of the customer's credit statement — the
+    same columns as the on-screen statement (Invoice #, Date, Sale Total,
+    Credit, Paid, Outstanding), just as a file instead of print-to-PDF."""
     if not user:
         return RedirectResponse("/login", status_code=302)
     if not is_staff(user):
@@ -298,27 +313,8 @@ def credit_statement_pdf(customer_id: int, db: Session = Depends(get_db), user=D
     if not customer:
         return RedirectResponse("/credits", status_code=302)
 
-    sales = (
-        db.query(models.Sale)
-        .filter(models.Sale.customer_id == customer_id, models.Sale.receivable_amount > 0)
-        .order_by(models.Sale.id)
-        .all()
-    )
-    settled = _settled_for(db, [s.id for s in sales])
-    rows = []
-    orig_total = paid_total = out_total = Decimal("0")
-    for s in sales:
-        orig = s.receivable_amount or Decimal("0")
-        paid = settled.get(s.id, Decimal("0"))
-        outstanding = orig - paid
-        items = ", ".join(
-            f"{float(ln.qty):g} {ln.unit_name or ''} {ln.product_name}".strip()
-            for ln in s.lines if (ln.qty or 0) > 0
-        )
-        rows.append((s, orig, paid, outstanding, items))
-        orig_total += orig
-        paid_total += paid
-        out_total += outstanding
+    stmt_rows, orig_total, paid_total, out_total, _ = _statement_rows(db, customer_id, show_paid)
+    rows = [(r["sale"], r["orig"], r["paid"], r["outstanding"]) for r in stmt_rows]
 
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
@@ -342,13 +338,13 @@ def credit_statement_pdf(customer_id: int, db: Session = Depends(get_db), user=D
     styles = getSampleStyleSheet()
     elements = letterhead(biz, "Statement of Account", doc_meta, "Customer", party_lines)
 
-    table_data = [["Invoice #", "Date", "Items", "Credit", "Paid", "Outstanding"]]
-    for s, orig, paid, outstanding, items in rows:
+    table_data = [["Invoice #", "Date", "Sale Total", "Credit", "Paid", "Outstanding"]]
+    for s, orig, paid, outstanding in rows:
         date_str = s.created_at.strftime("%b %d, %Y") if s.created_at else "-"
-        table_data.append([s.invoice_no, date_str, items or "-", f"{orig:,.2f}", f"{paid:,.2f}", f"{outstanding:,.2f}"])
-    table_data.append(["", "", "Totals", f"{orig_total:,.2f}", f"{paid_total:,.2f}", f"{out_total:,.2f}"])
+        table_data.append([s.invoice_no, date_str, f"{(s.total or 0):,.2f}", f"{orig:,.2f}", f"{paid:,.2f}", f"{outstanding:,.2f}"])
+    table_data.append(["Totals", "", "", f"{orig_total:,.2f}", f"{paid_total:,.2f}", f"{out_total:,.2f}"])
 
-    table = Table(table_data, colWidths=[55, 65, 185, 65, 65, 75], repeatRows=1)
+    table = Table(table_data, colWidths=[70, 80, 85, 85, 85, 88], repeatRows=1)
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F6FEB")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -357,7 +353,7 @@ def credit_statement_pdf(customer_id: int, db: Session = Depends(get_db), user=D
         ("LINEABOVE", (0, -1), (-1, -1), 1, colors.black),
         ("FONTSIZE", (0, 0), (-1, -1), 9),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
-        ("ALIGN", (3, 0), (-1, -1), "RIGHT"),
+        ("ALIGN", (2, 0), (-1, -1), "RIGHT"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
     ]))
     elements.append(table)
@@ -371,6 +367,85 @@ def credit_statement_pdf(customer_id: int, db: Session = Depends(get_db), user=D
         content=buf.getvalue(),
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{safe_name}_statement.pdf"'},
+    )
+
+
+@router.get("/credits/{customer_id:int}/export.xlsx")
+def credit_statement_excel(customer_id: int, show_paid: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Excel copy of the on-screen statement: one row per credit invoice
+    (Invoice #, Date, Sale Total, Credit, Paid, Outstanding) plus totals."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/pos", status_code=302)
+    customer = db.get(models.Customer, customer_id)
+    if not customer:
+        return RedirectResponse("/credits", status_code=302)
+
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    rows, orig_total, paid_total, out_total, _ = _statement_rows(db, customer_id, show_paid)
+    sales = [r["sale"] for r in rows]
+
+    biz = settings_store.get_all(db)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Statement"
+    ws.append([biz.get("business_name") or "Statement of Account"])
+    ws["A1"].font = Font(bold=True, size=14)
+    ws.append(["Statement of Account"])
+    ws.append([f"Customer: {customer.name}"])
+    if customer.tin:
+        ws.append([f"TIN: {customer.tin}"])
+    if customer.address:
+        ws.append([customer.address])
+    if sales and sales[0].created_at:
+        ws.append([f"As of {sales[0].created_at.strftime('%b %d, %Y')}"])
+    ws.append([])
+
+    ws.append(["Invoice #", "Date", "Sale Total", "Credit", "Paid", "Outstanding"])
+    header_row = ws.max_row
+    fill = PatternFill("solid", fgColor="1F6FEB")
+    for cell in ws[header_row]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = fill
+
+    money_fmt = '#,##0.00'
+    for r in rows:
+        s = r["sale"]
+        ws.append([
+            s.invoice_no,
+            s.created_at.date() if s.created_at else None,
+            float(s.total or 0), float(r["orig"]), float(r["paid"]), float(r["outstanding"]),
+        ])
+        ws.cell(row=ws.max_row, column=2).number_format = "mmm dd, yyyy"
+        for col in range(3, 7):
+            ws.cell(row=ws.max_row, column=col).number_format = money_fmt
+
+    ws.append(["", "Totals", None, float(orig_total), float(paid_total), float(out_total)])
+    for cell in ws[ws.max_row]:
+        cell.font = Font(bold=True)
+    for col in range(3, 7):
+        ws.cell(row=ws.max_row, column=col).number_format = money_fmt
+    ws.append([])
+    ws.append(["", "", "", "", "Outstanding balance", float(out_total)])
+    ws.cell(row=ws.max_row, column=5).font = Font(bold=True)
+    ws.cell(row=ws.max_row, column=6).font = Font(bold=True)
+    ws.cell(row=ws.max_row, column=6).number_format = money_fmt
+
+    for i, w in enumerate([14, 15, 15, 15, 18, 16], start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = ws.cell(row=header_row + 1, column=1)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    safe_name = "".join(c for c in customer.name if c.isalnum() or c in (" ", "_", "-")).strip() or "customer"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}_statement.xlsx"'},
     )
 
 
