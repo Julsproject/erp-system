@@ -38,7 +38,7 @@ MANILA = ZoneInfo("Asia/Manila")
 MONTH_END_SETTING_KEY = "last_month_end_period"
 CENTS = Decimal("0.01")
 
-BULK_MODES = ("pct", "amount", "cost_pct", "markup", "margin")
+BULK_MODES = ("pct", "amount", "cost_pct", "markup", "margin", "cost_from_price", "cost_amount")
 
 # Fields whose before/after we log on a product edit. Stock and price changes
 # are the theft/accountability-sensitive ones the owner most wants visible.
@@ -2529,7 +2529,93 @@ def _bulk_mode_label(mode: str, value: Decimal) -> str:
         return f"Bulk price update: Fixed Price set to Cost {sign}{value:g}%"
     if mode == "markup":
         return f"Bulk price update: Markup set to {value:g}%"
+    if mode == "cost_from_price":
+        return f"Bulk cost update: Cost set to Fixed Price less {value:g}%"
+    if mode == "cost_amount":
+        return "Bulk cost update: Cost typed in" + (f" (₱{value:,.2f} each unless typed per item)" if value > 0 else "")
     return f"Bulk price update: Margin set to {value:g}%"
+
+
+def _bulk_set_cost_from_price(db: Session, request: Request, user, products, form, value: Decimal,
+                              mode: str = "cost_from_price") -> str:
+    """Bulk cost for stock that never got a cost (old/opening stock with no
+    delivery on file): "cost_from_price" = Fixed Price less X%, or
+    "cost_amount" = the cost typed in (₱ for every row, or per row). Only
+    items with no cost are changed unless "replace costs already set" was
+    ticked. A row's own typed cost always wins.
+
+    Goes through ONE Inventory Adjustment ("Cost correction", dated today)
+    so every changed item gets a revaluation line on its Stock Card and the
+    books get one entry: Inventory vs Inventory Corrections (equity). Then
+    each item's (and unit's) markup/margin prices are refreshed from the
+    new cost. Later deliveries still average into this cost as usual."""
+    from . import inventory_adjustments as ia
+    overwrite = form.get("overwrite_cost") == "1"
+    changes = []   # (product, new_cost)
+    kept = no_price = no_cost_given = 0
+    for p in products:
+        old_cost = Decimal(str(p.cost_price or 0))
+        if old_cost > 0 and not overwrite:
+            kept += 1
+            continue
+        raw = (form.get(f"new_cost_{p.id}") or "").strip().replace(",", "")
+        try:
+            new_cost = Decimal(raw).quantize(CENTS, rounding=ROUND_HALF_UP) if raw else None
+        except InvalidOperation:
+            new_cost = None
+        if new_cost is None:
+            if value <= 0:
+                # No %/amount and nothing typed on the row: leave it — 0% off
+                # would just copy the selling price into the cost.
+                no_cost_given += 1
+                continue
+            if mode == "cost_amount":
+                new_cost = value.quantize(CENTS, rounding=ROUND_HALF_UP)
+            else:
+                new_cost = (Decimal(str(p.selling_price or 0)) * (1 - value / 100)).quantize(CENTS, rounding=ROUND_HALF_UP)
+        if new_cost <= 0:
+            no_price += 1
+            continue
+        if new_cost != old_cost:
+            changes.append((p, new_cost))
+
+    adj = None
+    if changes:
+        adj = ia._new_adjustment(db, adj_date=ia._today(), reason="cost_correction", source="bulk_cost",
+                                 notes=_bulk_mode_label(mode, value), user=user)
+        for p, new_cost in changes:
+            adj.lines.append(models.InventoryAdjustmentLine(
+                adjustment_id=adj.id, product_id=p.id, product_name=p.name,
+                unit_name=p.unit_type.name if p.unit_type else None, unit_factor=Decimal("1"),
+                mode="delta", qty_input=None, new_cost=new_cost,
+            ))
+        try:
+            ia.post_adjustment(db, adj, user=user, request=request, books_required=False)
+        except ia.AdjustmentError as e:
+            db.rollback()
+            return f"Nothing was changed — {e}"
+        for p, new_cost in changes:
+            pricing.apply_to(p, new_cost, p.markup_pct, p.margin_pct)
+            for u in p.units:
+                unit_cost = new_cost * Decimal(str(u.factor_to_base or 1))
+                u.markup_price = pricing.markup_price(unit_cost, u.markup_pct or 0)
+                u.margin_price = pricing.margin_price(unit_cost, u.margin_pct or 0)
+    db.commit()
+
+    n = len(changes)
+    msg = f"Set the cost of {n} product{'s' if n != 1 else ''}"
+    if adj:
+        msg += f" ({adj.ref_no})"
+    notes = []
+    if kept:
+        notes.append(f"{kept} that already have a cost")
+    if no_price:
+        notes.append(f"{no_price} with no Fixed Price")
+    if no_cost_given:
+        notes.append(f"{no_cost_given} with no % or cost entered")
+    if notes:
+        msg += ", skipped " + " and ".join(notes)
+    return msg
 
 
 @router.post("/products/bulk-price", response_class=HTMLResponse)
@@ -2595,6 +2681,14 @@ async def bulk_price_apply(request: Request, db: Session = Depends(get_db), user
             .filter(models.Product.id.in_(ids), models.Product.is_active.is_(True))
             .all()
         )
+        if mode == "cost_from_price":
+            if not (Decimal("0") <= value < Decimal("100")):
+                return RedirectResponse(url_with(back, bulk_msg="Enter a % off between 0 and 99."), status_code=status.HTTP_302_FOUND)
+            msg = _bulk_set_cost_from_price(db, request, user, products, form, value)
+            return RedirectResponse(url_with(back, bulk_msg=msg), status_code=status.HTTP_302_FOUND)
+        if mode == "cost_amount":
+            msg = _bulk_set_cost_from_price(db, request, user, products, form, max(value, Decimal("0")), mode="cost_amount")
+            return RedirectResponse(url_with(back, bulk_msg=msg), status_code=status.HTTP_302_FOUND)
         label = _bulk_mode_label(mode, value)
         updated = 0
         skipped = 0

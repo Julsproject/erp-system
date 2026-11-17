@@ -18,6 +18,8 @@
         <option value="cost_pct">Fixed Price — % on top of Cost</option>
         <option value="markup">Markup % — set new value</option>
         <option value="margin">Margin % — set new value</option>
+        <option value="cost_from_price">Cost — % off Fixed Price</option>
+        <option value="cost_amount">Cost — type the amount (₱)</option>
       </select>
     </label>
     <label>
@@ -27,14 +29,19 @@
     </label>
     <div class="muted" id="skipNote" style="font-size:12.5px;"></div>
   </div>
+  <label id="overwriteWrap" style="display:none;margin-top:10px;font-size:13px;">
+    <input type="checkbox" id="overwriteCost" onchange="renderPreview()"> Also replace costs that are already set
+    <small class="hint" style="display:block;">Unticked: only items with no cost (₱0) get one — real costs from deliveries stay.</small>
+  </label>
   <p class="muted" id="editNote" style="font-size:12.5px;margin:10px 0 0;"></p>
 </div>
 
 <form id="applyForm" method="post" action="/products/bulk-price/apply"
-      onsubmit="return confirm('Apply this price change to ' + {{ products|length }} + ' product(s)? This cannot be undone in bulk — each product would need to be corrected individually.');">
+      onsubmit="return confirmApply();">
   <input type="hidden" name="back" value="{{ back }}">
   <input type="hidden" name="mode" id="modeInput">
   <input type="hidden" name="value" id="valueInput">
+  <input type="hidden" name="overwrite_cost" id="overwriteInput" value="0">
   {% for p in products %}
   <input type="hidden" name="ids" value="{{ p.id }}">
   {% endfor %}
@@ -44,7 +51,7 @@
       <thead>
         <tr>
           <th>Product</th>
-          <th class="num">Cost</th>
+          <th class="num">Cost now</th>
           <th class="num" id="colCurrent">Current Fixed Price</th>
           <th class="num" id="colNew">New Fixed Price</th>
         </tr>
@@ -83,6 +90,8 @@ function peso(v) { return '₱' + (Math.round(v * 100) / 100).toLocaleString('en
 // individually before Apply. Markup/margin modes stay plain text since
 // there editing "new price" alone is ambiguous (it's derived from a %).
 const FIXED_PRICE_MODES = ['pct', 'amount', 'cost_pct'];
+// Modes that set Cost instead (one Cost correction in the books).
+const COST_MODES = ['cost_from_price', 'cost_amount'];
 
 function onModeChange() {
   const mode = document.getElementById('bulkMode').value;
@@ -103,6 +112,19 @@ function onModeChange() {
     label.textContent = '% on top of Cost';
     hint.textContent = 'Sets Fixed Price directly from cost — e.g. 30 = cost + 30%. Products with no cost on file are skipped.';
     colCurrent.textContent = 'Current Fixed Price'; colNew.textContent = 'New Fixed Price';
+  } else if (mode === 'cost_from_price') {
+    label.textContent = '% off Fixed Price';
+    hint.textContent = 'Sets Cost from the selling price — e.g. 30 = Fixed Price less 30%. Booked as one Cost correction (Inventory vs Inventory Corrections), dated today.';
+    colCurrent.textContent = 'Selling Price'; colNew.textContent = 'New Cost';
+    // Start empty: 0% off would make the cost equal the selling price.
+    const v = document.getElementById('bulkValue');
+    if ((parseFloat(v.value) || 0) === 0) { v.value = ''; v.placeholder = 'e.g. 30'; }
+  } else if (mode === 'cost_amount') {
+    label.textContent = 'Cost for every item (₱) — optional';
+    hint.textContent = 'Type each item\'s cost in its New Cost box below, or put one amount here to fill them all. Booked as one Cost correction (Inventory vs Inventory Corrections), dated today.';
+    colCurrent.textContent = 'Selling Price'; colNew.textContent = 'New Cost';
+    const v = document.getElementById('bulkValue');
+    v.value = ''; v.placeholder = 'e.g. 25.00';
   } else if (mode === 'markup') {
     label.textContent = 'New markup %';
     hint.textContent = 'Sets the markup percentage directly (not a change) — recalculated from each product\'s cost. Products with no cost on file are skipped.';
@@ -113,7 +135,9 @@ function onModeChange() {
     colCurrent.textContent = 'Current Margin %'; colNew.textContent = 'New Margin %';
   }
   editNote.textContent = FIXED_PRICE_MODES.includes(mode)
-    ? 'New Fixed Price is editable per row — click into any product\'s field to set it individually.' : '';
+    ? 'New Fixed Price is editable per row — click into any product\'s field to set it individually.'
+    : COST_MODES.includes(mode) ? 'New Cost is editable per row — click into any product\'s field to set it individually.' : '';
+  document.getElementById('overwriteWrap').style.display = COST_MODES.includes(mode) ? 'block' : 'none';
   renderPreview();
 }
 
@@ -122,7 +146,8 @@ function renderPreview() {
   const value = parseFloat(document.getElementById('bulkValue').value) || 0;
   document.getElementById('modeInput').value = mode;
   document.getElementById('valueInput').value = value;
-  const editable = FIXED_PRICE_MODES.includes(mode);
+  const overwrite = document.getElementById('overwriteCost').checked;
+  document.getElementById('overwriteInput').value = overwrite ? '1' : '0';
 
   let skipped = 0;
   document.querySelectorAll('#previewTable tbody tr').forEach(row => {
@@ -152,6 +177,26 @@ function renderPreview() {
       } else {
         setEditableNew(Math.max(cost * (1 + value / 100), 0));
       }
+    } else if (COST_MODES.includes(mode)) {
+      currentCell.textContent = peso(fixed);
+      if (cost > 0 && !overwrite) {
+        newCell.innerHTML = '<span class="muted">keeps ' + peso(cost) + '</span>';
+        skipped++;
+      } else if (mode === 'cost_from_price' && fixed <= 0) {
+        newCell.innerHTML = '<span class="muted">skipped — no Fixed Price</span>';
+        skipped++;
+      } else {
+        // Nothing entered yet: leave the cost blank (type one, or fill the
+        // box above) — never show the selling price as if it were the cost.
+        // A cost typed on the row stays when the box above changes.
+        const prev = row.querySelector('input[name="new_cost_' + id + '"]');
+        const keep = prev && prev.dataset.typed === '1' ? prev.value : null;
+        const fromTop = mode === 'cost_amount' ? value : fixed * (1 - value / 100);
+        const val = keep !== null ? keep : (value > 0 ? Math.max(fromTop, 0).toFixed(2) : '');
+        newCell.innerHTML = '<input type="number" step="0.01" min="0" class="new-price-input" name="new_cost_' + id + '"' +
+          ' placeholder="cost" value="' + val + '"' + (keep !== null ? ' data-typed="1"' : '') +
+          ' oninput="this.dataset.typed=\'1\'">';
+      }
     } else if (mode === 'markup') {
       currentCell.textContent = markupPct.toFixed(1) + '%';
       if (cost <= 0) {
@@ -173,7 +218,19 @@ function renderPreview() {
       }
     }
   });
-  document.getElementById('skipNote').textContent = skipped ? (skipped + ' product(s) will be skipped — no cost on file.') : '';
+  document.getElementById('skipNote').textContent = !skipped ? '' :
+    COST_MODES.includes(mode) ? (skipped + ' product(s) will be left as they are.')
+                               : (skipped + ' product(s) will be skipped — no cost on file.');
+}
+
+function confirmApply() {
+  const mode = document.getElementById('bulkMode').value;
+  if (COST_MODES.includes(mode)) {
+    const n = [...document.querySelectorAll('#previewTable input[name^="new_cost_"]')].filter(i => parseFloat(i.value) > 0).length;
+    if (!n) { alert(mode === 'cost_amount' ? 'Type a cost on at least one row first.' : 'Enter the % off (or type a cost on a row) first.'); return false; }
+    return confirm('Set the cost of ' + n + ' product(s)? This posts one Cost correction to the books (Inventory vs Inventory Corrections). It can be cancelled from Inventory Adjustments.');
+  }
+  return confirm('Apply this price change to ' + {{ products|length }} + ' product(s)? This cannot be undone in bulk — each product would need to be corrected individually.');
 }
 
 onModeChange();

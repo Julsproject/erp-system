@@ -72,7 +72,8 @@ REASON_BOOKS = {k: books for k, _, books in REASONS}
 # cost of the business. A cost change on these still goes to INV_REVALUATION.
 REASON_CONTRA = {"freebie": "INV_ADJ_FREEBIE", "owner_use": "INV_ADJ_DRAWINGS"}
 
-SOURCE_LABELS = {"manual": "Adjustment", "product_edit": "Product Edit", "pricing": "Selling Price tab"}
+SOURCE_LABELS = {"manual": "Adjustment", "product_edit": "Product Edit", "pricing": "Selling Price tab",
+                 "bulk_cost": "Bulk cost update"}
 
 # Movement reasons this module writes.
 MV_PNL, MV_CORRECTION, MV_REVAL = "adjustment", "adjustment-correction", "revaluation"
