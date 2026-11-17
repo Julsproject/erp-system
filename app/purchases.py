@@ -306,6 +306,14 @@ def purchase_search(q: str = "", db: Session = Depends(get_db), user=Depends(get
     if not is_floor_staff(user):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     q = (q or "").strip()
+    if q:
+        # A scanned barcode is an exact, unique code — that's the product.
+        # Only fall back to the name search when nothing scans to it (same
+        # as the POS search).
+        hit = (db.query(models.Product)
+               .filter(models.Product.is_active.is_(True), models.Product.barcode == q).first())
+        if hit:
+            return {"products": [_purchase_product_payload(db, hit, sold=recent_sold(db, [hit.id]).get(hit.id))]}
     query = db.query(models.Product).filter(models.Product.is_active.is_(True))
     if q:
         query = query.filter(multi_word_ilike(models.Product.name, q))

@@ -140,6 +140,13 @@
       <a class="btn-link" href="/purchases/import-template">Download template</a>
     </div>
     <div id="importWarnings" class="alert" style="display:none;background:#fffbeb;border-color:#fde68a;color:#92400e;margin-bottom:10px;font-size:12.5px;"></div>
+    <!-- Same as the POS search: tap a result (or scan a barcode) and it goes
+         into the next empty row; scanning the same item again adds 1 to it. -->
+    <div style="position:relative;margin:0 0 10px;">
+      <input id="buySearch" class="search pos-search" type="search" style="margin-bottom:0;" autocomplete="off"
+             placeholder="Search product name, or scan a barcode…">
+      <div id="buySearchResults" class="pos-results" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:31;max-height:min(460px,60vh);overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);padding:6px;box-shadow:var(--shadow-lg);"></div>
+    </div>
     {% endif %}
 
     <div class="table-wrap buy-lines">
@@ -599,6 +606,83 @@ function pickRowProduct(i, p) {
 function hideRowResults(i) {
   const box = document.getElementById('rowResults' + i);
   if (box) box.style.display = 'none';
+}
+
+/* ---- top search box: search or scan, same as the POS ----
+   Picking a product (tap, or Enter/scan with exactly one match) puts it in
+   the next empty row with qty 1. If it's already on a row, that row's qty
+   goes up by 1 instead — scanning a box of 6 items six times gives qty 6. */
+const buySearch = document.getElementById('buySearch');
+let buySearchTimer = null;
+function productResultHtml(p) {
+  const conversions = (p.units || [])
+    .filter(u => !(u.name === p.base_unit && u.factor === 1))
+    .map(u => '1 ' + escapeHtml(u.name) + ' = ' + fmtQty(u.factor) + ' ' + escapeHtml(p.base_unit))
+    .join(' · ');
+  return '<div class="pos-item-main"><span class="pos-item-name">' + escapeHtml(p.name) + '</span></div>' +
+    '<div class="pos-item-sub">cost ' + peso(p.cost_price) + ' · ' + escapeHtml(p.base_unit) + ' · ' + fmtQty(p.on_hand) + ' on hand</div>' +
+    (conversions ? '<div class="pos-item-sub">' + conversions + '</div>' : '');
+}
+function hideBuySearch() {
+  const box = document.getElementById('buySearchResults');
+  if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+}
+function showBuyResults(products) {
+  const box = document.getElementById('buySearchResults');
+  if (!products.length) {
+    box.innerHTML = '<p class="pos-hint">No products found — type the name in a row below to add it.</p>';
+    box.style.display = 'flex'; return;
+  }
+  box.innerHTML = '';
+  products.forEach(p => {
+    const el = document.createElement('button');
+    el.type = 'button'; el.className = 'pos-item';
+    el.onmousedown = (e) => e.preventDefault();  // keep focus in the search box
+    el.onclick = () => addSearchedProduct(p);
+    el.innerHTML = productResultHtml(p);
+    box.appendChild(el);
+  });
+  box.style.display = 'flex';
+}
+async function runBuySearch() {
+  const q = buySearch.value.trim();
+  if (!q) { hideBuySearch(); return; }
+  const data = await (await fetch('/purchases/search?q=' + encodeURIComponent(q))).json();
+  if (buySearch.value.trim() !== q) return;   // typed on since — a newer search is coming
+  showBuyResults(data.products || []);
+}
+function addSearchedProduct(p) {
+  const same = receiveLines.findIndex(l => l.productId === p.id && (!l.units || l.unitIndex === 0));
+  if (same !== -1) {
+    receiveLines[same].qty = (Number(receiveLines[same].qty) || 0) + 1;
+    renderReceiveLines();
+  } else {
+    let i = receiveLines.findIndex(l => !(l.name || '').trim() && !l.productId);
+    if (i === -1) { receiveLines.push(blankRow()); i = receiveLines.length - 1; }
+    receiveLines[i].qty = 1;
+    pickRowProduct(i, p);   // fills unit/cost and re-renders
+  }
+  savePurchaseDraft();
+  buySearch.value = '';
+  hideBuySearch();
+  buySearch.focus();
+}
+if (buySearch) {
+  buySearch.addEventListener('input', () => { clearTimeout(buySearchTimer); buySearchTimer = setTimeout(runBuySearch, 180); });
+  // A barcode scanner types the code then sends Enter: one match goes
+  // straight in; otherwise show the list to pick from.
+  buySearch.addEventListener('keydown', async (e) => {
+    if (e.key === 'Escape') { hideBuySearch(); return; }
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    clearTimeout(buySearchTimer);
+    const q = buySearch.value.trim();
+    if (!q) return;
+    const data = await (await fetch('/purchases/search?q=' + encodeURIComponent(q))).json();
+    const products = data.products || [];
+    if (products.length === 1) addSearchedProduct(products[0]); else showBuyResults(products);
+  });
+  buySearch.addEventListener('blur', () => setTimeout(hideBuySearch, 150));
 }
 
 /* ============================= shared ============================= */
