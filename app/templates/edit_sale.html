@@ -13,6 +13,12 @@
 <div class="pos-grid">
   <!-- LEFT: add a product that should be on this sale -->
   <section class="card pos-search-panel">
+    {% if can_add_return %}
+    <div class="ret-side-pick" role="group" aria-label="Add to">
+      <button type="button" id="pickNew" class="active" onclick="setAddSide('new')">＋ Add to sale</button>
+      <button type="button" id="pickRet" onclick="setAddSide('ret')">↩ Add as returned</button>
+    </div>
+    {% endif %}
     <input id="posSearch" class="search pos-search" type="search" placeholder="Add a product to this sale…" autofocus autocomplete="off">
     <div id="posResults" class="pos-results">
       <p class="pos-hint">Type a product name to add it.</p>
@@ -35,6 +41,18 @@
         </table>
       </div>
 
+      {% if can_add_return %}
+      <h3 class="ret-head">↩ Returned items <span class="muted">— brought back by the customer, go back into stock</span></h3>
+      <div class="table-wrap">
+        <table class="grid cart-table">
+          <thead>
+            <tr><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Total</th><th></th></tr>
+          </thead>
+          <tbody id="retBody"></tbody>
+        </table>
+      </div>
+      {% endif %}
+
       <div class="totals">
         <div class="totals-row"><span>Subtotal</span><span id="tSubtotal">₱0.00</span></div>
         <div class="totals-row">
@@ -44,6 +62,7 @@
             <input id="overallDiscount" class="disc-input" type="number" step="0.01" min="0" value="{{ sale.discount_total }}" oninput="computeTotals()">
           </span>
         </div>
+        <div class="totals-row" id="rowReturned" style="display:none;"><span>Less: returned items</span><span id="tReturned">₱0.00</span></div>
         <div class="totals-row">
           {# Same booklet rule as the POS and pos.edit_sale_items: an SI always
              carries VAT, a DR never can — only other receipts are a choice. #}
@@ -57,12 +76,18 @@
           </label></span>
           <span id="tVat">₱0.00</span>
         </div>
-        <div class="totals-row grand"><span>Total</span><span id="tTotal">₱0.00</span></div>
+        <div class="totals-row grand"><span id="tTotalLabel">Total</span><span id="tTotal">₱0.00</span></div>
       </div>
 
-      <p class="muted" style="margin:10px 0 0;font-size:12.5px;">
+      <p class="muted" id="payNote" style="margin:10px 0 0;font-size:12.5px;">
         The payment already on this sale ({{ sale.payments[0].method|title if sale.payments else '—' }}) will be set to
         <b>{{ 'the new total shown above' }}</b> when you save.
+      </p>
+      <p class="muted" id="retNote" style="display:none;margin:6px 0 0;font-size:12.5px;">
+        Returned items go back into stock and come off what the customer pays — the payment on this sale
+        ({{ sale.payments[0].method|title if sale.payments else '—' }}) becomes the amount above, or it is refunded if they
+        returned more than they bought. Saved as a <b>Sale × Return</b> on the same invoice # and date
+        (listed under Sales → Exchange of Items).
       </p>
 
       <div class="form-actions" style="margin-top:16px;">
@@ -72,6 +97,15 @@
     </div>
   </section>
 </div>
+
+<style>
+  .ret-side-pick { display:flex; gap:6px; margin-bottom:10px; }
+  .ret-side-pick button { flex:1; padding:9px 10px; border-radius:10px; border:1px solid var(--border, #d0d7de);
+    background:transparent; color:inherit; font-weight:600; cursor:pointer; }
+  .ret-side-pick button.active { background:var(--brand, #4f46e5); border-color:var(--brand, #4f46e5); color:#fff; }
+  .ret-head { font-size:14px; margin:16px 0 6px; }
+  .ret-head .muted { font-weight:400; font-size:12.5px; }
+</style>
 
 <script>
 const VAT_RATE = 0.12, VAT_DIV = 1.12;   // VAT is inclusive: total x 12/112
@@ -155,7 +189,64 @@ function renderResults(products) {
     box.appendChild(el);
   });
 }
-function addToCart(p) { cart.push({ product: p, unitIndex: 0, qty: 1, discount: 0, discType: 'amt', customPrice: false }); renderCart(); }
+function addToCart(p) {
+  if (addSide === 'ret') { addReturned(p); return; }
+  cart.push({ product: p, unitIndex: 0, qty: 1, discount: 0, discType: 'amt', customPrice: false }); renderCart();
+}
+
+// ---- Returned items: brought back with this sale (Return wasn't ticked at
+// the counter). Saved, they turn the sale into a Sale × Return — see
+// pos._edit_return_items(converting=True).
+let addSide = 'new';
+let retCart = [];
+function setAddSide(s) {
+  addSide = s;
+  document.getElementById('pickNew').classList.toggle('active', s === 'new');
+  document.getElementById('pickRet').classList.toggle('active', s === 'ret');
+  searchBox.placeholder = s === 'ret' ? 'Search the returned item, or scan…' : 'Add a product to this sale…';
+  searchBox.focus();
+}
+function addReturned(p) {
+  const same = retCart.find(l => l.product.id === p.id && l.unitIndex === 0);
+  if (same) same.qty += 1; else retCart.push({ product: p, unitIndex: 0, qty: 1 });
+  renderReturned();
+}
+function retTotalOf(l) { return Math.max(l.qty * l.product.units[l.unitIndex].price, 0); }
+function setRetUnit(i, v) { retCart[i].unitIndex = parseInt(v); renderReturned(); }
+function setRetQty(i, v) { retCart[i].qty = parseFloat(v) || 0; refreshReturned(); }
+function setRetPrice(i, v) { retCart[i].product.units[retCart[i].unitIndex].price = parseFloat(v) || 0; refreshReturned(); }
+function removeReturned(i) { retCart.splice(i, 1); renderReturned(); }
+function renderReturned() {
+  const body = document.getElementById('retBody');
+  if (!body) return;
+  if (!retCart.length) {
+    body.innerHTML = '<tr><td colspan="6" class="empty">None. Pick “↩ Add as returned”, then search or scan.</td></tr>';
+    computeTotals(); return;
+  }
+  body.innerHTML = '';
+  retCart.forEach((line, i) => {
+    const unit = line.product.units[line.unitIndex];
+    const opts = line.product.units.map((u, ui) => '<option value="' + ui + '"' + (ui === line.unitIndex ? ' selected' : '') + '>' +
+      escapeHtml(u.label || u.name) + ' (' + peso(u.price) + ')</option>').join('');
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td class="strong">' + escapeHtml(line.product.name) + '</td>' +
+      '<td><select class="cart-unit" onchange="setRetUnit(' + i + ', this.value)">' + opts + '</select></td>' +
+      '<td class="num"><input class="cart-qty" type="number" step="0.001" min="0" value="' + fmtQty(line.qty) + '" oninput="setRetQty(' + i + ', this.value)"></td>' +
+      '<td class="num"><input class="cart-price" type="number" step="0.01" min="0" value="' + unit.price.toFixed(2) + '" oninput="setRetPrice(' + i + ', this.value)"></td>' +
+      '<td class="num strong line-total">' + peso(-retTotalOf(line)) + '</td>' +
+      '<td><button type="button" class="btn-link danger" onclick="removeReturned(' + i + ')">✕</button></td>';
+    body.appendChild(tr);
+  });
+  computeTotals();
+}
+function refreshReturned() {
+  document.querySelectorAll('#retBody tr').forEach((tr, i) => {
+    const td = tr.querySelector('.line-total');
+    if (td && retCart[i]) td.textContent = peso(-retTotalOf(retCart[i]));
+  });
+  computeTotals();
+}
 function setUnit(i, v) { cart[i].unitIndex = parseInt(v); renderCart(); }
 function setQty(i, v) { cart[i].qty = parseFloat(v) || 0; refreshCartComputed(); }
 function setPrice(i, v) { cart[i].product.units[cart[i].unitIndex].price = parseFloat(v) || 0; refreshCartComputed(); }
@@ -215,16 +306,29 @@ function refreshCartComputed() {
 function computeTotals() {
   let subtotal = 0;
   cart.forEach(l => subtotal += lineTotalOf(l));
-  const grand = Math.max(subtotal - overallDiscAmt(subtotal), 0);
-  const vat = document.getElementById('vatOn').checked ? grand * VAT_RATE / VAT_DIV : 0;
+  const sold = Math.max(subtotal - overallDiscAmt(subtotal), 0);
+  let returned = 0;
+  retCart.forEach(l => returned += retTotalOf(l));
+  const hasRet = retCart.some(l => l.qty > 0);
+  const grand = Math.round((sold - returned) * 100) / 100;   // <0: money back to the customer
+  const vat = document.getElementById('vatOn').checked ? Math.abs(grand) * VAT_RATE / VAT_DIV : 0;
   document.getElementById('tSubtotal').textContent = peso(subtotal);
+  document.getElementById('rowReturned').style.display = hasRet ? 'flex' : 'none';
+  document.getElementById('tReturned').textContent = '−' + peso(returned);
   document.getElementById('tVat').textContent = peso(vat);
-  document.getElementById('tTotal').textContent = peso(grand);
-  document.getElementById('saveBtn').disabled = cart.length === 0;
+  document.getElementById('tTotalLabel').textContent = !hasRet ? 'Total' : (grand > 0 ? 'Customer pays' : (grand < 0 ? 'Back to customer' : 'Even exchange'));
+  document.getElementById('tTotal').textContent = peso(Math.abs(grand));
+  document.getElementById('retNote').style.display = hasRet ? 'block' : 'none';
+  document.getElementById('payNote').style.display = hasRet ? 'none' : 'block';
+  document.getElementById('saveBtn').disabled = cart.length === 0 && !hasRet;
 }
 
 async function saveEdit() {
-  if (!cart.length) return;
+  const returnedLines = retCart.filter(l => l.qty > 0).map(l => {
+    const u = l.product.units[l.unitIndex];
+    return { side: 'ret', product_id: l.product.id, unit_name: u.name, factor: u.factor, qty: l.qty, unit_price: u.price };
+  });
+  if (!cart.length && !returnedLines.length) return;
   const btn = document.getElementById('saveBtn');
   const err = document.getElementById('editError');
   err.style.display = 'none';
@@ -235,9 +339,9 @@ async function saveEdit() {
     discount_total: overallDiscAmt(subtotal),
     lines: cart.map(line => {
       const unit = line.product.units[line.unitIndex];
-      return { product_id: line.product.id, unit_name: unit.name, factor: unit.factor,
+      return { side: 'new', product_id: line.product.id, unit_name: unit.name, factor: unit.factor,
                qty: line.qty, unit_price: unit.price, discount: lineDiscAmt(line), tier: unit.tier || 'fixed' };
-    }),
+    }).concat(returnedLines),
   };
   try {
     const res = await fetch('/pos/receipt/' + saleId + '/edit', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
@@ -250,6 +354,7 @@ async function saveEdit() {
 }
 
 renderCart();
+renderReturned();
 const savedEditSaleSearch = localStorage.getItem(searchStorageKey);
 if (savedEditSaleSearch) { searchBox.value = savedEditSaleSearch; runSearch(); }
 </script>

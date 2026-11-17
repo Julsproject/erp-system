@@ -4,12 +4,19 @@
 {% set is_refund = sale.txn_type == 'refund' %}
 <div class="page-head">
   <div>
+    {% if converting %}
+    <h1 class="page-title">Add returned items — {{ sale.invoice_no }}</h1>
+    <p class="muted">The customer returned something along with this sale. Returned items go back into stock and
+      come off what the customer paid; the sale becomes a <b>Sale × Return</b> on the same invoice # and date
+      (listed under Sales → Exchange of Items).</p>
+    {% else %}
     <h1 class="page-title">Edit {{ 'refund' if is_refund else 'exchange' }} — {{ sale.invoice_no }}</h1>
     <p class="muted">Add an item the customer returned that was left off, or fix a qty or price.
       Stock and the books are redone for this {{ 'refund' if is_refund else 'exchange' }} on its own date
       {%- if orig %} (from Invoice {{ orig.invoice_no }}){% endif %}.</p>
+    {% endif %}
   </div>
-  <a class="btn-link" href="{{ receipt_url }}">← Back to receipt</a>
+  <a class="btn-link" href="{{ edit_url if converting else receipt_url }}">← Back to {{ 'sale items' if converting else 'receipt' }}</a>
 </div>
 
 <div class="pos-grid">
@@ -38,7 +45,7 @@
     </div>
 
     {% if not is_refund %}
-    <h3 class="ret-head" style="margin-top:18px;">＋ New items given <span class="muted">— taken out of stock</span></h3>
+    <h3 class="ret-head" style="margin-top:18px;">＋ {{ 'Items sold' if converting else 'New items given' }} <span class="muted">— taken out of stock</span></h3>
     <div class="table-wrap">
       <table class="grid cart-table">
         <thead><tr><th>Item</th><th>Unit</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Disc</th><th class="num">Amount</th><th></th></tr></thead>
@@ -49,7 +56,14 @@
 
     <div class="totals">
       <div class="totals-row"><span>Returned</span><span id="tRet">₱0.00</span></div>
-      {% if not is_refund %}<div class="totals-row"><span>New items</span><span id="tNew">₱0.00</span></div>{% endif %}
+      {% if not is_refund %}
+      <div class="totals-row"><span>{{ 'Items sold' if converting else 'New items' }}</span><span id="tNew">₱0.00</span></div>
+      <div class="totals-row">
+        <span>Discount</span>
+        <span><input id="overallDiscount" class="disc-input" type="number" step="0.01" min="0"
+          value="{{ discount_total }}" oninput="computeTotals()" style="width:110px;text-align:right;"></span>
+      </div>
+      {% endif %}
       <div class="totals-row">
         {% set booklet = (sale.receipt_type or '')|upper %}
         <span><label class="vat-label"><input type="checkbox" id="vatOn"
@@ -88,7 +102,9 @@ const saleId = {{ sale.id }};
 const IS_REFUND = {{ 'true' if is_refund else 'false' }};
 const METHOD = {{ method|tojson }}, METHOD_LABEL = {{ method_label|tojson }};
 const HAS_ORIG = {{ 'true' if orig else 'false' }};
+const CONVERTING = {{ 'true' if converting else 'false' }};
 let addSide = 'ret';
+function overallDiscount() { const el = document.getElementById('overallDiscount'); return el ? (parseFloat(el.value) || 0) : 0; }
 let cart = {{ lines_json|safe }}.map(l => ({
   side: l.side,
   product: { id: l.product_id, name: l.name,
@@ -187,7 +203,8 @@ function refreshComputed() {
 function computeTotals() {
   let ret = 0, neu = 0;
   cart.forEach(l => { if (l.side === 'ret') ret += lineTotalOf(l); else neu += lineTotalOf(l); });
-  const diff = Math.round((neu - ret) * 100) / 100;
+  const disc = Math.min(Math.max(overallDiscount(), 0), neu);
+  const diff = Math.round((neu - disc - ret) * 100) / 100;
   const vat = document.getElementById('vatOn').checked ? Math.abs(diff) * VAT_RATE / VAT_DIV : 0;
   document.getElementById('tRet').textContent = peso(ret);
   if (document.getElementById('tNew')) document.getElementById('tNew').textContent = peso(neu);
@@ -196,7 +213,7 @@ function computeTotals() {
   document.getElementById('tDiff').textContent = peso(Math.abs(diff));
   let note;
   if (diff > 0) note = METHOD === 'receivable' ? 'Stays on the customer\'s credit account as ' + peso(diff) + '.'
-                                               : 'The ' + METHOD_LABEL + ' payment on this slip becomes ' + peso(diff) + '.';
+                                               : 'The ' + METHOD_LABEL + ' payment on this ' + (CONVERTING ? 'sale' : 'slip') + ' becomes ' + peso(diff) + '.';
   else if (diff < 0) note = (HAS_ORIG ? 'Taken off what is still owed on the original invoice first; the rest is a ' : 'A ') +
                             (METHOD === 'receivable' ? 'Cash' : METHOD_LABEL) + ' refund of up to ' + peso(-diff) + '.';
   else note = 'No money changes hands.';
@@ -209,6 +226,7 @@ async function saveEdit() {
   err.style.display = 'none'; btn.disabled = true; btn.textContent = 'Saving…';
   const payload = {
     vat_applied: document.getElementById('vatOn').checked,
+    discount_total: overallDiscount(),
     lines: cart.map(l => { const u = l.product.units[l.unitIndex];
       return { side: l.side, product_id: l.product.id, unit_name: u.name, factor: u.factor, qty: l.qty,
                unit_price: u.price, discount: l.side === 'ret' ? 0 : (l.discount || 0), tier: u.tier || 'fixed' }; }),
