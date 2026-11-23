@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/png" href="/static/img/favicon-64.png">
+  <link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
   <link rel="stylesheet" href="/static/css/styles.css?v={{ asset_version() }}">
   <script>
@@ -31,12 +33,8 @@
     <div class="sidebar-top-row">
       <div class="brand">
         <span class="brand-mark">
-        <svg viewBox="0 0 64 64" fill="none" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M8,34 L32,10 L56,34 M8,34 L8,54 M56,34 L56,46" stroke="var(--logo-blue)" stroke-width="5"/>
-          <path d="M20,27 L44,27 M44,54 L56,54" stroke="var(--logo-gray)" stroke-width="5"/>
-          <path d="M32,27 L32,50" stroke="var(--logo-gray)" stroke-width="6"/>
-        </svg>
-      </span>
+          <img class="brand-logo" src="/static/img/logo-mark.png?v={{ asset_version() }}" alt="Leafar Merchandising logo">
+        </span>
         <span class="brand-text">{{ app_name }}</span>
       </div>
       {% if user %}

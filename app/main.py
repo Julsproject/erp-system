@@ -7,7 +7,7 @@ import logging
 import threading
 
 from fastapi import Depends, FastAPI, Form, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
@@ -153,6 +153,13 @@ app.include_router(si_numbers.router)
 @app.get("/health")
 def health():
     return {"status": "ok", "app": settings.app_name}
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    """Browsers ask for /favicon.ico on every page — including the printable
+    receipts that don't carry a <link rel="icon"> — so serve the store logo."""
+    return FileResponse("app/static/img/favicon.ico", media_type="image/x-icon")
 
 
 @app.get("/login", response_class=HTMLResponse)
