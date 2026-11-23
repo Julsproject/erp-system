@@ -306,7 +306,12 @@
             {% endif %}
           {% endif %}
         </td>
-        <td class="muted">{{ p.barcode or '—' }}</td>
+        <td class="muted" id="bcCell{{ p.id }}">
+          <span id="bcText{{ p.id }}">{{ p.barcode or '—' }}</span>
+          {% if is_admin_user %}
+          <button type="button" class="btn-link rename-btn" onclick="startBarcodeEdit({{ p.id }})" title="Add / change barcode">✎</button>
+          {% endif %}
+        </td>
         {# Sub Category and Shelf columns are left off so the table fits without
            side-scrolling; the sub category shows on hover and is still set here. #}
         <td id="catCell{{ p.id }}" data-subcat="{{ p.subcategory.name if p.subcategory else '' }}"
@@ -575,6 +580,75 @@ function startCategoryEdit(id) {
     if (e.key === 'Enter') { e.preventDefault(); save(); }
     else if (e.key === 'Escape') cancel();
   }));
+}
+
+// Add or change a barcode right from the list — scan it into the box and
+// Enter saves (scanners send Enter at the end). Same unique check and audit
+// as Edit product, via the endpoint the Print labels page uses.
+function startBarcodeEdit(id) {
+  const cell = document.getElementById('bcCell' + id);
+  const origHtml = cell.innerHTML;
+  const origText = document.getElementById('bcText' + id).textContent;
+
+  const input = document.createElement('input');
+  input.type = 'text'; input.autocomplete = 'off';
+  input.value = origText === '—' ? '' : origText;
+  input.placeholder = 'Scan or type barcode';
+  input.style.cssText = 'font-size:13px;padding:3px 6px;border:1px solid var(--brand);border-radius:6px;width:150px;';
+
+  const okBtn = document.createElement('button');
+  okBtn.type = 'button'; okBtn.textContent = '✓'; okBtn.title = 'Save';
+  okBtn.className = 'btn-link rename-btn'; okBtn.style.color = '#15803d'; okBtn.style.fontWeight = '700';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button'; cancelBtn.textContent = '✕'; cancelBtn.title = 'Cancel';
+  cancelBtn.className = 'btn-link danger rename-btn';
+
+  cell.innerHTML = '';
+  cell.append(input, okBtn, cancelBtn);
+  input.focus(); input.select();
+
+  function cancel() { cell.innerHTML = origHtml; }
+
+  function renderResult(code) {
+    cell.innerHTML = '';
+    const span = document.createElement('span');
+    span.id = 'bcText' + id;
+    span.textContent = code || '—';
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button'; editBtn.className = 'btn-link rename-btn';
+    editBtn.title = 'Add / change barcode'; editBtn.textContent = '✎';
+    editBtn.onclick = () => startBarcodeEdit(id);
+    cell.append(span, ' ', editBtn);
+  }
+
+  async function save() {
+    const code = input.value.trim();
+    if (!code) { input.focus(); return; }
+    if (code === origText) { cancel(); return; }
+    input.disabled = true; okBtn.disabled = true; cancelBtn.disabled = true;
+    try {
+      const body = new FormData(); body.append('barcode', code);
+      const res = await fetch('/products/' + id + '/barcode', { method: 'POST', body: body });
+      const data = await res.json();
+      if (data.ok) {
+        renderResult(data.barcode);
+      } else {
+        alert(data.error || 'Could not save.');
+        input.disabled = false; okBtn.disabled = false; cancelBtn.disabled = false;
+        input.focus(); input.select();
+      }
+    } catch (e) {
+      alert('Network error — the barcode was not saved.');
+      input.disabled = false; okBtn.disabled = false; cancelBtn.disabled = false;
+    }
+  }
+
+  okBtn.onclick = save;
+  cancelBtn.onclick = cancel;
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); save(); }
+    else if (e.key === 'Escape') cancel();
+  });
 }
 
 // Same idea as startCategoryEdit, one field instead of two.
