@@ -331,6 +331,21 @@ try { localStorage.setItem('last_product_view', {{ ('/products/' ~ product.id ~ 
     });
   })();
 </script>
+{% else %}
+<script>
+  // Adding a product: one last "are you sure" so a typo'd or duplicate
+  // item doesn't land in Inventory by accident. A blank name skips the ask
+  // — the server sends the form back with "Product name is required".
+  (function () {
+    var form = document.querySelector('form.card.form');
+    form.addEventListener('submit', function (e) {
+      var name = (form.querySelector('input[name="name"]').value || '').trim();
+      if (name && !confirm('Create new product “' + name + '”?\n\nDouble-check the name — it will be added to Inventory.')) {
+        e.preventDefault();
+      }
+    });
+  })();
+</script>
 {% endif %}
 
 <script>
@@ -620,6 +635,8 @@ try { localStorage.setItem('last_product_view', {{ ('/products/' ~ product.id ~ 
     const suggested = {{ (product.name ~ ' (Open/Retail)')|tojson if product else '""' }};
     const name = prompt('Name for the new open/retail product:', suggested);
     if (name === null) return;
+    const finalName = name.trim() || suggested;
+    if (!confirm('Create new product “' + finalName + '”?\n\nIt will be added to Inventory and linked to this product.')) return;
     const fd = new FormData();
     fd.append('name', name);
     fd.append('back', {{ back|tojson }});

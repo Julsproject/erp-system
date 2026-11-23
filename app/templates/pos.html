@@ -1079,6 +1079,7 @@ async function createProduct() {
   const name = document.getElementById('npName').value.trim();
   const err = document.getElementById('npError');
   if (!name) { err.textContent = 'Product name is required.'; err.style.display = 'block'; return; }
+  if (!confirm('Create new product “' + name + '”?\n\nDouble-check the name — it will be added to Inventory.')) return;
   const payload = {
     name: name,
     category: document.getElementById('npCategory').value,

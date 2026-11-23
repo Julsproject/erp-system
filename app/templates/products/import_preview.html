@@ -7,12 +7,18 @@
 </div>
 
 <div class="alert" style="background:#fffbeb;border-color:#fde68a;color:#92400e;">
-  <strong>{{ update_rows|length }}</strong> row{{ '' if update_rows|length == 1 else 's' }} in
-  <strong>{{ filename }}</strong> match{{ 'es' if update_rows|length == 1 }} a product that already exists.
-  Nothing has been saved yet — choose what to do with each match below, then Apply Import.
+  <strong>{{ filename }}</strong>:
+  {% if new_rows %}<strong>{{ new_rows|length }}</strong> new product{{ '' if new_rows|length == 1 else 's' }} to add{% endif %}
+  {%- if new_rows and update_rows %}, {% endif %}
+  {%- if update_rows %} <strong>{{ update_rows|length }}</strong> row{{ '' if update_rows|length == 1 else 's' }} matching a product that already exists{% endif -%}
+  .
+  Nothing has been saved yet — check the lists below, then Apply Import.
 </div>
 
-<form method="post" action="/products/import/confirm">
+<form method="post" action="/products/import/confirm"
+      {% if new_rows %}onsubmit="return confirm('Create {{ new_rows|length }} new product{{ '' if new_rows|length == 1 else 's' }}?
+
+Double-check the names in the New products list — they will be added to Inventory.');"{% endif %}>
   <input type="hidden" name="filename" value="{{ filename }}">
   <input type="hidden" name="rows_json" value='{{ rows_json }}'>
 
@@ -67,7 +73,7 @@
   {% endif %}
 
   {% if conflict_rows %}
-  <h3 class="ex-h" style="margin-top:22px;">Skipped — barcode conflicts</h3>
+  <h3 class="ex-h" style="margin-top:22px;">Skipped — won't be imported</h3>
   <div class="table-wrap">
     <table class="grid">
       <thead><tr><th>Row</th><th>Product</th><th>Problem</th></tr></thead>

@@ -189,6 +189,7 @@ const txnType = {{ 'true' if return_against_po else 'false' }} ? 'return' : 'rec
 const isReturnAgainstPo = {{ 'true' if return_against_po else 'false' }};
 const returnAgainstId = {{ return_against_po.id if return_against_po else 'null' }};
 const canSetAlert = {{ 'true' if can_set_alert else 'false' }};
+const IS_ADMIN_USER = {{ 'true' if (user.role or '')|lower == 'admin' else 'false' }};
 // Only an admin can add products — for anyone else an unmatched name is
 // flagged instead of promising to create it (the save is refused too).
 const NEW_PRODUCT_HINT = {{ ('will be created as a new product' if (user.role or '')|lower == 'admin' else 'not in Inventory — only an admin can add new products; pick an existing item')|tojson }};
@@ -764,6 +765,17 @@ document.getElementById('supplierId').addEventListener('change', recompute);
 async function savePurchase() {
   const lines = activeLines();
   if (!lines.length) return;
+  // Rows whose typed name matched nothing become new products on save —
+  // make the admin say so first. (Anyone else is refused by the server, so
+  // no point asking them.)
+  if (txnType === 'receive' && IS_ADMIN_USER) {
+    const newNames = [...new Set(lines.filter(l => !l.productId && (l.name || '').trim()).map(l => l.name.trim()))];
+    if (newNames.length && !confirm(
+      'Create ' + (newNames.length === 1 ? 'a new product' : newNames.length + ' new products') + '?\n\n' +
+      newNames.map(n => '• ' + n).join('\n') +
+      '\n\nNot in Inventory yet — they will be added. Cancel to pick existing items instead.'
+    )) return;
+  }
   const btn = document.getElementById('saveBtn');
   btn.disabled = true; btn.textContent = 'Saving…';
   const payload = {

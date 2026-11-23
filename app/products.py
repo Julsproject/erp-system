@@ -4048,18 +4048,21 @@ def import_upload(
         )
 
     classified = _classify_import_rows(db, list(enumerate(rows, start=2)), allow_create=is_admin(user))  # row 2 = first data row
-    has_duplicates = any(r["action"] == "update" for r in classified)
+    # Anything that would add a new product or overwrite an existing one is
+    # shown first and applied only on Apply Import — new products get a
+    # last "are you sure" there, never created straight off the upload.
+    needs_review = any(r["action"] in ("update", "create") for r in classified)
 
-    if not has_duplicates:
-        # Nothing ambiguous — same one-step import as before.
+    if not needs_review:
+        # Nothing to create or update (blank/conflict rows only) — just report it.
         result = _run_import(db, user, request, file.filename, classified)
         return templates.TemplateResponse(
             "products/import.html",
             {"request": request, "app_name": request.app.title, "user": user, "result": result},
         )
 
-    # At least one row matches an existing product by name — stop and let the
-    # admin choose per row instead of silently overwriting. Nothing has been
+    # New products to confirm and/or rows matching an existing product by
+    # name — stop and let the admin check them first. Nothing has been
     # written to the database yet; the parsed rows ride along as hidden JSON
     # so Confirm doesn't need the file re-uploaded.
     payload = [{"line_no": r["line_no"], "record": r["record"]} for r in classified if r["action"] in ("create", "update")]
