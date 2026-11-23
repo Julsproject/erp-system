@@ -113,6 +113,10 @@
   {% if adjustment_count %}
   <a class="tab {{ 'active' if flag == 'adjustments' }}" href="/products?flag=adjustments{{ '&q=' ~ q|urlencode if q }}">Manual Adjustments <span class="warn-tag">{{ adjustment_count }}</span></a>
   {% endif %}
+  {% if negative_count %}
+  <a class="tab" href="/reports/negative-stock"
+     title="Items below zero, grouped by likely cause (missing delivery, open a pack, after a count…)">Negative Stock <span class="warn-tag">{{ negative_count }}</span></a>
+  {% endif %}
   {% endif %}
 </div>
 

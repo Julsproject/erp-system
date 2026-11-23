@@ -841,6 +841,13 @@ def list_products(
             "void_count": len(void_ids),
             "conversion_count": len(conversion_ids),
             "adjustment_count": len(adjustment_ids),
+            # Same "below zero" test as Reports → Negative Stock, which the tab opens.
+            "negative_count": (
+                db.query(func.count(models.Product.id))
+                .filter(models.Product.is_active.is_(True),
+                        (models.Product.beginning_stock + models.Product.stock_qty) < 0)
+                .scalar() if is_staff(user) else 0
+            ),
             "nocost_count": (
                 db.query(func.count(models.Product.id))
                 .filter(models.Product.is_active.is_(True), *_no_cost_filter())
