@@ -2304,6 +2304,7 @@ def merge_search(q: str = "", db: Session = Depends(get_db), user=Depends(get_cu
                 "category": p.category.name if p.category else "Uncategorized",
                 "unit_name": p.unit_type.name if p.unit_type else "unit",
                 "cost_price": float(p.cost_price or 0),
+                "selling_price": float(p.selling_price or 0),  # shown in Inventory's Barcode mode
                 "total_qty": float(p.total_qty or 0),
                 "barcode": p.barcode or "",
             }
@@ -2816,9 +2817,22 @@ def print_labels(request: Request, ids: list[str] = Form([]), back: str = Form("
     if not is_staff(user):
         return RedirectResponse("/products", status_code=302)
     back = safe_back_url(back, "/products")  # the Inventory list it was started from
-    ids = sorted({int(i) for i in ids if i.isdigit()})
-    if not ids:
+    products = _label_products(db, ids)
+    if not products:
         return RedirectResponse(back, status_code=302)
+    labels = [{"product": p, "barcode_uri": _barcode_data_uri(p.barcode)} for p in products]
+    return templates.TemplateResponse(
+        "products/labels.html",
+        {"request": request, "app_name": request.app.title, "user": user, "labels": labels, "back": back},
+    )
+
+
+def _label_products(db: Session, ids: list[str]) -> list:
+    """Active products for labels / the price list, by name; items with no
+    barcode get an internal one (LC…) so every label can be scanned."""
+    ids = sorted({int(i) for i in ids if str(i).isdigit()})
+    if not ids:
+        return []
     products = (
         db.query(models.Product)
         .filter(models.Product.id.in_(ids), models.Product.is_active.is_(True))
@@ -2832,12 +2846,162 @@ def print_labels(request: Request, ids: list[str] = Form([]), back: str = Form("
             assigned = True
     if assigned:
         db.commit()
+    return products
 
-    labels = [{"product": p, "barcode_uri": _barcode_data_uri(p.barcode)} for p in products]
+
+@router.get("/products/pricelist", response_class=HTMLResponse)
+def pricelist_empty(request: Request, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """The A4 price list with no items yet — add them with "＋ Add item"."""
+    return print_pricelist(request, ids=[], back="/labels", db=db, user=user)
+
+
+@router.post("/products/pricelist", response_class=HTMLResponse)
+def print_pricelist(request: Request, ids: list[str] = Form([]), back: str = Form(""),
+                    db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """A4 price list for a binder: a grid of boxes (name, price / unit,
+    barcode) with a heading you type, e.g. "PLUMBING SUPPLIES"."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
+    back = safe_back_url(back, "/products")
+    products = _label_products(db, ids)  # may be empty: add items on the page itself
+    items = [{
+        "id": p.id,
+        "name": p.name,
+        "price": float(p.selling_price or 0),
+        "unit": p.unit_type.name if p.unit_type else "",
+        "barcode": p.barcode,
+        "barcode_uri": _barcode_data_uri(p.barcode),
+    } for p in products]
+    return templates.TemplateResponse(
+        "products/pricelist.html",
+        {"request": request, "app_name": request.app.title, "user": user, "items": items, "back": back},
+    )
+
+
+@router.get("/labels/custom", response_class=HTMLResponse)
+def custom_labels(request: Request, user=Depends(get_current_user)):
+    """The Print labels page with no products — for custom labels where you
+    type the name, price and barcode yourself (nothing is saved)."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
     return templates.TemplateResponse(
         "products/labels.html",
-        {"request": request, "app_name": request.app.title, "user": user, "labels": labels, "back": back},
+        {"request": request, "app_name": request.app.title, "user": user, "labels": [],
+         "back": "/products", "start_custom": True},
     )
+
+
+@router.get("/labels", response_class=HTMLResponse)
+def labels_page(request: Request, user=Depends(get_current_user)):
+    """Print labels with nothing picked yet — opened from Inventory's
+    "▦ Barcode" button. Barcode mode is open: scan, find the item, set it,
+    and its label is added to the page."""
+    if not user:
+        return RedirectResponse("/login", status_code=302)
+    if not is_staff(user):
+        return RedirectResponse("/products", status_code=302)
+    return templates.TemplateResponse(
+        "products/labels.html",
+        {"request": request, "app_name": request.app.title, "user": user, "labels": [],
+         "back": "/products", "start_bcmode": True},
+    )
+
+
+@router.get("/labels/barcode-image")
+def label_barcode_image(code: str = "", user=Depends(get_current_user)):
+    """Barcode picture for a custom label (same drawing as product labels)."""
+    if not user:
+        return JSONResponse({"ok": False, "error": "Please sign in again."}, status_code=401)
+    code = (code or "").strip()
+    if not code or len(code) > 64:
+        return JSONResponse({"ok": False, "error": "Enter a barcode (64 characters max)."})
+    try:
+        return JSONResponse({"ok": True, "barcode_uri": _barcode_data_uri(code)})
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Can't make a barcode from that — use letters and numbers only."})
+
+
+@router.get("/labels/item")
+def label_item(id: int = 0, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """One item's label (for "＋ Add item" on Print labels). Like Print labels
+    from Inventory, an item with no barcode gets an internal one (LC…)."""
+    if not user or not is_staff(user):
+        return JSONResponse({"ok": False, "error": "Please sign in again."}, status_code=401)
+    products = _label_products(db, [str(id)])
+    if not products:
+        return {"ok": False, "error": "Item not found (or inactive)."}
+    p = products[0]
+    return {"ok": True, "product": {
+        "id": p.id, "name": p.name, "active": True,
+        "selling_price": float(p.selling_price or 0),
+        "unit_name": p.unit_type.name if p.unit_type else "",
+        "barcode": p.barcode, "barcode_uri": _barcode_data_uri(p.barcode),
+    }}
+
+
+@router.get("/labels/barcode-owner")
+def label_barcode_owner(code: str = "", db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Barcode mode on Print labels: after a scan, is this barcode already on
+    an item? If so its label is added straight away (no hunting for it)."""
+    if not user or not is_staff(user):
+        return JSONResponse({"ok": False, "error": "Please sign in again."}, status_code=401)
+    code = (code or "").strip()
+    if not code:
+        return {"ok": True, "product": None}
+    p = db.query(models.Product).filter(models.Product.barcode == code).first()
+    if not p:
+        return {"ok": True, "product": None}
+    return {"ok": True, "product": {
+        "id": p.id, "name": p.name, "active": bool(p.is_active),
+        "selling_price": float(p.selling_price or 0),
+        "unit_name": p.unit_type.name if p.unit_type else "",
+        "barcode": p.barcode, "barcode_uri": _barcode_data_uri(p.barcode),
+    }}
+
+
+@router.post("/products/{product_id}/barcode")
+def save_label_barcode(product_id: int, request: Request, barcode: str = Form(""),
+                       db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """Change a product's barcode straight from the Print labels page, without
+    opening Edit product. Same unique check and audit trail as Edit product;
+    returns the new barcode picture so the label updates in place."""
+    if not user:
+        return JSONResponse({"ok": False, "error": "Please sign in again."}, status_code=401)
+    if not is_staff(user):
+        return JSONResponse({"ok": False, "error": "You don't have permission to change barcodes."}, status_code=403)
+    product = db.get(models.Product, product_id)
+    if not product:
+        return JSONResponse({"ok": False, "error": "Product not found."}, status_code=404)
+    code = (barcode or "").strip()
+    if not code:
+        return JSONResponse({"ok": False, "error": "Enter a barcode."})
+    if len(code) > 64:
+        return JSONResponse({"ok": False, "error": "Barcode is too long (64 characters max)."})
+    if code == product.barcode:
+        return JSONResponse({"ok": True, "barcode": code, "barcode_uri": _barcode_data_uri(code)})
+    other = db.query(models.Product).filter(models.Product.barcode == code, models.Product.id != product.id).first()
+    if other:
+        return JSONResponse({"ok": False, "error": f"Barcode “{code}” is already assigned to “{other.name}”."})
+    try:
+        uri = _barcode_data_uri(code)
+    except Exception:
+        return JSONResponse({"ok": False, "error": f"“{code}” can't be printed as a barcode — use letters and numbers only."})
+    before = _product_snapshot(product)
+    product.barcode = code
+    db.flush()
+    changes = audit.diff(before, _product_snapshot(product))
+    if changes:
+        audit.record(
+            db, user=user, request=request, action="update",
+            entity_type="product", entity_id=product.id, entity_label=product.name,
+            summary=f"Changed barcode of “{product.name}” (Print labels)", changes=changes,
+        )
+    db.commit()
+    return JSONResponse({"ok": True, "barcode": code, "barcode_uri": uri})
 
 
 def _order_slip_rows(db, products):

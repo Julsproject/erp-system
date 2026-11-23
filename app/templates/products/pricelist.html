@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A4 Price List · {{ app_name }}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin:0; background:#eef1f5; font-family:"Segoe UI",system-ui,sans-serif; color:#0f172a; }
+    .toolbar { max-width:1180px; margin:16px auto; padding:0 10px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    .toolbar a, .toolbar button { padding:10px 18px; border-radius:10px; border:none; cursor:pointer; font-size:14px; font-weight:600; text-decoration:none; }
+    .toolbar a { background:#fff; color:#334155; border:1px solid #e2e8f0; }
+    .toolbar button { background:#4f46e5; color:#fff; }
+    .toolbar input, .toolbar select { padding:9px 10px; border-radius:10px; border:1px solid #cbd5e1; font-size:14px; background:#fff; color:#0f172a; }
+    .toolbar #title { flex:1 1 260px; font-weight:700; text-transform:uppercase; }
+    .count { max-width:1180px; margin:0 auto 12px; padding:0 10px; font-size:14px; color:#334155; }
+    .count b { color:#0f172a; }
+    .count .tip { color:#b45309; }
+    .wrap { max-width:1180px; margin:0 auto 40px; padding:0 10px; display:flex; gap:16px; align-items:flex-start; }
+
+    /* left: the items — tick what goes on the paper */
+    .picker { flex:0 0 290px; background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:10px; position:sticky; top:10px; max-height:calc(100vh - 20px); overflow:auto; }
+    .picker h3 { margin:2px 4px 8px; font-size:14px; }
+    .picker label { display:flex; gap:8px; align-items:flex-start; padding:5px 4px; font-size:13px; border-radius:6px; cursor:pointer; }
+    .picker label:hover { background:#f1f5f9; }
+    .picker label.off { color:#94a3b8; }
+    .picker .p { margin-left:auto; white-space:nowrap; color:#475569; }
+    .picker input { margin-top:2px; }
+    .picker .all { border-bottom:1px solid #e2e8f0; margin-bottom:4px; font-weight:600; }
+    .picker .rm { border:none; background:none; color:#b91c1c; cursor:pointer; font-size:13px; padding:0 2px; }
+    .additem { position:relative; margin-bottom:10px; }
+    .additem input { width:100%; padding:9px 10px; border:2px solid #c7d2fe; border-radius:10px; font-size:14px; }
+    .additem input:focus { outline:none; border-color:#4f46e5; }
+    /* in the flow (not a floating dropdown): the left panel scrolls, so a
+       floating list got cut off inside it */
+    #addResults { list-style:none; margin:4px 0 0; padding:4px; background:#fff; border:1px solid #c7d2fe; border-radius:10px; }
+    #addResults:empty { display:none; }
+    #addResults li { padding:7px 9px; font-size:13px; cursor:pointer; display:flex; gap:8px; border-radius:8px; }
+    #addResults li + li { border-top:1px solid #f1f5f9; }
+    #addResults li .tick { width:16px; flex:0 0 16px; color:#4f46e5; font-weight:700; }
+    #addResults li.added { background:#f0fdf4; }
+    #addResults li.added .tick { color:#15803d; }
+    #addResults li.head { cursor:default; color:#64748b; font-size:12px; align-items:center; }
+    #addResults li.head:hover { background:none; }
+    #addResults .addall { margin-left:auto; border:none; border-radius:8px; background:#4f46e5; color:#fff; font-weight:600; font-size:12px; padding:5px 10px; cursor:pointer; }
+    #addResults li.active, #addResults li:hover { background:#eef2ff; }
+    #addResults li .p { margin-left:auto; white-space:nowrap; color:#4f46e5; font-weight:600; }
+    #addMsg { font-size:12px; margin-top:4px; min-height:0; }
+    #addMsg.ok { color:#15803d; } #addMsg.warn { color:#b45309; } #addMsg.err { color:#b91c1c; }
+
+    /* right: A4 pages, same size on screen as on paper */
+    .pages { flex:1 1 auto; display:flex; flex-direction:column; align-items:center; gap:16px; overflow:auto; }
+    .page { width:210mm; height:297mm; background:#fff; box-shadow:0 2px 10px rgba(0,0,0,.12); padding:8mm; display:flex; flex-direction:column; flex:0 0 auto; }
+    .page-head { display:flex; align-items:center; gap:3mm; border-bottom:.6mm solid #1e3a5f; padding-bottom:2mm; margin-bottom:3mm; }
+    .page-head .t { font-size:6.5mm; font-weight:800; color:#1e3a5f; text-transform:uppercase; letter-spacing:.03em; flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+    .page-head .shop { font-size:3mm; color:#475569; text-align:right; white-space:nowrap; }
+    .grid { flex:1 1 auto; display:grid; gap:2.5mm; min-height:0; }
+    .box { border:.4mm solid #1e3a5f; border-radius:2mm; padding:1.5mm 2mm; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; overflow:hidden; min-height:0; }
+    .box.empty { border-style:dashed; border-color:#cbd5e1; }
+    .box .n { font-weight:800; text-transform:uppercase; line-height:1.1; max-width:100%; overflow:hidden;
+              display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
+    .box .pr { font-weight:800; color:#b91c1c; line-height:1.15; margin-top:.8mm; }
+    .box .pr .u { font-size:.55em; font-weight:600; color:#475569; }
+    .box img { width:82%; margin-top:1mm; }
+    .box .c { font-size:2.4mm; letter-spacing:.08em; color:#334155; margin-top:.3mm; }
+
+    /* layouts: columns x rows per page */
+    .l-2x5 .grid { grid-template-columns:repeat(2, 1fr); grid-template-rows:repeat(5, 1fr); }
+    .l-2x5 .n { font-size:5.2mm; } .l-2x5 .pr { font-size:7.5mm; } .l-2x5 img { height:13mm; width:70%; } .l-2x5 .c { font-size:3mm; }
+    .l-3x7 .grid { grid-template-columns:repeat(3, 1fr); grid-template-rows:repeat(7, 1fr); }
+    .l-3x7 .n { font-size:3.6mm; } .l-3x7 .pr { font-size:5.2mm; } .l-3x7 img { height:9mm; }
+    .l-4x8 .grid { grid-template-columns:repeat(4, 1fr); grid-template-rows:repeat(8, 1fr); }
+    .l-4x8 .n { font-size:2.9mm; } .l-4x8 .pr { font-size:4.2mm; } .l-4x8 img { height:7.5mm; width:90%; } .l-4x8 .c { font-size:2mm; }
+    .l-4x8 .box { padding:1mm 1.2mm; }
+
+    @page { size:A4 portrait; margin:0; }
+    @media print {
+      html, body { background:#fff; }
+      .toolbar, .count, .picker { display:none !important; }
+      .wrap { display:block; max-width:none; margin:0; padding:0; }
+      .pages { display:block; overflow:visible; }
+      .page { box-shadow:none; break-after:page; page-break-after:always; }
+      .page:last-child { break-after:auto; page-break-after:auto; }
+      .box.empty { visibility:hidden; }
+      * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    }
+  </style>
+</head>
+<body>
+  {% set biz = business_info() %}
+  <div class="toolbar">
+    <a href="{{ back }}">← Back to inventory</a>
+    <input id="title" placeholder="Page title, e.g. PLUMBING SUPPLIES" aria-label="Page title">
+    <select id="layout" aria-label="Boxes per page">
+      <option value="2x5">2 × 5 = 10 per page (big)</option>
+      <option value="3x7" selected>3 × 7 = 21 per page</option>
+      <option value="4x8">4 × 8 = 32 per page (small)</option>
+    </select>
+    <select id="showShop" aria-label="Shop name">
+      <option value="1">Shop name on top</option>
+      <option value="0">No shop name</option>
+    </select>
+    <button type="button" id="printBtn" onclick="printList()">🖨 Print A4</button>
+  </div>
+  <div class="count" id="count"></div>
+  <div class="wrap">
+    <div class="picker">
+      <div class="additem">
+        <input type="text" id="addQ" autocomplete="off" placeholder="＋ Add item: type name or scan…">
+        <ul id="addResults"></ul>
+        <div id="addMsg"></div>
+      </div>
+      <h3>Items on the paper</h3>
+      <label class="all"><input type="checkbox" id="pickAll" checked> All (<span id="allN">{{ items|length }}</span>)</label>
+      <div id="pickList"></div>
+    </div>
+    <div class="pages" id="pages"></div>
+  </div>
+
+  <script>
+    var ITEMS = {{ items|tojson }};
+    var SHOP = {{ (biz.business_name or app_name)|tojson }};
+    var PER = { '2x5': 10, '3x7': 21, '4x8': 32 };
+    var titleEl = document.getElementById('title'), layoutEl = document.getElementById('layout'),
+        shopEl = document.getElementById('showShop');
+
+    function peso(n) { return '₱' + Number(n).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+    // remember the title / layout for next time
+    try {
+      titleEl.value = localStorage.getItem('pricelistTitle') || '';
+      var l = localStorage.getItem('pricelistLayout'); if (l && PER[l]) layoutEl.value = l;
+      var s = localStorage.getItem('pricelistShop'); if (s) shopEl.value = s;
+    } catch (e) {}
+    function save() {
+      try {
+        localStorage.setItem('pricelistTitle', titleEl.value);
+        localStorage.setItem('pricelistLayout', layoutEl.value);
+        localStorage.setItem('pricelistShop', shopEl.value);
+      } catch (e) {}
+    }
+
+    // item ticks (all on at the start)
+    var list = document.getElementById('pickList');
+    function addPickRow(it) {
+      it.on = true;
+      var lab = el('label'), cb = el('input');
+      cb.type = 'checkbox'; cb.checked = true;
+      cb.addEventListener('change', function () { it.on = cb.checked; lab.classList.toggle('off', !cb.checked); render(); });
+      it.cb = cb; it.lab = lab;
+      lab.appendChild(cb); lab.appendChild(el('span', '', it.name));
+      lab.appendChild(el('span', 'p', it.price ? peso(it.price) : 'no price'));
+      var rm = el('button', 'rm', '✕'); rm.type = 'button'; rm.title = 'Remove from the list';
+      rm.addEventListener('click', function (e) {
+        e.preventDefault();
+        ITEMS.splice(ITEMS.indexOf(it), 1); lab.remove();
+        document.getElementById('allN').textContent = ITEMS.length; render();
+        if (window.refreshAddList) window.refreshAddList();  // un-✓ it in the search results
+      });
+      lab.appendChild(rm);
+      list.appendChild(lab);
+    }
+    ITEMS.forEach(addPickRow);
+
+    // ＋ Add item: type a name (click / ↑↓ Enter) or scan a barcode already on an item
+    (function () {
+      var q = document.getElementById('addQ'), res = document.getElementById('addResults'),
+          msg = document.getElementById('addMsg');
+      var results = [], active = -1, timer = null, seq = 0;
+      function say(t, cls) { msg.textContent = t; msg.className = cls || ''; }
+      function clear() { res.innerHTML = ''; results = []; active = -1; }
+      function onList(id) { return ITEMS.some(function (it) { return it.id === id; }); }
+      // keep = clicked from the results: the list stays open so you can click several
+      function addProduct(p, keep) {  // p from /labels/item or /labels/barcode-owner
+        if (!keep) { q.value = ''; clear(); }
+        q.focus();
+        if (onList(p.id)) { say(p.name + ' is already on the list.', 'warn'); return; }
+        var it = { id: p.id, name: p.name, price: p.selling_price, unit: p.unit_name, barcode: p.barcode, barcode_uri: p.barcode_uri };
+        ITEMS.push(it); addPickRow(it);
+        document.getElementById('allN').textContent = ITEMS.length;
+        render(); show(); say('✓ Added ' + p.name + '.', 'ok');
+      }
+      function removeById(id) {
+        var it = ITEMS.filter(function (x) { return x.id === id; })[0];
+        if (!it) return;
+        ITEMS.splice(ITEMS.indexOf(it), 1); it.lab.remove();
+        document.getElementById('allN').textContent = ITEMS.length;
+        render(); show(); say('Removed ' + it.name + '.', 'warn');
+      }
+      var pending = {};  // ids being fetched, so a fast double-click doesn't add twice
+      function addById(id, keep) {
+        if (pending[id]) return Promise.resolve();
+        pending[id] = true;
+        return fetch('/labels/item?id=' + id, { credentials: 'same-origin' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) { if (d.ok) addProduct(d.product, keep); else say(d.error || 'Could not add it.', 'err'); })
+          .catch(function () { say('Could not add it — check the connection.', 'err'); })
+          .finally(function () { delete pending[id]; });
+      }
+      function show() {
+        res.innerHTML = '';
+        if (!results.length) return;
+        var notYet = results.filter(function (p) { return !onList(p.id); });
+        var head = el('li', 'head');
+        head.appendChild(el('span', '', 'Click to add · click again to remove'));
+        if (notYet.length > 1) {
+          var all = el('button', 'addall', '＋ Add all ' + notYet.length); all.type = 'button';
+          all.onmousedown = function (e) {
+            e.preventDefault();
+            notYet.reduce(function (pr, p) { return pr.then(function () { return addById(p.id, true); }); }, Promise.resolve());
+          };
+          head.appendChild(all);
+        }
+        res.appendChild(head);
+        results.forEach(function (p, i) {
+          var added = onList(p.id);
+          var li = el('li', (i === active ? 'active' : '') + (added ? ' added' : ''));
+          li.appendChild(el('span', 'tick', added ? '✓' : '＋'));
+          li.appendChild(el('span', '', p.name));
+          li.appendChild(el('span', 'p', p.selling_price > 0 ? peso(p.selling_price) : 'no price'));
+          li.onmousedown = function (e) { e.preventDefault(); if (onList(p.id)) removeById(p.id); else addById(p.id, true); };
+          res.appendChild(li);
+        });
+      }
+      q.addEventListener('input', function () {
+        clearTimeout(timer); say('');
+        var text = q.value.trim();
+        if (!text) { clear(); return; }
+        timer = setTimeout(function () {
+          var my = ++seq;
+          fetch('/products/merge/search?q=' + encodeURIComponent(text), { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (d) { if (my !== seq) return; results = d.products || []; active = results.length ? 0 : -1; show(); })
+            .catch(function () { say('Search failed — check the connection.', 'err'); });
+        }, 250);
+      });
+      q.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowDown' && results.length) { e.preventDefault(); active = (active + 1) % results.length; show(); }
+        else if (e.key === 'ArrowUp' && results.length) { e.preventDefault(); active = (active - 1 + results.length) % results.length; show(); }
+        else if (e.key === 'Escape') { q.value = ''; clear(); say(''); }
+        else if (e.key === 'Enter') {
+          e.preventDefault();
+          var text = q.value.trim(); if (!text) return;
+          clearTimeout(timer); seq++;
+          fetch('/labels/barcode-owner?code=' + encodeURIComponent(text), { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+              if (d.product && d.product.active) { addProduct(d.product); return; }
+              if (results[active]) { addById(results[active].id, true); return; }
+              say('No item has barcode or name “' + text + '”.', 'warn');
+            })
+            .catch(function () { if (results[active]) addById(results[active].id); });
+        }
+      });
+      window.refreshAddList = show;
+      q.addEventListener('blur', function () { setTimeout(clear, 150); });
+      if (!ITEMS.length) q.focus();
+    })();
+    document.getElementById('pickAll').addEventListener('change', function () {
+      var on = this.checked;
+      ITEMS.forEach(function (it) { it.on = on; it.cb.checked = on; it.lab.classList.toggle('off', !on); });
+      render();
+    });
+
+    function box(it) {
+      var b = el('div', 'box');
+      b.appendChild(el('div', 'n', it.name));
+      var pr = el('div', 'pr', it.price ? peso(it.price) : '');
+      if (it.price && it.unit) pr.appendChild(el('span', 'u', ' / ' + it.unit));
+      b.appendChild(pr);
+      var img = el('img'); img.src = it.barcode_uri; img.alt = 'barcode'; b.appendChild(img);
+      b.appendChild(el('div', 'c', it.barcode));
+      return b;
+    }
+
+    function render() {
+      var per = PER[layoutEl.value], picked = ITEMS.filter(function (it) { return it.on; });
+      var pagesEl = document.getElementById('pages');
+      pagesEl.innerHTML = '';
+      var nPages = Math.max(1, Math.ceil(picked.length / per));
+      for (var p = 0; p < nPages; p++) {
+        var page = el('div', 'page l-' + layoutEl.value), head = el('div', 'page-head');
+        head.appendChild(el('div', 't', titleEl.value.trim() || ' '));
+        var right = [];
+        if (shopEl.value === '1') right.push(SHOP);
+        if (nPages > 1) right.push('Page ' + (p + 1) + ' of ' + nPages);
+        head.appendChild(el('div', 'shop', right.join(' · ')));
+        page.appendChild(head);
+        var grid = el('div', 'grid');
+        for (var i = 0; i < per; i++) {
+          var it = picked[p * per + i];
+          grid.appendChild(it ? box(it) : el('div', 'box empty'));
+        }
+        page.appendChild(grid);
+        pagesEl.appendChild(page);
+      }
+      // how many to put: full pages, or how many more fill the last one
+      var c = document.getElementById('count'), n = picked.length, empty = nPages * per - n;
+      var allCb = document.getElementById('pickAll');
+      allCb.checked = n === ITEMS.length; allCb.indeterminate = n > 0 && n < ITEMS.length;
+      if (!ITEMS.length) { c.innerHTML = 'No items yet — use <b>＋ Add item</b> on the left (type the name or scan the barcode).'; }
+      else if (!n) { c.innerHTML = 'No items ticked — tick items on the left.'; }
+      else {
+        c.innerHTML = '<b>' + n + '</b> item' + (n > 1 ? 's' : '') + ' = <b>' + nPages + '</b> page' + (nPages > 1 ? 's' : '') +
+          ' (' + per + ' per page). ' +
+          (empty ? '<span class="tip">' + empty + ' empty space' + (empty > 1 ? 's' : '') + ' — add ' + empty + ' more item' + (empty > 1 ? 's' : '') +
+                   ' to fill the paper, or remove ' + (n - (nPages - 1) * per) + ' to save a page.</span>'
+                 : '✓ The paper is exactly full.');
+        if (nPages === 1 && empty) c.querySelector('.tip').textContent = empty + ' empty space' + (empty > 1 ? 's' : '') + ' — add ' + empty + ' more item' + (empty > 1 ? 's' : '') + ' to fill the paper.';
+      }
+      document.getElementById('printBtn').textContent = '🖨 Print A4' + (n ? ' (' + nPages + ' page' + (nPages > 1 ? 's' : '') + ')' : '');
+    }
+
+    titleEl.addEventListener('input', function () { save(); render(); });
+    layoutEl.addEventListener('change', function () { save(); render(); });
+    shopEl.addEventListener('change', function () { save(); render(); });
+
+    function printList() {
+      if (!ITEMS.some(function (it) { return it.on; })) { alert('No items ticked — tick at least one item.'); return; }
+      if (!titleEl.value.trim() && !confirm('No page title yet (e.g. PLUMBING SUPPLIES). Print without a title?')) { titleEl.focus(); return; }
+      window.print();
+    }
+    render();
+  </script>
+</body>
+</html>

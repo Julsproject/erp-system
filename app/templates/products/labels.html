@@ -19,17 +19,80 @@
       min-height:110px; justify-content:center;
     }
     .label .biz { font-size:9px; color:#64748b; text-transform:uppercase; letter-spacing:.04em; }
-    .label .name { font-size:12px; font-weight:700; margin-top:2px; line-height:1.25; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    /* Long names wrap onto a 2nd line instead of being cut off ("…" only past 2 lines). */
+    .label .name { font-size:12px; font-weight:700; margin-top:2px; line-height:1.2; max-width:100%; overflow:hidden; white-space:normal;
+                   display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
     .label .price { font-size:14px; font-weight:800; color:#1d4ed8; margin-top:2px; }
     .label img { width:100%; max-width:160px; height:36px; margin-top:5px; }
     .label .code { font-size:10px; letter-spacing:.06em; color:#334155; margin-top:1px; }
+    /* unit type beside the price, small: "₱80.00 / Kg" */
+    .label .price .unit { font-size:.6em; font-weight:600; }
     .actions { display:flex; gap:8px; align-items:center; }
     .actions select { padding:9px 10px; border-radius:10px; border:1px solid #e2e8f0; font-size:14px; background:#fff; color:#334155; }
+    .bc-edit { display:flex; flex-wrap:wrap; gap:4px; width:100%; margin-top:6px; }
+    .bc-edit input { flex:1 1 0; min-width:0; padding:5px 7px; border:1px solid #cbd5e1; border-radius:6px; font-size:12px; }
+    .bc-edit button { padding:5px 10px; border:none; border-radius:6px; background:#4f46e5; color:#fff; font-size:12px; font-weight:600; cursor:pointer; }
+    .bc-edit button:disabled { opacity:.6; cursor:default; }
+    .bc-msg { flex-basis:100%; font-size:11px; min-height:0; text-align:left; }
+    .bc-msg.ok { color:#15803d; } .bc-msg.err { color:#b91c1c; }
+    /* Tick = print it. Unticked labels fade on screen and are left out of the print. */
+    .label { position:relative; padding-top:24px; }
+    .pick { position:absolute; top:4px; left:6px; font-size:11px; color:#475569; display:flex; gap:3px; align-items:center; cursor:pointer; }
+    .pick input { width:15px; height:15px; cursor:pointer; }
+    .label.skip { opacity:.35; }
+    .label.skip .pick { opacity:1; }
+    .pick-all { display:flex; gap:4px; align-items:center; font-size:14px; color:#334155; cursor:pointer; white-space:nowrap; }
+    .pick-all input { width:16px; height:16px; }
+    .toolbar .btn-add { background:#fff; color:#4f46e5; border:1px solid #c7d2fe; }
+    .empty-hint { text-align:center; color:#64748b; margin:18px 0 6px; }
+    .label.custom { border-color:#a5b4fc; }
+    .cust-edit { display:grid; grid-template-columns:1fr 1fr; gap:4px; width:100%; margin-top:6px; }
+    .cust-edit input { min-width:0; padding:5px 7px; border:1px solid #cbd5e1; border-radius:6px; font-size:12px; }
+    .cust-edit .c-name, .cust-edit .c-code { grid-column:1 / -1; }
+    .cust-edit .c-copies { width:100%; }
+    .cust-edit .c-remove { border:none; border-radius:6px; background:#fee2e2; color:#b91c1c; font-weight:700; cursor:pointer; }
+    .cust-edit .bc-msg { grid-column:1 / -1; }
     /* "Product + barcode only": no shop name, no price */
     body.compact .label .biz, body.compact .label .price { display:none; }
+    /* "Product + price + barcode": no shop name */
+    body.noshop .label .biz { display:none; }
+    .toolbar .actions { flex-wrap:wrap; justify-content:flex-end; }
+    .toolbar { gap:10px; }
+    .toolbar .btn-add.on { background:#4f46e5; color:#fff; }
+    .bcm { max-width:900px; margin:0 auto 14px; background:#fff; border:2px solid #4f46e5; border-radius:12px; padding:12px 14px; }
+    .bcm-head { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:10px; font-size:13px; color:#64748b; }
+    .bcm-head strong { color:#0f172a; font-size:15px; }
+    .bcm-close { margin-left:auto; background:none; border:none; color:#4f46e5; font-weight:600; cursor:pointer; font-size:14px; }
+    .bcm-row { display:grid; grid-template-columns:1fr 2fr; gap:10px; }
+    @media (max-width:640px) { .bcm-row { grid-template-columns:1fr; } }
+    .bcm-row label { display:flex; flex-direction:column; gap:4px; font-size:12px; font-weight:600; color:#64748b; }
+    .bcm-row input { padding:9px 11px; border:1px solid #cbd5e1; border-radius:8px; font-size:14px; }
+    .bcm-row input:focus { outline:2px solid #4f46e5; border-color:#4f46e5; }
+    .bcm-row input:disabled { opacity:.5; background:#f1f5f9; }
+    .bcm-msg { font-size:13px; margin-top:8px; min-height:18px; color:#334155; }
+    .bcm-msg.ok { color:#15803d; } .bcm-msg.err { color:#b91c1c; } .bcm-msg.warn { color:#b45309; }
+    .bcm-results { list-style:none; margin:6px 0 0; padding:0; max-height:320px; overflow:auto; }
+    .bcm-results li { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:8px 10px; border-radius:8px; cursor:pointer; border:1px solid transparent; font-size:14px; }
+    .bcm-results li:hover, .bcm-results li.active { background:#eef2ff; border-color:#4f46e5; }
+    .bcm-results .nm { flex:1 1 auto; }
+    .bcm-results .pr { font-weight:700; color:#4f46e5; white-space:nowrap; min-width:120px; text-align:right; }
+    .bcm-results .pr.none { font-weight:400; color:#b45309; }
+    .bcm-results .bc { color:#64748b; font-size:12px; white-space:nowrap; min-width:130px; text-align:right; }
+    .additem { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid #e2e8f0; }
+    .additem > label { font-weight:700; color:#4f46e5; font-size:15px; }
+    .additem-box { flex:1 1 300px; position:relative; }
+    .additem-box input { width:100%; padding:10px 12px; border:2px solid #c7d2fe; border-radius:10px; font-size:15px; }
+    .additem-box input:focus { outline:none; border-color:#4f46e5; }
+    .additem-box .bcm-results { position:absolute; z-index:5; left:0; right:0; top:100%; margin-top:4px; background:#fff; border-radius:10px; box-shadow:0 8px 24px rgba(15,23,42,.15); }
+    .additem-box .bcm-results:empty { display:none; }
+    .additem .bcm-msg { flex-basis:100%; margin-top:0; min-height:0; }
+    .label.flash { outline:3px solid #22c55e; outline-offset:1px; transition:outline-color .3s; }
     @media print {
       html, body { background:#fff; margin:0; padding:0; }
-      .toolbar { display:none; }
+      .toolbar, .bcm, .additem, .bc-edit, .cust-edit, .empty-hint, .pick { display:none !important; }
+      .label.flash { outline:none; }
+      .label.skip { display:none !important; }
+      .label img[hidden] { display:none !important; }
       .sheet { border:none; border-radius:0; padding:0; margin:0; max-width:none; }
       /* One label = one sticker: fills the whole paper size chosen in the
          print dialog, so nothing spills onto a second sheet. */
@@ -40,7 +103,7 @@
         break-after:page; page-break-after:always; break-inside:avoid;
         justify-content:space-between;
       }
-      .label:last-child { break-after:auto; page-break-after:auto; }
+      .label:last-child, .label.last-print { break-after:auto; page-break-after:auto; }
       /* Text sized from BOTH sticker height and width (whichever is smaller),
          so it fits a wide or a tall sticker without cutting off. */
       .label > div { flex:0 0 auto; max-width:100%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; line-height:1.1; color:#000; margin:0; }
@@ -54,6 +117,31 @@
       body.compact .label { padding:1mm 1mm; }
       body.compact .label .name { font-size:min(13vh, 7vw); }
       body.compact .label .code { font-size:min(9vh, 6vw); }
+      /* no shop name: the freed line goes to a bigger name and price */
+      body.noshop .label .name { font-size:min(12vh, 6.5vw); }
+      body.noshop .label .price { font-size:min(14vh, 9.5vw); }
+      /* Long names: up to 2 lines, and a smaller size the longer they are,
+         so "ROLLER BRUSH 9" ACRYLON w/ handle" prints whole. */
+      .label > div.name { white-space:normal; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-height:1.05; }
+      body .label .name.long { font-size:min(8.5vh, 5.2vw); }
+      body .label .name.xlong { font-size:min(7vh, 4.2vw); }
+
+      /* Small barcode (default): a shorter, narrower barcode, and the room it
+         frees goes to bigger, easier-to-read text. Still ~0.3 mm per bar on a
+         50 mm sticker — fine for a 2D/1D scanner. "Big" keeps the old fill. */
+      /* Tuned for the 40 x 30 mm sticker: 85% wide keeps each thin bar about
+         0.25 mm (safe for scanning); the height is what we save on. */
+      body:not(.bc-big) .label img { flex:0 0 auto; width:85%; height:26vh; margin:1vh auto; }
+      /* No digits under the barcode on the sticker (the scanner reads the
+         bars; the code still shows on screen) — that line goes to the name. */
+      .label .code { display:none; }
+      body:not(.bc-big) .label .name { font-size:min(16vh, 9.5vw); }
+      body:not(.bc-big) .label .price { font-size:min(16vh, 10.5vw); }
+      body:not(.bc-big) .label .name.long { font-size:min(14vh, 7.5vw); }
+      body:not(.bc-big) .label .name.xlong { font-size:min(11vh, 6vw); }
+      body:not(.bc-big).compact .label .name { font-size:min(20vh, 11vw); }
+      body:not(.bc-big).compact .label .name.long { font-size:min(17vh, 9vw); }
+      body:not(.bc-big).compact .label .name.xlong { font-size:min(13vh, 7vw); }
       @page { margin:0; }
     }
   </style>
@@ -64,35 +152,490 @@
     <div class="actions">
       <select id="labelStyle" aria-label="Label style">
         <option value="full">Shop name + product + price + barcode</option>
+        <option value="noshop">Product + price + barcode (no shop name)</option>
         <option value="compact">Product + barcode only</option>
       </select>
-      <button onclick="window.print()">🖨 Print labels</button>
+      <select id="barcodeSize" aria-label="Barcode size">
+        <option value="small">Small barcode, bigger text</option>
+        <option value="big">Big barcode</option>
+      </select>
+      <button type="button" class="btn-add" id="bcModeBtn" onclick="toggleBarcodeMode()" title="Scan a barcode, set it on an item, and add its label">▦ Barcode mode</button>
+      <button type="button" class="btn-add" onclick="addCustomLabel()">＋ Custom label</button>
+      <label class="pick-all"><input type="checkbox" id="pickAll" checked> All</label>
+      <button type="button" class="btn-add" id="pricelistBtn" onclick="openPricelist()" title="Ticked items as an A4 price list for a binder">📄 A4 price list</button>
+      <button onclick="printPicked()" id="printBtn">🖨 Print labels</button>
     </div>
   </div>
+  {# Barcode mode: scan first. Already on an item → its label is added.
+     New barcode → search the item, click it → saved and its label added. #}
+  <div class="bcm" id="bcMode" hidden>
+    <div class="bcm-head">
+      <strong>▦ Barcode mode</strong>
+      <span>1 · Scan &nbsp; 2 · Search the item &nbsp; 3 · Click it — the barcode is saved and its label is added below</span>
+      <button type="button" class="bcm-close" onclick="toggleBarcodeMode()">Close</button>
+    </div>
+    <div class="bcm-row">
+      <label>1 · Barcode
+        <input type="text" id="bcmCode" autocomplete="off" placeholder="Scan the item's barcode…">
+      </label>
+      <label>2 · Item
+        <input type="text" id="bcmName" autocomplete="off" placeholder="Type item name…" disabled>
+      </label>
+    </div>
+    <div class="bcm-msg" id="bcmMsg"></div>
+    <ul class="bcm-results" id="bcmResults"></ul>
+  </div>
   <div class="sheet">
+    {# Add an item's label: type its name, or scan a barcode it already has. #}
+    <div class="additem">
+      <label for="addQ">＋ Add item</label>
+      <div class="additem-box">
+        <input type="text" id="addQ" autocomplete="off" placeholder="Type the item name, or scan its barcode…">
+        <ul class="bcm-results" id="addResults"></ul>
+      </div>
+      <div class="bcm-msg" id="addMsg"></div>
+    </div>
     {% set biz = business_info() %}
     <div class="label-grid">
       {% for l in labels %}
       <div class="label">
+        <label class="pick"><input type="checkbox" checked> Print</label>
         <div class="biz">{{ biz.business_name or app_name }}</div>
-        <div class="name">{{ l.product.name }}</div>
-        <div class="price">{{ l.product.selling_price|peso if l.product.selling_price else '' }}</div>
+        {% set nlen = l.product.name|length %}
+        <div class="name{{ ' xlong' if nlen > 40 else (' long' if nlen > 22 else '') }}">{{ l.product.name }}</div>
+        <div class="price">{{ l.product.selling_price|peso if l.product.selling_price else '' }}{% if l.product.selling_price and l.product.unit_type %}<span class="unit"> / {{ l.product.unit_type.name }}</span>{% endif %}</div>
         <img src="{{ l.barcode_uri }}" alt="barcode">
         <div class="code">{{ l.product.barcode }}</div>
+        <form class="bc-edit" data-id="{{ l.product.id }}" autocomplete="off">
+          <input name="barcode" value="{{ l.product.barcode }}" aria-label="Barcode for {{ l.product.name }}" placeholder="Scan or type barcode">
+          <button type="submit">Save</button>
+          <div class="bc-msg"></div>
+        </form>
       </div>
       {% endfor %}
     </div>
+    <p class="empty-hint" id="emptyHint"{% if labels %} hidden{% endif %}>No labels yet — type an item name (or scan its barcode) in <b>＋ Add item</b> above.<br>
+      New barcode for an item? Use <b>▦ Barcode mode</b>. Not an inventory item? Use <b>＋ Custom label</b>.</p>
   </div>
+
+  {# A custom label: type the name, price, unit and barcode yourself.
+     Nothing is saved to inventory — it's just for this print. #}
+  <template id="customTpl">
+    <div class="label custom">
+      <label class="pick"><input type="checkbox" checked> Print</label>
+      <div class="biz">{{ business_info().business_name or app_name }}</div>
+      <div class="name"></div>
+      <div class="price"></div>
+      <img alt="barcode" hidden>
+      <div class="code"></div>
+      <div class="cust-edit">
+        <input class="c-name" placeholder="Name" aria-label="Label name">
+        <input class="c-price" placeholder="Price" inputmode="decimal" aria-label="Price">
+        <input class="c-unit" placeholder="Unit (e.g. Kg)" aria-label="Unit">
+        <input class="c-code" placeholder="Barcode (scan or type)" aria-label="Barcode">
+        <input class="c-copies" type="number" min="1" max="200" value="1" aria-label="Copies" title="Copies">
+        <button type="button" class="c-remove" title="Remove this label">✕</button>
+        <div class="bc-msg"></div>
+      </div>
+    </div>
+  </template>
   <script>
     (function () {
       var sel = document.getElementById('labelStyle');
-      function apply(v) { document.body.classList.toggle('compact', v === 'compact'); }
+      function apply(v) {
+        document.body.classList.toggle('compact', v === 'compact');
+        document.body.classList.toggle('noshop', v === 'noshop');
+      }
       try { var saved = localStorage.getItem('labelStyle'); if (saved) sel.value = saved; } catch (e) {}
       apply(sel.value);
       sel.addEventListener('change', function () {
         apply(sel.value);
         try { localStorage.setItem('labelStyle', sel.value); } catch (e) {}
       });
+    })();
+
+    (function () {
+      var sel = document.getElementById('barcodeSize');
+      function apply(v) { document.body.classList.toggle('bc-big', v === 'big'); }
+      try { var saved = localStorage.getItem('barcodeSize'); if (saved) sel.value = saved; } catch (e) {}
+      apply(sel.value);
+      sel.addEventListener('change', function () {
+        apply(sel.value);
+        try { localStorage.setItem('barcodeSize', sel.value); } catch (e) {}
+      });
+    })();
+
+    // ---- Custom labels: your own name / price / unit / barcode, print only ----
+    function nameSizeClass(s) { return s.length > 40 ? ' xlong' : (s.length > 22 ? ' long' : ''); }
+    function pesoText(v) {
+      var n = parseFloat(String(v).replace(/[₱,\s]/g, ''));
+      return isNaN(n) ? '' : '₱' + n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    function addCustomLabel() {
+      var node = document.getElementById('customTpl').content.firstElementChild.cloneNode(true);
+      document.querySelector('.label-grid').appendChild(node);
+      document.getElementById('emptyHint').hidden = true;
+      var $ = function (s) { return node.querySelector(s); };
+      var timer = null, lastCode = '';
+
+      function render() {
+        var name = $('.c-name').value.trim();
+        $('.name').textContent = name;
+        $('.name').className = 'name' + nameSizeClass(name);
+        var price = pesoText($('.c-price').value), unit = $('.c-unit').value.trim();
+        $('.price').textContent = price;
+        if (price && unit) {
+          var u = document.createElement('span'); u.className = 'unit'; u.textContent = ' / ' + unit;
+          $('.price').appendChild(u);
+        }
+        $('.code').textContent = $('.c-code').value.trim();
+      }
+      function drawBarcode() {
+        var code = $('.c-code').value.trim(), msg = $('.bc-msg');
+        if (code === lastCode) return;
+        lastCode = code; msg.className = 'bc-msg'; msg.textContent = '';
+        if (!code) { $('img').hidden = true; return; }
+        fetch('/labels/barcode-image?code=' + encodeURIComponent(code), { credentials: 'same-origin' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (code !== lastCode) return;  // typed more since
+            if (d.ok) { $('img').src = d.barcode_uri; $('img').hidden = false; }
+            else { $('img').hidden = true; msg.className = 'bc-msg err'; msg.textContent = d.error; }
+          })
+          .catch(function () { msg.className = 'bc-msg err'; msg.textContent = 'Could not draw the barcode — check the connection.'; });
+      }
+      // Copies: extra printed-only clones of this label, rebuilt before printing.
+      node._copies = function () { return Math.max(1, Math.min(200, parseInt($('.c-copies').value, 10) || 1)); };
+
+      ['.c-name', '.c-price', '.c-unit'].forEach(function (s) { $(s).addEventListener('input', render); });
+      $('.c-code').addEventListener('input', function () { render(); clearTimeout(timer); timer = setTimeout(drawBarcode, 300); });
+      $('.c-code').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(timer); drawBarcode(); } });
+      $('.c-remove').addEventListener('click', function () {
+        node.remove();
+        document.getElementById('emptyHint').hidden = !!document.querySelector('.label-grid .label');
+      });
+      $('.c-name').focus();
+    }
+
+    // Print N copies of a custom label: add temporary copies just for the print.
+    window.addEventListener('beforeprint', function () {
+      document.querySelectorAll('.label.custom').forEach(function (lab) {
+        for (var i = 1; i < lab._copies(); i++) {
+          var c = lab.cloneNode(true); c.classList.add('print-copy');
+          var ed = c.querySelector('.cust-edit'); if (ed) ed.remove();
+          lab.after(c);
+        }
+      });
+    });
+    window.addEventListener('afterprint', function () {
+      document.querySelectorAll('.print-copy').forEach(function (c) { c.remove(); });
+    });
+    // ---- Tick = print: each label starts ticked; untick to leave it out ----
+    function allLabels() { return Array.prototype.slice.call(document.querySelectorAll('.label-grid .label:not(.print-copy)')); }
+    function refreshPicks() {
+      var labs = allLabels(), n = 0;
+      labs.forEach(function (lab) {
+        var cb = lab.querySelector('.pick input'), on = !cb || cb.checked;
+        lab.classList.toggle('skip', !on);
+        if (on) n += lab._copies ? lab._copies() : 1;
+      });
+      var all = document.getElementById('pickAll');
+      var ticked = labs.filter(function (l) { return !l.classList.contains('skip'); }).length;
+      all.checked = labs.length > 0 && ticked === labs.length;
+      all.indeterminate = ticked > 0 && ticked < labs.length;
+      document.getElementById('printBtn').textContent = '🖨 Print labels' + (labs.length ? ' (' + n + ')' : '');
+    }
+    document.querySelector('.label-grid').addEventListener('change', function (e) {
+      if (e.target.matches('.pick input, .c-copies')) refreshPicks();
+    });
+    document.querySelector('.label-grid').addEventListener('input', function (e) {
+      if (e.target.matches('.c-copies')) refreshPicks();
+    });
+    document.getElementById('pickAll').addEventListener('change', function () {
+      var on = this.checked;
+      allLabels().forEach(function (lab) { var cb = lab.querySelector('.pick input'); if (cb) cb.checked = on; });
+      refreshPicks();
+    });
+    // the grid changes when custom labels are added/removed
+    new MutationObserver(refreshPicks).observe(document.querySelector('.label-grid'), { childList: true });
+
+    function printPicked() {
+      if (!allLabels().some(function (l) { return !l.classList.contains('skip'); })) {
+        alert('No labels ticked — tick at least one label to print.');
+        return;
+      }
+      window.print();
+    }
+    // The last label that actually prints must not push a blank sticker after it.
+    window.addEventListener('beforeprint', function () {
+      var printed = Array.prototype.slice.call(document.querySelectorAll('.label-grid .label:not(.skip)'));
+      printed.forEach(function (l, i) { l.classList.toggle('last-print', i === printed.length - 1); });
+    });
+    refreshPicks();
+
+    {% if start_custom %}addCustomLabel();{% endif %}
+
+    // The ticked product labels → the A4 price list page (custom labels aren't products, so they're left out).
+    function openPricelist() {
+      var f = document.createElement('form');
+      f.method = 'post'; f.action = '/products/pricelist';
+      document.querySelectorAll('.label-grid .label:not(.skip) .bc-edit').forEach(function (bf) {
+        var i = document.createElement('input'); i.type = 'hidden'; i.name = 'ids'; i.value = bf.dataset.id; f.appendChild(i);
+      });
+      if (!f.children.length) { location.href = '/products/pricelist'; return; }  // empty: add items there
+      var b = document.createElement('input'); b.type = 'hidden'; b.name = 'back'; b.value = {{ back|tojson }}; f.appendChild(b);
+      document.body.appendChild(f); f.submit();
+    }
+
+    // Change a barcode right here: saves to the product and redraws the label.
+    function wireBcEdit(form) {
+      var input = form.querySelector('input'), btn = form.querySelector('button'),
+          msg = form.querySelector('.bc-msg'), label = form.closest('.label');
+      form.addEventListener('submit', function (ev) {
+        ev.preventDefault();
+        var code = input.value.trim();
+        msg.className = 'bc-msg'; msg.textContent = '';
+        if (!code) { msg.className = 'bc-msg err'; msg.textContent = 'Enter a barcode.'; return; }
+        btn.disabled = true; btn.textContent = 'Saving…';
+        var body = new FormData(); body.append('barcode', code);
+        fetch('/products/' + form.dataset.id + '/barcode', { method: 'POST', body: body, credentials: 'same-origin' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (!d.ok) { msg.className = 'bc-msg err'; msg.textContent = d.error || 'Not saved.'; return; }
+            label.querySelector('img').src = d.barcode_uri;
+            label.querySelector('.code').textContent = d.barcode;
+            input.value = d.barcode;
+            msg.className = 'bc-msg ok'; msg.textContent = 'Saved ✓';
+          })
+          .catch(function () { msg.className = 'bc-msg err'; msg.textContent = 'Not saved — check the connection and try again.'; })
+          .finally(function () { btn.disabled = false; btn.textContent = 'Save'; });
+      });
+    }
+    document.querySelectorAll('.bc-edit').forEach(wireBcEdit);
+
+    // ---- Barcode mode: scan → (already on an item? add its label) or
+    //      search the item → click → barcode saved + its label added ----
+    var BIZ = {{ (business_info().business_name or app_name)|tojson }};
+    function peso2(n) { return '₱' + Number(n).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    function mk(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+    // Same label as the server draws for a product; returns false if it's already on the page.
+    function addProductLabel(p) {
+      var form0 = document.querySelector('.bc-edit[data-id="' + p.id + '"]');
+      if (form0) {
+        var old = form0.closest('.label');
+        old.querySelector('img').src = p.barcode_uri;
+        old.querySelector('.code').textContent = p.barcode;
+        form0.querySelector('input').value = p.barcode;
+        var cb = old.querySelector('.pick input'); cb.checked = true; refreshPicks();
+        old.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        old.classList.add('flash'); setTimeout(function () { old.classList.remove('flash'); }, 1200);
+        return false;
+      }
+      var lab = mk('div', 'label');
+      var pick = mk('label', 'pick'), cb2 = mk('input'); cb2.type = 'checkbox'; cb2.checked = true;
+      pick.appendChild(cb2); pick.appendChild(document.createTextNode(' Print'));
+      lab.appendChild(pick);
+      lab.appendChild(mk('div', 'biz', BIZ));
+      lab.appendChild(mk('div', 'name' + nameSizeClass(p.name), p.name));
+      var pr = mk('div', 'price', p.selling_price > 0 ? peso2(p.selling_price) : '');
+      if (p.selling_price > 0 && p.unit_name) pr.appendChild(mk('span', 'unit', ' / ' + p.unit_name));
+      lab.appendChild(pr);
+      var img = mk('img'); img.src = p.barcode_uri; img.alt = 'barcode'; lab.appendChild(img);
+      lab.appendChild(mk('div', 'code', p.barcode));
+      var f = mk('form', 'bc-edit'); f.dataset.id = p.id; f.autocomplete = 'off';
+      var inp = mk('input'); inp.name = 'barcode'; inp.value = p.barcode; inp.placeholder = 'Scan or type barcode';
+      var sb = mk('button', '', 'Save'); sb.type = 'submit';
+      f.appendChild(inp); f.appendChild(sb); f.appendChild(mk('div', 'bc-msg'));
+      lab.appendChild(f);
+      wireBcEdit(f);
+      // product labels go before any custom labels
+      var grid = document.querySelector('.label-grid'), firstCustom = grid.querySelector('.label.custom');
+      grid.insertBefore(lab, firstCustom);
+      document.getElementById('emptyHint').hidden = true;
+      lab.classList.add('flash'); setTimeout(function () { lab.classList.remove('flash'); }, 1200);
+      updatePricelistBtn();
+      return true;
+    }
+    function updatePricelistBtn() {
+      var b = document.getElementById('pricelistBtn');
+      if (b) b.hidden = false;  // always there: with no items it opens an empty A4 page to fill
+    }
+    updatePricelistBtn();
+
+    (function () {
+      var panel = document.getElementById('bcMode'), codeIn = document.getElementById('bcmCode'),
+          nameIn = document.getElementById('bcmName'), msg = document.getElementById('bcmMsg'),
+          list = document.getElementById('bcmResults');
+      var results = [], active = -1, timer = null, busy = false;
+
+      function say(text, cls) { msg.textContent = text; msg.className = 'bcm-msg' + (cls ? ' ' + cls : ''); }
+      function clearList() { list.innerHTML = ''; results = []; active = -1; }
+      function resetForNextScan() { codeIn.value = ''; nameIn.value = ''; nameIn.disabled = true; clearList(); codeIn.focus(); }
+
+      window.toggleBarcodeMode = function () {
+        panel.hidden = !panel.hidden;
+        document.getElementById('bcModeBtn').classList.toggle('on', !panel.hidden);
+        if (!panel.hidden) { resetForNextScan(); say('Scan a barcode to start.'); }
+      };
+
+      // 1 · scan: the scanner types the code then presses Enter
+      codeIn.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        var code = codeIn.value.trim();
+        if (!code) return;
+        fetch('/labels/barcode-owner?code=' + encodeURIComponent(code), { credentials: 'same-origin' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d.product) {
+              if (!d.product.active) { say('“' + code + '” is on ' + d.product.name + ' (inactive item). Scan another.', 'warn'); codeIn.select(); return; }
+              var added = addProductLabel(d.product);
+              resetForNextScan();
+              say((added ? '✓ Already set — added the label for ' : '✓ Already on the page: ') + d.product.name + '. Scan the next one.', 'ok');
+              return;
+            }
+            say('Barcode ' + code + ' is new — type the item name and click it.');
+            nameIn.disabled = false; nameIn.value = ''; clearList(); nameIn.focus();
+          })
+          .catch(function () {  // lookup failed: the save still refuses duplicates
+            say('Barcode ' + code + ' — type the item name and click it.');
+            nameIn.disabled = false; nameIn.focus();
+          });
+      });
+      codeIn.addEventListener('input', function () { if (!nameIn.disabled) { nameIn.disabled = true; clearList(); } });
+
+      // 2 · search the item
+      function render() {
+        list.innerHTML = '';
+        results.forEach(function (p, i) {
+          var li = mk('li', i === active ? 'active' : '');
+          li.appendChild(mk('span', 'nm', p.name));
+          var pr = mk('span', 'pr' + (p.selling_price > 0 ? '' : ' none'),
+                      p.selling_price > 0 ? peso2(p.selling_price) + ' / ' + (p.unit_name || 'unit') : 'no price');
+          li.appendChild(pr);
+          li.appendChild(mk('span', 'bc', p.barcode ? 'has ' + p.barcode : 'no barcode yet'));
+          li.onclick = function () { assign(p); };
+          list.appendChild(li);
+        });
+      }
+      nameIn.addEventListener('input', function () {
+        clearTimeout(timer);
+        var q = nameIn.value.trim();
+        if (!q) { clearList(); return; }
+        timer = setTimeout(function () {
+          fetch('/products/merge/search?q=' + encodeURIComponent(q), { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+              if (nameIn.value.trim() !== q) return;  // typed more since
+              results = d.products || []; active = results.length ? 0 : -1; render();
+              if (!results.length) say('No item matches “' + q + '”.', 'warn');
+              else say('Barcode ' + codeIn.value.trim() + ' — click the item (or ↑ ↓ then Enter).');
+            })
+            .catch(function () { say('Search failed — check the connection.', 'err'); });
+        }, 250);
+      });
+      nameIn.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowDown' && results.length) { e.preventDefault(); active = (active + 1) % results.length; render(); }
+        else if (e.key === 'ArrowUp' && results.length) { e.preventDefault(); active = (active - 1 + results.length) % results.length; render(); }
+        else if (e.key === 'Enter') { e.preventDefault(); if (results[active]) assign(results[active]); }
+        else if (e.key === 'Escape') { resetForNextScan(); say('Cancelled. Scan a barcode.'); }
+      });
+
+      // 3 · set it, then add its label
+      function assign(p) {
+        if (busy) return;
+        var code = codeIn.value.trim();
+        if (!code) { codeIn.focus(); return; }
+        if (p.barcode && p.barcode !== code &&
+            !confirm(p.name + ' already has barcode ' + p.barcode + '.\nReplace it with ' + code + '?')) return;
+        busy = true;
+        var body = new FormData(); body.append('barcode', code);
+        fetch('/products/' + p.id + '/barcode', { method: 'POST', body: body, credentials: 'same-origin' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (!d.ok) { say(d.error || 'Not saved.', 'err'); return; }
+            addProductLabel({ id: p.id, name: p.name, selling_price: p.selling_price, unit_name: p.unit_name,
+                              barcode: d.barcode, barcode_uri: d.barcode_uri });
+            resetForNextScan();
+            say('✓ Set ' + d.barcode + ' on ' + p.name + ' — label added. Scan the next one.', 'ok');
+          })
+          .catch(function () { say('Network error — the barcode was not saved.', 'err'); })
+          .finally(function () { busy = false; });
+      }
+      {% if start_bcmode %}toggleBarcodeMode();{% endif %}
+    })();
+
+    // ---- ＋ Add item: search by name (click / ↑↓ Enter), or scan a barcode
+    //      that's already on an item → its label is added to the page ----
+    (function () {
+      var q = document.getElementById('addQ'), list = document.getElementById('addResults'),
+          msg = document.getElementById('addMsg');
+      var results = [], active = -1, timer = null, seq = 0;
+      function say(t, cls) { msg.textContent = t; msg.className = 'bcm-msg' + (cls ? ' ' + cls : ''); }
+      function clearList() { list.innerHTML = ''; results = []; active = -1; }
+      function added(p, isNew) {
+        q.value = ''; clearList(); q.focus();
+        say(isNew ? '✓ Added ' + p.name + '. Add another.' : p.name + ' is already on the page.', isNew ? 'ok' : 'warn');
+      }
+      function addById(item) {
+        fetch('/labels/item?id=' + item.id, { credentials: 'same-origin' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (!d.ok) { say(d.error || 'Could not add it.', 'err'); return; }
+            added(d.product, addProductLabel(d.product));
+          })
+          .catch(function () { say('Could not add it — check the connection.', 'err'); });
+      }
+      function render() {
+        list.innerHTML = '';
+        results.forEach(function (p, i) {
+          var li = mk('li', i === active ? 'active' : '');
+          li.appendChild(mk('span', 'nm', p.name));
+          li.appendChild(mk('span', 'pr' + (p.selling_price > 0 ? '' : ' none'),
+                            p.selling_price > 0 ? peso2(p.selling_price) + ' / ' + (p.unit_name || 'unit') : 'no price'));
+          li.appendChild(mk('span', 'bc', p.barcode || 'no barcode yet'));
+          li.onmousedown = function (e) { e.preventDefault(); addById(p); };
+          list.appendChild(li);
+        });
+      }
+      q.addEventListener('input', function () {
+        clearTimeout(timer); say('');
+        var text = q.value.trim();
+        if (!text) { clearList(); return; }
+        timer = setTimeout(function () {
+          var my = ++seq;
+          fetch('/products/merge/search?q=' + encodeURIComponent(text), { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+              if (my !== seq) return;  // typed more since
+              results = d.products || []; active = results.length ? 0 : -1; render();
+            })
+            .catch(function () { say('Search failed — check the connection.', 'err'); });
+        }, 250);
+      });
+      q.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowDown' && results.length) { e.preventDefault(); active = (active + 1) % results.length; render(); }
+        else if (e.key === 'ArrowUp' && results.length) { e.preventDefault(); active = (active - 1 + results.length) % results.length; render(); }
+        else if (e.key === 'Escape') { q.value = ''; clearList(); say(''); }
+        else if (e.key === 'Enter') {
+          e.preventDefault();
+          var text = q.value.trim();
+          if (!text) return;
+          clearTimeout(timer); seq++;
+          // a scanned barcode first; otherwise the highlighted search result
+          fetch('/labels/barcode-owner?code=' + encodeURIComponent(text), { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+              if (d.product && d.product.active) { added(d.product, addProductLabel(d.product)); return; }
+              if (results[active]) { addById(results[active]); return; }
+              say('No item has barcode or name “' + text + '”. To put a new barcode on an item, use ▦ Barcode mode.', 'warn');
+            })
+            .catch(function () { if (results[active]) addById(results[active]); });
+        }
+      });
+      q.addEventListener('blur', function () { setTimeout(clearList, 150); });
+      {% if not start_bcmode %}if (!document.querySelector('.label-grid .label')) q.focus();{% endif %}
     })();
   </script>
 </body>

@@ -224,6 +224,7 @@
   <button class="btn-secondary" type="submit">Search</button>
   {# Clears the search and category/shelf filters, but stays on this tab. #}
   {% if q or category_id or subcategory_id or shelf_id %}<a class="btn-link" href="/products?{{ 'alert=1&' if alert }}{{ 'flag=' ~ flag ~ '&' if flag }}{{ 'mover=' ~ mover if mover }}">Clear</a>{% endif %}
+  {% if is_admin_user %}<a class="btn-secondary" href="/labels" title="Print labels page with barcode mode: scan a barcode, set it on an item, print its label">▦ Barcode</a>{% endif %}
 </form>
 <script>
   // Autofocus on a box that already has a value (after Enter reloads the page
@@ -370,6 +371,7 @@
   <button type="submit" form="bulkForm" formaction="/products/bulk-price" class="btn-secondary">₱ Bulk price update</button>
   <button type="submit" form="bulkForm" formaction="/products/bulk-edit" class="btn-secondary">✎ Bulk edit (shelf, unit, category, restock)</button>
   <button type="submit" form="bulkForm" formaction="/products/labels" class="btn-secondary">🏷 Print barcode labels</button>
+  <button type="submit" form="bulkForm" formaction="/products/pricelist" class="btn-secondary">📄 A4 price list</button>
   <button type="submit" form="bulkForm" formaction="/products/order-slip" class="btn-secondary">📝 Order slip</button>
   <button type="button" class="btn-link" onclick="clearAllChk()">Clear selection</button>
 </div>
