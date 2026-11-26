@@ -86,6 +86,24 @@ def _restore_cost_before(product: models.Product, lines) -> Decimal | None:
     product.cost_price = before
     return before
 
+
+def _unaverage_cost(product: models.Product, value_before: Decimal, line_net: Decimal, moved_qty: Decimal) -> Decimal | None:
+    """Cancelling a delivery that a later one already re-averaged on top of:
+    take its value back out of the average, so the cost is what the other
+    stock cost on its own — e.g. 10 at ₱1,205.36 cancelled out of 20 at
+    ₱797.68 leaves the other 10 at ₱390.00. `product` already holds the
+    stock after the cancel; `value_before` is on-hand x cost before it. Only
+    when the delivery really moved stock and what's left is positive;
+    otherwise the cost is left alone. Returns the new cost, or None."""
+    qty_left = Decimal(str(product.total_qty or 0))
+    if moved_qty <= 0 or qty_left <= 0 or line_net <= 0:
+        return None
+    new_cost = ((value_before - line_net) / qty_left).quantize(CENTS, rounding=ROUND_HALF_UP)
+    if new_cost <= 0:
+        return None
+    product.cost_price = new_cost
+    return new_cost
+
 PAYMENT_METHODS = [
     ("cash", "Cash"), ("bank_transfer", "Bank Transfer"), ("cheque", "Cheque"),
     ("gcash", "GCash"), ("maya", "Maya"), ("other_ewallet", "Other E-Wallet"), ("other", "Other"),
@@ -1337,6 +1355,11 @@ def cancel_purchase(purchase_id: int, request: Request, back: str = Form(""), db
         cancel_note = "Cancelled purchase"
         if purchase.txn_type == "receive":
             restored = _restore_cost_before(product, [l for l in purchase.lines if l.product_id == pid])
+            if restored is None:
+                moved_qty = moved.get(pid, Decimal("0"))
+                ordered = sum((Decimal(str(l.qty or 0)) * Decimal(str(l.unit_factor or 1)) for l in purchase.lines if l.product_id == pid), Decimal("0"))
+                moved_net = line_net * (moved_qty / ordered) if ordered else line_net
+                restored = _unaverage_cost(product, value_before, moved_net, moved_qty)
             if restored is not None:
                 cancel_note += f" (cost back to ₱{restored:,.2f})"
         cancel_unit_cost = Decimal(str(product.cost_price or 0))
