@@ -8,3 +8,11 @@ __pycache__
 !.env.example
 .pytest_cache
 *.md
+
+# Database dumps, uploads and spreadsheets: data, not code. The app reads
+# backups/uploads from the mounted /backups and /uploads folders instead.
+backups/
+db_backups/
+*.sql
+uploads/
+*.xlsx
