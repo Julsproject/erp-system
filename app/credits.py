@@ -467,6 +467,33 @@ def _outstanding_sales(db: Session, customer_id: int):
     return out
 
 
+def _si_open_amounts(db: Session, sales) -> dict:
+    """How much of each DR an SI can still cover: what's been PAID on it
+    (its total less what's still owed) minus what earlier SIs already
+    covered — an SI is written for the payment collected, so a part-paid DR
+    goes on an SI for the paid part now and the rest on a later SI when it's
+    paid. Voided SIs don't count. Returns {sale_id: amount}, amount > 0 only."""
+    sales = list(sales)
+    if not sales:
+        return {}
+    ids = [s.id for s in sales]
+    settled = _settled_for(db, ids)
+    covered = dict(
+        db.query(models.SiApplication.dr_sale_id, func.sum(models.SiApplication.amount))
+        .join(models.Sale, models.Sale.id == models.SiApplication.si_sale_id)
+        .filter(models.SiApplication.dr_sale_id.in_(ids), models.Sale.is_voided.is_(False))
+        .group_by(models.SiApplication.dr_sale_id).all()
+    )
+    out = {}
+    for s in sales:
+        owed = max((s.receivable_amount or Decimal("0")) - settled.get(s.id, Decimal("0")), Decimal("0"))
+        paid = (s.total or Decimal("0")) - owed
+        open_amount = paid - Decimal(str(covered.get(s.id) or 0))
+        if open_amount > 0:
+            out[s.id] = open_amount
+    return out
+
+
 @router.get("/credits/collect", response_class=HTMLResponse)
 def collect_payment(
     request: Request, q: str = "", customer_id: int = 0, si_error: str = "",
@@ -497,16 +524,17 @@ def _render_collect(request: Request, db: Session, user, *, q: str = "", custome
     total = Decimal("0")
     si_eligible_ids = set()
     si_only = []
+    si_open = {}
     if customer:
         owed = _outstanding_sales(db, customer.id)
         total = sum((o for _, o in owed), Decimal("0"))
-        # A DR can have Output VAT recognized (an SI issued against it) as
-        # long as nothing has already covered it — see issue_si. A plain SI
-        # invoice never needs this (it already carries its own VAT from
-        # encoding). Already-paid DRs count too: the shop encodes the
-        # payment first and writes the SI when the customer collects it, so
-        # they're listed below the outstanding ones for ticking.
-        dr_ids = [s.id for s, _ in owed if (s.receipt_type or "").upper() in DR_BOOKLETS]
+        # A DR can have Output VAT recognized (an SI issued against it) for
+        # what's been paid on it and no SI has covered yet — see
+        # _si_open_amounts / issue_si. A plain SI invoice never needs this (it
+        # already carries its own VAT from encoding). Fully-paid DRs are
+        # listed below the outstanding ones for ticking: the shop encodes the
+        # payment first and writes the SI when the customer collects it.
+        owed_drs = [s for s, _ in owed if (s.receipt_type or "").upper() in DR_BOOKLETS]
         owed_ids = {s.id for s, _ in owed}
         si_only = [
             s for s in db.query(models.Sale)
@@ -517,11 +545,9 @@ def _render_collect(request: Request, db: Session, user, *, q: str = "", custome
             .all()
             if s.id not in owed_ids
         ]
-        covered_rows = db.query(models.SiApplication.dr_sale_id).filter(
-            models.SiApplication.dr_sale_id.in_(dr_ids + [s.id for s in si_only] or [0])).all()
-        already_covered = {row[0] for row in covered_rows}
-        si_only = [s for s in si_only if s.id not in already_covered]
-        si_eligible_ids = (set(dr_ids) - already_covered) | {s.id for s in si_only}
+        si_open = _si_open_amounts(db, owed_drs + si_only)
+        si_only = [s for s in si_only if s.id in si_open]
+        si_eligible_ids = set(si_open)
     elif q:
         matches = (
             db.query(models.Customer)
@@ -539,7 +565,7 @@ def _render_collect(request: Request, db: Session, user, *, q: str = "", custome
             "request": request, "app_name": request.app.title, "user": user,
             "q": q, "customer": customer, "matches": matches, "match_totals": match_totals,
             "owed": owed, "total": total, "methods": SETTLE_METHODS, "si_only": si_only,
-            "si_eligible_ids": si_eligible_ids, "si_error": si_error,
+            "si_eligible_ids": si_eligible_ids, "si_open": si_open, "si_error": si_error,
             "today_iso": datetime.now(MANILA).date().isoformat(),
             "is_admin": is_admin(user), "error": error, "posted": posted,
             "credit_balance": customer_credit.balance(db, customer.id) if customer else Decimal("0"),
@@ -596,20 +622,21 @@ def issue_si(
         .filter(models.Sale.id.in_(ids), models.Sale.customer_id == customer.id)
         .all()
     )
-    already_covered = {
-        row[0] for row in db.query(models.SiApplication.dr_sale_id)
-        .filter(models.SiApplication.dr_sale_id.in_(ids)).all()
-    }
-    drs = [
-        s for s in drs
-        if not s.is_voided and (s.receipt_type or "").upper() in DR_BOOKLETS and s.id not in already_covered
-    ]
+    drs = [s for s in drs if not s.is_voided and (s.receipt_type or "").upper() in DR_BOOKLETS]
+    # Each DR goes on the SI for only what's been paid on it and not yet
+    # covered by another SI (see _si_open_amounts) — a part-paid DR's
+    # remainder waits for a later SI.
+    open_amounts = _si_open_amounts(db, drs)
+    drs = [s for s in drs if s.id in open_amounts]
     if not drs:
-        return _back("None of the selected invoices are eligible for an SI anymore — refresh and try again.")
+        return _back("None of the selected invoices have a paid amount left to put on an SI — refresh and try again.")
 
-    subtotal = sum((s.subtotal or Decimal("0")) for s in drs)
-    discount_total = sum((s.discount_total or Decimal("0")) for s in drs)
-    total = sum((s.total or Decimal("0")) for s in drs)
+    def share(dr):  # the part of this DR the SI covers, 1 = all of it
+        return open_amounts[dr.id] / dr.total if dr.total else Decimal("1")
+
+    subtotal = sum(((s.subtotal or Decimal("0")) * share(s) for s in drs), Decimal("0"))
+    discount_total = sum(((s.discount_total or Decimal("0")) * share(s) for s in drs), Decimal("0"))
+    total = sum((open_amounts[s.id] for s in drs), Decimal("0"))
     vat_amount = _vat_of(total)
     net_amount = total - vat_amount
 
@@ -623,17 +650,22 @@ def issue_si(
     if si_dt:
         si.created_at = si_dt
     for dr in drs:
+        part = share(dr)
         for ln in dr.lines:
+            # A part-paid DR's lines go on at that part (qty and amount scaled).
             si.lines.append(models.SaleLine(
                 product_id=ln.product_id, product_name=ln.product_name, unit_name=ln.unit_name,
-                unit_factor=ln.unit_factor, qty=ln.qty, unit_price=ln.unit_price, discount=ln.discount,
-                line_total=ln.line_total, is_vat=True, price_tier=ln.price_tier, unit_cost=ln.unit_cost,
+                unit_factor=ln.unit_factor,
+                qty=ln.qty if part == 1 else (Decimal(str(ln.qty or 0)) * part).quantize(Decimal("0.001")),
+                unit_price=ln.unit_price, discount=ln.discount if part == 1 else _money(Decimal(str(ln.discount or 0)) * part),
+                line_total=ln.line_total if part == 1 else _money(Decimal(str(ln.line_total or 0)) * part),
+                is_vat=True, price_tier=ln.price_tier, unit_cost=ln.unit_cost,
             ))
     db.add(si)
     db.flush()
 
     for dr in drs:
-        db.add(models.SiApplication(si_sale_id=si.id, dr_sale_id=dr.id, amount=dr.total))
+        db.add(models.SiApplication(si_sale_id=si.id, dr_sale_id=dr.id, amount=open_amounts[dr.id]))
 
     try:
         accounting.post_si_conversion(db, si, entered_by_id=user.id, txn_date=si_dt.date() if si_dt else None)

@@ -90,7 +90,10 @@
         {% if si_eligible_ids %}
         <td>
           {% if sale.id in si_eligible_ids %}
-          <input type="checkbox" class="vatChk" name="dr_sale_ids" value="{{ sale.id }}" data-total="{{ sale.total }}" autocomplete="off" onchange="updateSiTotal()" form="issueSiForm">
+          <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;" title="Only what's been paid on this DR goes on the SI">
+            <input type="checkbox" class="vatChk" name="dr_sale_ids" value="{{ sale.id }}" data-total="{{ si_open[sale.id] }}" autocomplete="off" onchange="updateSiTotal()" form="issueSiForm">
+            <span class="muted">paid {{ si_open[sale.id]|peso }}</span>
+          </label>
           {% endif %}
         </td>
         {% endif %}
@@ -105,7 +108,10 @@
         <td>{{ sale.created_at.strftime('%b %d, %Y') if sale.created_at else '' }}</td>
         <td class="num muted">paid</td>
         <td>
-          <input type="checkbox" class="vatChk" name="dr_sale_ids" value="{{ sale.id }}" data-total="{{ sale.total }}" autocomplete="off" onchange="updateSiTotal()" form="issueSiForm">
+          <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;">
+            <input type="checkbox" class="vatChk" name="dr_sale_ids" value="{{ sale.id }}" data-total="{{ si_open[sale.id] }}" autocomplete="off" onchange="updateSiTotal()" form="issueSiForm">
+            {% if si_open[sale.id] != sale.total %}<span class="muted" title="The rest of this DR is already on an earlier SI">{{ si_open[sale.id]|peso }} left</span>{% endif %}
+          </label>
         </td>
       </tr>
       {% endfor %}
