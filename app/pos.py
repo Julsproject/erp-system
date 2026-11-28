@@ -1372,6 +1372,80 @@ def _last_receipt_number(receipt_type: str, invoice_no: str):
     return m.group(1), int(m.group(2)), len(m.group(2))
 
 
+# How far from a booklet's own numbers an invoice # can be before the POS asks
+# "are you sure?" — same gap the SI Numbers page / VAT report use to tell two
+# pads of one booklet apart.
+BOOKLET_SERIES_BREAK = 100
+
+
+@router.get("/pos/check-invoice")
+def pos_check_invoice(
+    receipt_type: str = "", invoice_no: str = "", sale_id: int = 0,
+    db: Session = Depends(get_db), user=Depends(get_current_user),
+):
+    """Before a sale is saved: is this number in the picked booklet's series?
+    Encoding a DRS receipt as DRB (or a DRB as SI) leaves a stray number far
+    from the booklet's pads — and every number in between then reads as
+    missing — so the POS asks first. Returns {"warning": text} when the
+    number is more than BOOKLET_SERIES_BREAK away from every number already
+    used in that booklet (sales or cancelled), naming the booklet it does fit
+    and any receipt that already has that number in another booklet.
+    {"warning": ""} when it looks right, or there's nothing to compare yet."""
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    rt = (receipt_type or "").strip().upper()
+    core = _numeric_core((invoice_no or "").strip())
+    if not rt or core is None:
+        return {"warning": ""}
+
+    # The booklet's CURRENT pads: numbers used in the last 90 days, voided
+    # receipts left out (a voided stray number is usually the very mistake
+    # this check is for).
+    since = datetime.now(MANILA) - timedelta(days=90)
+
+    def used(booklet):
+        nums = set()
+        for (n,) in db.query(models.Sale.invoice_no).filter(
+                models.Sale.receipt_type == booklet, models.Sale.id != sale_id,
+                models.Sale.is_voided.is_(False), models.Sale.created_at >= since):
+            c = _numeric_core(n)
+            if c is not None:
+                nums.add(c)
+        for (n,) in db.query(models.CancelledReceipt.invoice_no).filter(
+                models.CancelledReceipt.receipt_type == booklet, models.CancelledReceipt.cancelled_date >= since.date()):
+            c = _numeric_core(n)
+            if c is not None:
+                nums.add(c)
+        return nums
+
+    own = used(rt)
+    if not own or any(abs(n - core) <= BOOKLET_SERIES_BREAK for n in own):
+        return {"warning": ""}
+
+    lower = max((n for n in own if n < core), default=None)
+    higher = min((n for n in own if n > core), default=None)
+    near = " and ".join(f"{rt} {n}" for n in (lower, higher) if n is not None)
+    parts = [f"{rt} {invoice_no.strip()} isn't in your {rt} booklet's series — the nearest {rt} numbers are {near}."]
+    for other in RECEIPT_TYPES:
+        if other == rt:
+            continue
+        other_nums = used(other)
+        if any(abs(n - core) <= BOOKLET_SERIES_BREAK for n in other_nums):
+            closest = min(other_nums, key=lambda n: abs(n - core))
+            parts.append(f"It fits your {other} booklet (next to {other} {closest}) — is this receipt a {other}?")
+    for other in RECEIPT_TYPES:
+        if other == rt:
+            continue
+        twin = next((s for s in db.query(models.Sale).filter(models.Sale.receipt_type == other, models.Sale.is_voided.is_(False),
+                                                              models.Sale.invoice_no.like(f"%{core}%"))
+                     if _numeric_core(s.invoice_no) == core), None)
+        if twin:
+            when = twin.created_at.strftime("%b %d") if twin.created_at else ""
+            parts.append(f"{other} {twin.invoice_no} already exists ({twin.customer_name or 'Walk-in'}, {when}, ₱{twin.total:,.2f}) — "
+                         "make sure this isn't the same sale encoded twice.")
+    return {"warning": " ".join(parts)}
+
+
 @router.get("/pos/next-invoice")
 def pos_next_invoice(
     receipt_type: str = "", encoded_by_id: int = 0,

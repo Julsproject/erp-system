@@ -1649,10 +1649,30 @@ function computeTotals() {
   document.getElementById('completeBtn').disabled = !ok;
 }
 
+/* Before saving: is the invoice # in the picked booklet's series? A DRS
+   receipt encoded as DRB (or a DRB as SI) lands far from that booklet's own
+   numbers — ask first instead of saving it under the wrong booklet. A failed
+   check never blocks the sale. */
+async function confirmBooklet() {
+  const no = invoiceBox.value.trim(), type = receiptTypeBox.value;
+  if (!no || !type) return true;
+  try {
+    const res = await fetch('/pos/check-invoice?receipt_type=' + encodeURIComponent(type) + '&invoice_no=' + encodeURIComponent(no));
+    const data = await res.json();
+    if (!data.warning) return true;
+    return confirm('⚠ Please check the booklet\n\n' + data.warning +
+                   '\n\nOK = save it as ' + type + ' ' + no + ' anyway.\nCancel = go back and fix the booklet or number.');
+  } catch (e) {
+    return true;
+  }
+}
+
 async function checkout() {
   const isReturn = document.getElementById('chkReturn').checked;
   const isExchange = document.getElementById('chkExchange').checked;
   const btn = document.getElementById('completeBtn');
+  if (btn.disabled) return;
+  if (!(await confirmBooklet())) return;
 
   if (!isReturn && !isExchange) {
     if (cart.length === 0) return;
